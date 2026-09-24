@@ -30,12 +30,15 @@ Source files follow the BATL coding guidelines in `_DOC/BATL Coding Guidelines/`
   - `_GENERIX/` — generic helpers.
 - `_DI/` — build configuration. `prj.conf` lives here, not at the root.
 - `_LIB/` — reusable libraries. Its `CMakeLists.txt` sets the BulkXfer roles for the whole build (`BLK_ENABLE_SERVER=1`, `BLK_ENABLE_CLIENT=0` — this device only receives), then adds `GATT_CB` before `BulkXfer`.
-  - `GATT_CB/` — generic GATT read/write callbacks driven by a per-characteristic descriptor (`GATT_CB_Types.h`).
+  - `GATT_CB/` — generic GATT read/write callbacks driven by a per-characteristic descriptor (`GATT_CB_Types.h`), plus a local read/write API for application threads. Its docs live in `_DOC/GATT_CB/`.
   - `BulkXfer/` — bulk transfer over GATT: sender is the GATT client (Write Without Response to DATA), receiver hosts DATA + CTRL and answers with ACK/NACK/END notifications. Windowed ACKs, Go-Back-N, CRC-32 per object (needs `CONFIG_CRC`). `BulkXfer.h` is the umbrella header; tunables in `BulkXfer_Config.h`. Its docs live in `_DOC/BulkXfer/`.
 - `_DOC/` — coding guidelines, SIG UUID YAML sources, Zephyr notes. Not built.
   - `BulkXfer/` — `README.md` (design rationale, protocol walkthrough, integration steps) and `API_REFERENCE.md` (exact API contract). Links point back into `_LIB/BulkXfer/`.
+  - `GATT_CB/` — `API_REFERENCE.md` (descriptor fields, callback and hook contract, threading, known limitations).
 
 **Adding a module:** create `_ASW/_NAME/` with a `CMakeLists.txt` copied from a sibling (it globs `*.c` into `app` and adds its folder to the include path), then `add_subdirectory(_NAME)` in `_ASW/CMakeLists.txt`. Every module folder is on the include path, so headers are included by bare name. `_LIB` libraries use the same `CMakeLists.txt` pattern.
+
+**Adding a library:** every `_LIB` library needs an API reference manual at `_DOC/<LIB>/API_REFERENCE.md` — the exact contract of its public headers (types, functions, return/error values, threading, known limitations), so it can be used and modified without reading the source. Add it with the library, and update it whenever the public API or behaviour changes. `_DOC/BulkXfer/API_REFERENCE.md` and `_DOC/GATT_CB/API_REFERENCE.md` are the models.
 
 ## Git
 
