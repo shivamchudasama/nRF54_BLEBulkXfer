@@ -10,7 +10,7 @@ Do not ask on turns that change nothing here (questions, inspection, small edits
 
 ## Repository nature
 
-**Zephyr / nRF Connect SDK firmware** for a BLE peripheral intended for bulk data transfer. At present it brings up the BLE stack, advertises, and exposes GAP and Device Information GATT services. The bulk-transfer protocol is the `_LIB/BulkXfer` library; `_ASW` does not call it yet.
+**Zephyr / nRF Connect SDK firmware** for a BLE peripheral intended for bulk data transfer. At present it brings up the BLE stack, advertises, and exposes the GAP and Device Information GATT services. The bulk-transfer protocol is the `_LIB/BulkXfer` library; `_ASW` does not call it yet.
 
 - SDK: **NCS v3.4.1** (Zephyr 4.4.2), toolchain `C:\ncs\toolchains\4f5b6ad6dd`.
 - Board: **`nrf54l15dk/nrf54l15/cpuapp`**.
@@ -24,7 +24,7 @@ Source files follow the BATL coding guidelines in `_DOC/BATL Coding Guidelines/`
 - `CMakeLists.txt` — sets `APPLICATION_CONFIG_DIR` to `_DI`, then pulls in `_ASW` and `_LIB`.
 - `_ASW/` — application software. `main.c` plus one folder per module:
   - `_BLE/` — stack init, advertising, connection callbacks.
-  - `_GAP/` — GAP and Device Information GATT services.
+  - `_GAP/` — Device Information GATT service. GAP itself is Zephyr's built-in service (`CONFIG_BT_GAP_SVC`); device name and appearance are set by `CONFIG_BT_DEVICE_NAME`/`CONFIG_BT_DEVICE_APPEARANCE` in `prj.conf`. Never define a second GAP service — the host allows exactly one, and `bt_enable()` fails with `-EINVAL`.
   - `_BLE_GENERIX/` — Bluetooth SIG UUID and appearance tables (headers only).
   - `_APP_LOG/` — `APP_LOG` logging module; `AppLog.h` has `APP_LOG_ERR/WRN/INF/DBG`, which prefix `__func__`.
   - `_GENERIX/` — generic helpers.

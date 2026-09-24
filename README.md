@@ -4,7 +4,7 @@ Zephyr / nRF Connect SDK firmware for a BLE peripheral that receives bulk data o
 
 ## Status
 
-- **Application (`_ASW`)** — brings up the BLE stack, advertises as `BLE Bulk Transfer`, and exposes the GAP and Device Information services. It does not use the bulk-transfer library yet.
+- **Application (`_ASW`)** — brings up the BLE stack, advertises as `BLE Bulk Transfer`, and exposes the GAP (Zephyr's built-in service, configured in `prj.conf`) and Device Information services. It does not use the bulk-transfer library yet.
 - **BulkXfer library (`_LIB/BulkXfer`)** — the transfer protocol itself. It is complete and built into the firmware in the receiver (Server) role.
 
 ## BulkXfer in brief
@@ -21,7 +21,7 @@ The design rationale and protocol walkthrough are in [_DOC/BulkXfer/README.md](_
 
 | Path | Contents |
 |---|---|
-| [`_ASW/`](_ASW) | Application: `main.c` plus modules for BLE init/advertising, GAP/DIS services, logging and helpers |
+| [`_ASW/`](_ASW) | Application: `main.c` plus modules for BLE init/advertising, the Device Information service, logging and helpers |
 | [`_DI/`](_DI) | Build configuration (`prj.conf`) |
 | [`_LIB/GATT_CB/`](_LIB/GATT_CB) | Generic GATT read/write callbacks driven by per-characteristic descriptors |
 | [`_LIB/BulkXfer/`](_LIB/BulkXfer) | Bulk-transfer library, with example client/server apps, host-side unit tests and a Python (`bleak`) test client |

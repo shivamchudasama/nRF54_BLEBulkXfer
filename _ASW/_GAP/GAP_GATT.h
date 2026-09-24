@@ -1,6 +1,6 @@
 /**
  * @file          GAP_GATT.h
- * @brief         Header file containing GATT database for GAP service.
+ * @brief         Header file containing GATT database for Device Information service.
  * @date          12/02/2026
  * @author        Shivam Chudasama [SC]
  * @copyright     Bajaj Auto Technology Limited (BATL)
@@ -17,7 +17,6 @@
 #include <zephyr/bluetooth/gatt.h>
 #include "PublicServiceUUIDs.h"
 #include "PublicCharacteristicUUIDs.h"
-#include "AppearanceValues.h"
 #include "AppLog.h"
 
 /******************************************************************************/
