@@ -6,11 +6,11 @@ server**:
 
 | Role | Does | API |
 |---|---|---|
-| **Client** (TX) | Writes frames into the peer's **DATA** characteristic with Write Without Response | [BulkXfer_Client.h](BulkXfer_Client.h) |
-| **Server** (RX) | Hosts DATA + **CTRL**. Answers with ACK / NACK / END notifications on CTRL | [BulkXfer_Server.h](BulkXfer_Server.h) |
+| **Client** (TX) | Writes frames into the peer's **DATA** characteristic with Write Without Response | [BulkXfer_Client.h](../../_LIB/BulkXfer/BulkXfer_Client.h) |
+| **Server** (RX) | Hosts DATA + **CTRL**. Answers with ACK / NACK / END notifications on CTRL | [BulkXfer_Server.h](../../_LIB/BulkXfer/BulkXfer_Server.h) |
 
 A device that must both send and receive runs both roles. The Server sits on top of the
-[`GATT_CB`](../GATT_CB) generic callbacks without modifying them.
+[`GATT_CB`](../../_LIB/GATT_CB) generic callbacks without modifying them.
 
 - **Frame format:** `len(1) + type(1) + payload(≤242)`, one frame per GATT write or notification.
 - **Reliability:** windowed cumulative ACKs, Go-Back-N retransmit, CRC-32 over the whole object.
@@ -106,7 +106,7 @@ client (GATT client)                              server (GATT server)
 ### Server (receiving device)
 
 1. **Declare the service** in the GATT Configurator (generic-callback mode) with the UUIDs from
-   [BulkXfer_Uuid.h](BulkXfer_Uuid.h):
+   [BulkXfer_Uuid.h](../../_LIB/BulkXfer/BulkXfer_Uuid.h):
    - **DATA:** Write + Write Without Response, variable length, length **244**. Set the custom write hook to e.g. `st_OnBulkData`.
    - **CTRL:** Notify (with CCC).
    - **Caps (optional):** Read, 4 bytes.
