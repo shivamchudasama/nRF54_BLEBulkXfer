@@ -13,6 +13,7 @@
 /******************************************************************************/
 #include "ConnectionHandling.h"
 #include <errno.h>
+#include "BulkXfer.h"
 
 /******************************************************************************/
 /*                                                                            */
@@ -149,6 +150,9 @@ static struct bt_data sstar_advData[] =
 {
    // AD Type: Flags - general discoverable and no BR/EDR support
    BT_DATA_BYTES(BT_DATA_FLAGS, (BT_LE_AD_GENERAL | BT_LE_AD_NO_BREDR)),
+   // AD Type: Complete list of 128-bit service UUIDs - BulkXfer service, lets the
+   // client filter scans. The name stays in the scan response (both don't fit in 31 B).
+   BT_DATA_BYTES(BT_DATA_UUID128_ALL, BT_UUID_BLK_SVC_VAL),
 };
 
 /**
@@ -477,6 +481,9 @@ static void sv_Connected(struct bt_conn *stpt_conn, uint8_t u8_err)
    // Get the current connection handle and store it for future use
    gstpt_currentConn = bt_conn_ref(stpt_conn);
 
+   // Bind the BulkXfer Server to this connection
+   gv_BLKS_OnConnected(stpt_conn);
+
    // Schedule work to negotiate PHY update, MTU exchange, and DLE after a short delay
    // to allow connection to stabilize
    i_err = k_work_schedule(&gst_connParamNegotiationWork, K_SECONDS(2));
@@ -498,9 +505,10 @@ static void sv_Connected(struct bt_conn *stpt_conn, uint8_t u8_err)
  */
 static void sv_Disconnected(struct bt_conn *stpt_conn, uint8_t reason)
 {
-   ARG_UNUSED(stpt_conn);
-
 	LOG_INF("Disconnected (reason 0x%x)", reason);
+
+   // Release BulkXfer's binding; a running transfer ends with eBS_DISCONNECTED
+   gv_BLK_OnDisconnected(stpt_conn);
 
    // Note: We should cancel any ongoing negotiation work and reset state here to
    // ensure a clean slate for the next connection.

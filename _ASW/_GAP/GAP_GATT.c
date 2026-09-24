@@ -25,17 +25,6 @@
 /*                                   ENUMS                                    */
 /*                                                                            */
 /******************************************************************************/
-// Definition of all the enums
-/**
- * @enum          <Enum name>
- * @brief         <Enum details>.
- */
-
-// Declarations of all the enum variables
-/**
- * @var           <Variable name>
- * @brief         <Variable details>.
- */
 
 /******************************************************************************/
 /*                                                                            */
@@ -154,17 +143,6 @@ BT_GATT_SERVICE_DEFINE(gstar_deviceInfoSvc,
 /*                                   UNIONS                                   */
 /*                                                                            */
 /******************************************************************************/
-// Definition of all the unions
-/**
- * @union         <Union name>
- * @brief         <Union details>.
- */
-
-// Declarations of all the union variables
-/**
- * @var           <Variable name>
- * @brief         <Variable details>.
- */
 
 /******************************************************************************/
 /*                                                                            */
@@ -177,10 +155,6 @@ BT_GATT_SERVICE_DEFINE(gstar_deviceInfoSvc,
 /*                              PUBLIC VARIABLES                              */
 /*                                                                            */
 /******************************************************************************/
-/**
- * @var           <Variable name>
- * @brief         <Variable details>.
- */
 
 /******************************************************************************/
 /*                                                                            */
@@ -268,14 +242,6 @@ static ssize_t st_FWRevisionRead(struct bt_conn *conn,
 /*                        PUBLIC FUNCTION DEFINITIONS                         */
 /*                                                                            */
 /******************************************************************************/
-/**
- * @public        <Function name>
- * @brief         <Function details>.
- * @param[in]     <Input parameter details>.
- * @param[out]    <Output parameter details>.
- * @param[inout]  <Input-Output parameter details>.
- * @return        <Return details>.
- */
 
 /**
  * Copyright(c) Bajaj Auto Technology Limited (BATL) as an unpublished work.

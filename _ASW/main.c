@@ -13,6 +13,7 @@
 /*                                                                            */
 /******************************************************************************/
 #include "ConnectionHandling.h"
+#include "DataStore.h"
 
 /******************************************************************************/
 /*                                                                            */
@@ -39,11 +40,15 @@
 /******************************************************************************/
 /**
  * @public        main
- * @brief         Initializes the BLE stack and starts advertising.
+ * @brief         Initializes the BulkXfer data store, the BLE stack and starts advertising.
  * @return        0 upon successful execution.
  */
 int main(void)
 {
+   // Init the BulkXfer Server before advertising, so it is ready for the first
+   // connection. It needs no Bluetooth stack yet.
+   (void)gi_DataStore_Init();
+
    // Init and start BLE advertising
    gv_BLEInitStartAdv();
 

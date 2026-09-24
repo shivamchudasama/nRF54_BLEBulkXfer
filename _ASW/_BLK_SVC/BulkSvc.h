@@ -1,13 +1,14 @@
 /**
- * @file          GAP_GATT.h
- * @brief         Header file containing GATT database for Device Information service.
- * @date          12/02/2026
+ * @file          BulkSvc.h
+ * @brief         Header file containing the BulkXfer GATT service (DATA, CTRL and Caps
+ *                characteristics) hosted by this device as the BulkXfer receiver.
+ * @date          25/09/2026
  * @author        Shivam Chudasama [SC]
  * @copyright     Bajaj Auto Technology Limited (BATL)
  */
 
-#ifndef _GAP_GATT_H
-#define _GAP_GATT_H
+#ifndef _BULK_SVC_H
+#define _BULK_SVC_H
 
 /******************************************************************************/
 /*                                                                            */
@@ -15,9 +16,6 @@
 /*                                                                            */
 /******************************************************************************/
 #include <zephyr/bluetooth/gatt.h>
-#include "PublicServiceUUIDs.h"
-#include "PublicCharacteristicUUIDs.h"
-#include "AppLog.h"
 
 /******************************************************************************/
 /*                                                                            */
@@ -54,8 +52,9 @@
 /*                              EXTERN FUNCTIONS                              */
 /*                                                                            */
 /******************************************************************************/
+extern const struct bt_gatt_attr *gstpt_BulkSvc_Init(void);
 
-#endif //!_GAP_GATT_H
+#endif //!_BULK_SVC_H
 
 /**
  * Copyright(c) Bajaj Auto Technology Limited (BATL) as an unpublished work.
