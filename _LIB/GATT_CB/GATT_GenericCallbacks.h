@@ -1,23 +1,24 @@
 /**
- * @file          AppLog.h
- * @brief         Application logging macros wrapping Zephyr's LOG_* API.
+ * @file          GATT_GenericCallbacks.h
+ * @brief         Declarations of the shared GATT read/write callbacks used by
+ *                every characteristic in the local GATT database framework.
  *
- *                Prepends the calling function name to every log message so
- *                that log output is self-identifying without needing a debugger.
+ *                Rather than writing a unique read or write callback per
+ *                characteristic, every BT_GATT_CHARACTERISTIC macro in the
+ *                project registers one of these two functions as its Zephyr
+ *                callback and passes a pointer to a GATTCharDescriptor_t as
+ *                user_data. The descriptor supplies everything the generic
+ *                callback needs to service the request:
  *
- *                Before including this header in any translation unit, the
- *                log module must be registered once (typically in main.c or
- *                your application entry point):
+ *                  - vpt_data / u16_actualLen → the local variable to read from
+ *                                               or write to.
+ *                  - u16_dataLen              → maximum allowed write length.
+ *                  - b_variableLength         → length validation strategy.
+ *                  - stpt_mutex               → optional thread-safety lock.
+ *                  - fpt_customReadCb         → optional post-read side-effects.
+ *                  - fpt_customWriteCb        → optional post-write side-effects.
  *
- * @code
- *                LOG_MODULE_REGISTER(APP_LOG, LOG_LEVEL_INF);
- * @endcode
- *
- *                All other files simply include this header; the
- *                LOG_MODULE_DECLARE() call inside it binds them to the already-
- *                registered module.
- *
- * @date          16/02/2026
+ * @date          23/03/2026
  * @author        Shivam Chudasama
  * @copyright     Shivam Chudasama
  * @license       MIT
@@ -25,51 +26,27 @@
 
 /* SPDX-License-Identifier: MIT */
 
-#ifndef _APP_LOG_H
-#define _APP_LOG_H
+#ifndef _GATT_GENERIC_CALLBACKS_H
+#define _GATT_GENERIC_CALLBACKS_H
 
 /******************************************************************************/
 /*                                                                            */
 /*                                  INCLUDES                                  */
 /*                                                                            */
 /******************************************************************************/
-#include <zephyr/logging/log.h>
+#include <string.h>
+#include <errno.h>
+#include <zephyr/kernel.h>
+#include <zephyr/sys/__assert.h>
+#include <zephyr/bluetooth/gatt.h>
+#include "GATT_CB_Types.h"
+#include "AppLog.h"
 
 /******************************************************************************/
 /*                                                                            */
 /*                                  DEFINES                                   */
 /*                                                                            */
 /******************************************************************************/
-/**
- * @def           APP_LOG
- * @brief         Declare — already registered — the application log module.
- *                Module name is APP_LOG. Log level is set to INFO.
- */
-LOG_MODULE_DECLARE(APP_LOG, LOG_LEVEL_INF);
-
-/**
- * @def           APP_LOG_ERR
- * @brief         Error log macro. Prepends the calling function name.
- */
-#define APP_LOG_ERR(fmt, ...)                LOG_ERR("%s: " fmt, __func__, ##__VA_ARGS__)
-
-/**
- * @def           APP_LOG_WRN
- * @brief         Warning log macro. Prepends the calling function name.
- */
-#define APP_LOG_WRN(fmt, ...)                LOG_WRN("%s: " fmt, __func__, ##__VA_ARGS__)
-
-/**
- * @def           APP_LOG_INF
- * @brief         Info log macro. Prepends the calling function name.
- */
-#define APP_LOG_INF(fmt, ...)                LOG_INF("%s: " fmt, __func__, ##__VA_ARGS__)
-
-/**
- * @def           APP_LOG_DBG
- * @brief         Debug log macro. Prepends the calling function name.
- */
-#define APP_LOG_DBG(fmt, ...)                LOG_DBG("%s: " fmt, __func__, ##__VA_ARGS__)
 
 /******************************************************************************/
 /*                                                                            */
@@ -100,14 +77,20 @@ LOG_MODULE_DECLARE(APP_LOG, LOG_LEVEL_INF);
 /*                              EXTERN FUNCTIONS                              */
 /*                                                                            */
 /******************************************************************************/
+/* ---- BLE stack callbacks (registered in BT_GATT_CHARACTERISTIC) --------- */
+extern ssize_t gt_GATT_GenericRead(struct bt_conn *stpt_connHandle,
+   const struct bt_gatt_attr *stpt_attr, void *vpt_buf, uint16_t u16_length,
+   uint16_t u16_offset);
+extern ssize_t gt_GATT_GenericWrite(struct bt_conn *stpt_connHandle,
+   const struct bt_gatt_attr *stpt_attr, const void *vpt_buf, uint16_t u16_length,
+   uint16_t u16_offset, uint8_t u8_flags);
 
-#endif //!_APP_LOG_H
+/* ---- Application-side local GATT database access APIs ------------------- */
+extern void gt_GATT_LocalRead(const GATTCharDescriptor_T *stpt_desc,
+   void *vpt_buf, uint16_t u16_bufLen, uint16_t *u16pt_bytesRead);
+extern void gv_GATT_LocalWrite(GATTCharDescriptor_T *stpt_desc,
+   const void *vpt_buf, uint16_t u16_length);
+extern void gt_GATT_GetActualLen(const GATTCharDescriptor_T *stpt_desc,
+   uint16_t *u16pt_actualLen);
 
-/**
- * Copyright(c) Bajaj Auto Technology Limited (BATL) as an unpublished work.
- * THIS SOFTWARE AND/OR MATERIAL IS THE PROPERTY OF BATL.
- * ALL USE, DISCLOSURE, AND/OR REPRODUCTION NOT SPECIFICALLY AUTHORIZED BY
- * BATL IS PROHIBITED.
- *
- * @author:Shivam Chudasama [SC]
- */
+#endif /* !_GATT_GENERIC_CALLBACKS_H */

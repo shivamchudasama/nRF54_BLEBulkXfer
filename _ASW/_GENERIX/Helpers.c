@@ -18,61 +18,24 @@
 /*                                  DEFINES                                   */
 /*                                                                            */
 /******************************************************************************/
-/**
- * @def           <Define name>
- * @brief         <Define details>.
- */
 
 /******************************************************************************/
 /*                                                                            */
 /*                                   ENUMS                                    */
 /*                                                                            */
 /******************************************************************************/
-// Definition of all the enums
-/**
- * @enum          <Enum name>
- * @brief         <Enum details>.
- */
-
-// Declarations of all the enum variables
-/**
- * @var           <Variable name>
- * @brief         <Variable details>.
- */
 
 /******************************************************************************/
 /*                                                                            */
 /*                                 STRUCTURES                                 */
 /*                                                                            */
 /******************************************************************************/
-// Definition of all the structures
-/**
- * @struct        <Structure name>
- * @brief         <Structure details>.
- */
-
-// Declarations of all the structure variables
-/**
- * @var           <Variable name>
- * @brief         <Variable details>.
- */
 
 /******************************************************************************/
 /*                                                                            */
 /*                                   UNIONS                                   */
 /*                                                                            */
 /******************************************************************************/
-// Definition of all the unions
-/**
- * @union         <Union name>
- * @brief         <Union details>.
- */
-
-// Declarations of all the union variables
-/**
- * @var           <Variable name>
- * @brief         <Variable details>.
- */
 
 /******************************************************************************/
 /*                                                                            */
@@ -91,20 +54,12 @@
 /*                              PUBLIC VARIABLES                              */
 /*                                                                            */
 /******************************************************************************/
-/**
- * @var           <Variable name>
- * @brief         <Variable details>.
- */
 
 /******************************************************************************/
 /*                                                                            */
 /*                             PRIVATE VARIABLES                              */
 /*                                                                            */
 /******************************************************************************/
-/**
- * @var           <Variable name>
- * @brief         <Variable details>.
- */
 
 /******************************************************************************/
 /*                                                                            */
@@ -117,14 +72,6 @@
 /*                        PRIVATE FUNCTION DEFINITIONS                        */
 /*                                                                            */
 /******************************************************************************/
-/**
- * @private       <Function name>
- * @brief         <Function details>.
- * @param[in]     <Input parameter details>.
- * @param[out]    <Output parameter details>.
- * @param[inout]  <Input-Output parameter details>.
- * @return        <Return details>.
- */
 
 /******************************************************************************/
 /*                                                                            */

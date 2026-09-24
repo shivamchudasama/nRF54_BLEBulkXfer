@@ -24,6 +24,16 @@
 // (RFC 4122 compliant), we've decided the base UUIDs of last 96-bits. Only the
 // first 32-bits would be changed throughout the project.
 /**
+ * @def           UUID_FIRST_PART_32BIT
+ * @brief         First part of UUID (32-bits) formulation.
+ *                | 8-bit Domain | 8-bit Service ID | 16-bit Characteristic ID |
+ */
+#define UUID_FIRST_PART_32BIT(domain, svc, char) \
+                                             (((uint32_t)(domain) << 24) | \
+                                             ((uint32_t)(svc) << 16) | \
+                                             ((uint32_t)(char)))
+                                             
+/**
  * @def           BASE_UUID_SECOND_PART_16BIT
  * @brief         Second part of base UUID (16-bits).
  */
@@ -52,30 +62,18 @@
 /*                                   ENUMS                                    */
 /*                                                                            */
 /******************************************************************************/
-/**
- * @enum          <Enum name>
- * @brief         <Enum details>.
- */
 
 /******************************************************************************/
 /*                                                                            */
 /*                                 STRUCTURES                                 */
 /*                                                                            */
 /******************************************************************************/
-/**
- * @struct        <Structure name>
- * @brief         <Structure details>.
- */
 
 /******************************************************************************/
 /*                                                                            */
 /*                                   UNIONS                                   */
 /*                                                                            */
 /******************************************************************************/
-/**
- * @union         <Union name>
- * @brief         <Union details>.
- */
 
 /******************************************************************************/
 /*                                                                            */

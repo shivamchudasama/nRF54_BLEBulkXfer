@@ -1,75 +1,68 @@
 /**
- * @file          AppLog.h
- * @brief         Application logging macros wrapping Zephyr's LOG_* API.
- *
- *                Prepends the calling function name to every log message so
- *                that log output is self-identifying without needing a debugger.
- *
- *                Before including this header in any translation unit, the
- *                log module must be registered once (typically in main.c or
- *                your application entry point):
- *
- * @code
- *                LOG_MODULE_REGISTER(APP_LOG, LOG_LEVEL_INF);
- * @endcode
- *
- *                All other files simply include this header; the
- *                LOG_MODULE_DECLARE() call inside it binds them to the already-
- *                registered module.
- *
- * @date          16/02/2026
+ * @file          BaseUUIDs.h
+ * @brief         Header file containing base UUIDs for the project. Project: BulkXfer examples and host tests
+ * @date          24/09/2026
  * @author        Shivam Chudasama
- * @copyright     Shivam Chudasama
- * @license       MIT
  */
 
-/* SPDX-License-Identifier: MIT */
-
-#ifndef _APP_LOG_H
-#define _APP_LOG_H
+#ifndef _BASE_UUIDS_H
+#define _BASE_UUIDS_H
 
 /******************************************************************************/
 /*                                                                            */
 /*                                  INCLUDES                                  */
 /*                                                                            */
 /******************************************************************************/
-#include <zephyr/logging/log.h>
 
 /******************************************************************************/
 /*                                                                            */
 /*                                  DEFINES                                   */
 /*                                                                            */
 /******************************************************************************/
-/**
- * @def           APP_LOG
- * @brief         Declare — already registered — the application log module.
- *                Module name is APP_LOG. Log level is set to INFO.
- */
-LOG_MODULE_DECLARE(APP_LOG, LOG_LEVEL_INF);
+// Note: To keep the UUIDs of all the services and characteristics v4 compliant
+// (RFC 4122 compliant), we've decided the base UUIDs of last 96-bits. Only the
+// first 32-bits would be changed throughout the project.
 
 /**
- * @def           APP_LOG_ERR
- * @brief         Error log macro. Prepends the calling function name.
+ * @def           BASE_UUID_SECOND_PART_16BIT
+ * @brief         Second part of base UUID (16-bits).
  */
-#define APP_LOG_ERR(fmt, ...)                LOG_ERR("%s: " fmt, __func__, ##__VA_ARGS__)
+#define BASE_UUID_SECOND_PART_16BIT          (0XDBB1)
 
 /**
- * @def           APP_LOG_WRN
- * @brief         Warning log macro. Prepends the calling function name.
+ * @def           BASE_UUID_THIRD_PART_16BIT
+ * @brief         Third part of base UUID (16-bits).
  */
-#define APP_LOG_WRN(fmt, ...)                LOG_WRN("%s: " fmt, __func__, ##__VA_ARGS__)
+#define BASE_UUID_THIRD_PART_16BIT           (0X4D99)
 
 /**
- * @def           APP_LOG_INF
- * @brief         Info log macro. Prepends the calling function name.
+ * @def           BASE_UUID_FOURTH_PART_16BIT
+ * @brief         Fourth part of base UUID (16-bits).
  */
-#define APP_LOG_INF(fmt, ...)                LOG_INF("%s: " fmt, __func__, ##__VA_ARGS__)
+#define BASE_UUID_FOURTH_PART_16BIT          (0XAB6E)
 
 /**
- * @def           APP_LOG_DBG
- * @brief         Debug log macro. Prepends the calling function name.
+ * @def           BASE_UUID_FIFTH_PART_48BIT
+ * @brief         Fifth part of base UUID (48-bits).
  */
-#define APP_LOG_DBG(fmt, ...)                LOG_DBG("%s: " fmt, __func__, ##__VA_ARGS__)
+#define BASE_UUID_FIFTH_PART_48BIT           (0XF441EC7C092B)
+
+/**
+ * @def           UUID_FIRST_PART_32BIT
+ * @brief         First part of UUID (32-bits) formulation.
+ *                | 8-bit Domain | 8-bit Service ID | 16-bit Characteristic ID |
+ */
+#define UUID_FIRST_PART_32BIT(domain, svc, char) \
+                                             (((uint32_t)(domain) << 24) | \
+                                             ((uint32_t)(svc) << 16) | \
+                                             ((uint32_t)(char)))
+
+// Domains
+/**
+ * @def           PART_UUID_DOMAIN_MY_DOMAIN
+ * @brief         My domain domain.
+ */
+#define PART_UUID_DOMAIN_MY_DOMAIN           (0x01)
 
 /******************************************************************************/
 /*                                                                            */
@@ -101,13 +94,5 @@ LOG_MODULE_DECLARE(APP_LOG, LOG_LEVEL_INF);
 /*                                                                            */
 /******************************************************************************/
 
-#endif //!_APP_LOG_H
+#endif //!_BASE_UUIDS_H
 
-/**
- * Copyright(c) Bajaj Auto Technology Limited (BATL) as an unpublished work.
- * THIS SOFTWARE AND/OR MATERIAL IS THE PROPERTY OF BATL.
- * ALL USE, DISCLOSURE, AND/OR REPRODUCTION NOT SPECIFICALLY AUTHORIZED BY
- * BATL IS PROHIBITED.
- *
- * @author:Shivam Chudasama [SC]
- */

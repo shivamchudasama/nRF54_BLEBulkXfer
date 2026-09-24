@@ -1,23 +1,25 @@
 /**
- * @file          AppLog.h
- * @brief         Application logging macros wrapping Zephyr's LOG_* API.
+ * @file          BulkXfer.h
+ * @brief         Umbrella header of the BLE bulk transfer (BulkXfer) framework.
  *
- *                Prepends the calling function name to every log message so
- *                that log output is self-identifying without needing a debugger.
+ *                BulkXfer moves arbitrarily large objects from a GATT client
+ *                to a GATT server:
  *
- *                Before including this header in any translation unit, the
- *                log module must be registered once (typically in main.c or
- *                your application entry point):
+ *                  Client (TX, BulkXfer_Client.h): writes START / DATA frames
+ *                     into the peer's DATA characteristic with Write Without
+ *                     Response.
+ *                  Server (RX, BulkXfer_Server.h): hosts DATA + CTRL, answers
+ *                     with ACK / NACK / END notifications on CTRL.
  *
- * @code
- *                LOG_MODULE_REGISTER(APP_LOG, LOG_LEVEL_INF);
- * @endcode
+ *                A device that needs both directions runs both roles; each
+ *                binds its own connection. Reliability: windowed cumulative
+ *                ACKs + Go-Back-N retransmit + CRC-32 over the whole object.
+ *                See BulkXfer_Frame.h for the wire format.
  *
- *                All other files simply include this header; the
- *                LOG_MODULE_DECLARE() call inside it binds them to the already-
- *                registered module.
+ *                Roles are selected at build time with BLK_ENABLE_SERVER /
+ *                BLK_ENABLE_CLIENT (BulkXfer_Config.h).
  *
- * @date          16/02/2026
+ * @date          24/09/2026
  * @author        Shivam Chudasama
  * @copyright     Shivam Chudasama
  * @license       MIT
@@ -25,51 +27,29 @@
 
 /* SPDX-License-Identifier: MIT */
 
-#ifndef _APP_LOG_H
-#define _APP_LOG_H
+#ifndef _BULK_XFER_H
+#define _BULK_XFER_H
 
 /******************************************************************************/
 /*                                                                            */
 /*                                  INCLUDES                                  */
 /*                                                                            */
 /******************************************************************************/
-#include <zephyr/logging/log.h>
+#include <zephyr/bluetooth/conn.h>
+#include "BulkXfer_Types.h"
+#include "BulkXfer_Uuid.h"
+#if BLK_ENABLE_SERVER
+#include "BulkXfer_Server.h"
+#endif // BLK_ENABLE_SERVER
+#if BLK_ENABLE_CLIENT
+#include "BulkXfer_Client.h"
+#endif // BLK_ENABLE_CLIENT
 
 /******************************************************************************/
 /*                                                                            */
 /*                                  DEFINES                                   */
 /*                                                                            */
 /******************************************************************************/
-/**
- * @def           APP_LOG
- * @brief         Declare — already registered — the application log module.
- *                Module name is APP_LOG. Log level is set to INFO.
- */
-LOG_MODULE_DECLARE(APP_LOG, LOG_LEVEL_INF);
-
-/**
- * @def           APP_LOG_ERR
- * @brief         Error log macro. Prepends the calling function name.
- */
-#define APP_LOG_ERR(fmt, ...)                LOG_ERR("%s: " fmt, __func__, ##__VA_ARGS__)
-
-/**
- * @def           APP_LOG_WRN
- * @brief         Warning log macro. Prepends the calling function name.
- */
-#define APP_LOG_WRN(fmt, ...)                LOG_WRN("%s: " fmt, __func__, ##__VA_ARGS__)
-
-/**
- * @def           APP_LOG_INF
- * @brief         Info log macro. Prepends the calling function name.
- */
-#define APP_LOG_INF(fmt, ...)                LOG_INF("%s: " fmt, __func__, ##__VA_ARGS__)
-
-/**
- * @def           APP_LOG_DBG
- * @brief         Debug log macro. Prepends the calling function name.
- */
-#define APP_LOG_DBG(fmt, ...)                LOG_DBG("%s: " fmt, __func__, ##__VA_ARGS__)
 
 /******************************************************************************/
 /*                                                                            */
@@ -100,14 +80,6 @@ LOG_MODULE_DECLARE(APP_LOG, LOG_LEVEL_INF);
 /*                              EXTERN FUNCTIONS                              */
 /*                                                                            */
 /******************************************************************************/
+extern void gv_BLK_OnDisconnected(struct bt_conn *stpt_conn);
 
-#endif //!_APP_LOG_H
-
-/**
- * Copyright(c) Bajaj Auto Technology Limited (BATL) as an unpublished work.
- * THIS SOFTWARE AND/OR MATERIAL IS THE PROPERTY OF BATL.
- * ALL USE, DISCLOSURE, AND/OR REPRODUCTION NOT SPECIFICALLY AUTHORIZED BY
- * BATL IS PROHIBITED.
- *
- * @author:Shivam Chudasama [SC]
- */
+#endif // _BULK_XFER_H
