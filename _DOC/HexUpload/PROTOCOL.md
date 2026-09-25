@@ -2,7 +2,7 @@
 
 This is the contract between the firmware in `_ASW` (the BLE peripheral and GATT server that receives data) and a client that uploads an Intel HEX file. Everything runs on top of the BulkXfer library, so the client implements the BulkXfer **Client** role. The wire format of BulkXfer frames is in [../BulkXfer/API_REFERENCE.md](../BulkXfer/API_REFERENCE.md) §6. There are two clients: the PC GUI in [_TOOLS/BleHostGUI](../../_TOOLS/BleHostGUI/README.md) (Hex Upload tab), and the `hex` command in the reference client [bulkxfer_client.py](../../_LIB/BulkXfer/tools/bulkxfer_client.py), whose protocol code the GUI reuses.
 
-For now the server does not program flash. It buffers each segment in RAM and prints it on the serial terminal (UART, 921600 baud, RTS/CTS flow control) as `0xAAAAAAAA: xx xx …` lines.
+For now the server does not program flash. It buffers each segment in RAM and logs it on the serial terminal (UART, 921600 baud, RTS/CTS flow control): by default one summary line per segment, or every byte as `0xAAAAAAAA: xx xx …` lines when the firmware is built with `CONFIG_DS_HEX_DUMP=y` (see §6).
 
 ## 1. Discovery
 
@@ -50,7 +50,7 @@ The START frame's length and CRC-32 cover the whole object, **address header inc
    1. Send a BulkXfer transfer with appType `0x10` and object `pack('<I', address) + data`.
    2. Wait for END. Only status `OK` means the segment arrived intact.
    3. RESULT follows right away.
-   4. **Wait for STORED** before sending the next segment. The server keeps the segment in its only buffer until the serial dump finishes, which takes about 0.07 s per KiB at 921600 baud (about 5 s for a full 64 KiB segment). Do not rely on that figure: a slower terminal or UART setting stretches it, so use a generous timeout.
+   4. **Wait for STORED** before sending the next segment. The server keeps the segment in its only buffer until it has been logged. By default that is one line and STORED follows almost at once. With `CONFIG_DS_HEX_DUMP=y` the full dump takes several seconds per 64 KiB segment (10–15 s has been observed at 921600 baud), and a slower terminal or UART setting stretches it further, so use a generous timeout.
 
 ## 5. Rejections
 
@@ -66,6 +66,14 @@ The server rejects a START (END status `REJECTED`) when:
 A transfer that fails (link lost, timeout, CRC error, abort) is discarded whole, and the client resends the segment.
 
 ## 6. Serial output
+
+Default (`CONFIG_DS_HEX_DUMP=n`), one line per segment:
+
+```
+<inf> APP_LOG: SEG addr=0x00010000 len=1148 crc=0x1a2b3c4d
+```
+
+With `CONFIG_DS_HEX_DUMP=y` in `_DI/prj.conf` (debugging), every byte:
 
 ```
 <inf> APP_LOG: SEG start addr=0x00010000 len=1148 crc=0x1a2b3c4d

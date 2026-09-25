@@ -1,0 +1,22 @@
+#*******************************************************************************
+#
+# Application Kconfig (KCONFIG_ROOT, set in the top-level CMakeLists.txt)
+#
+#*******************************************************************************
+menu "Application"
+
+config DS_HEX_DUMP
+	bool "Print every byte of each received hex segment on the log"
+	help
+	  When enabled, the data store prints each CRC-verified segment as
+	  "0xAAAAAAAA: xx xx ..." lines, 16 bytes per line, framed by SEG start
+	  and SEG end lines. STORED is sent only after the last line, and the
+	  next segment is rejected until then, so a 64 KiB segment holds the
+	  upload for several seconds. Use it for debugging.
+
+	  When disabled, each segment is reported with a single
+	  "SEG addr=... len=... crc=..." line and STORED follows at once.
+
+endmenu
+
+source "Kconfig.zephyr"

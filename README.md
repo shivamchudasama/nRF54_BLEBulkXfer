@@ -4,7 +4,7 @@ Zephyr / nRF Connect SDK firmware for a BLE peripheral that receives bulk data o
 
 ## Status
 
-- **Application (`_ASW`)** — advertises as `BLE Bulk Transfer` and exposes GAP, Device Information and the BulkXfer service. It receives an Intel HEX upload one contiguous segment at a time, buffers each segment in RAM and prints it on the serial terminal as `0xADDRESS: xx xx …` lines. Nothing is written to flash yet.
+- **Application (`_ASW`)** — advertises as `BLE Bulk Transfer` and exposes GAP, Device Information and the BulkXfer service. It receives an Intel HEX upload one contiguous segment at a time, buffers each segment in RAM and logs it on the serial terminal: one summary line with its CRC-32, or every byte as `0xADDRESS: xx xx …` lines when built with `CONFIG_DS_HEX_DUMP=y` (for debugging; much slower). Nothing is written to flash yet.
 - **BulkXfer library (`_LIB/BulkXfer`)** — the transfer protocol itself. The firmware runs it in the receiver (Server) role.
 - **Upload client** — the PC GUI in [`_TOOLS/BleHostGUI`](_TOOLS/BleHostGUI/README.md) scans, connects, reads CAPS and uploads a hex file, with a switchable BLE traffic monitor. The `hex` command of the Python test client does the same from the command line.
 
@@ -22,7 +22,7 @@ The design rationale and protocol walkthrough are in [_DOC/BulkXfer/README.md](_
 
 - Service `B1C00000-16A1-4812-AF35-F3F29A92F6CA`, with DATA (`…0001`, Write Without Response), CTRL (`…0002`, Notify) and CAPS (`…0003`, Read).
 - Each contiguous segment is one BulkXfer transfer, appType `0x10`, carrying `[u32 little-endian start address][data]`. Segments are at most 64 KiB.
-- The server answers with a RESULT message when the transfer ends, and a STORED message once the segment has been printed. The client waits for STORED before sending the next segment.
+- The server answers with a RESULT message when the transfer ends, and a STORED message once the segment has been logged. The client waits for STORED before sending the next segment.
 
 The full contract for client implementations is in [_DOC/HexUpload/PROTOCOL.md](_DOC/HexUpload/PROTOCOL.md).
 
@@ -30,8 +30,8 @@ The full contract for client implementations is in [_DOC/HexUpload/PROTOCOL.md](
 
 | Path | Contents |
 |---|---|
-| [`_ASW/`](_ASW) | Application: `main.c` plus modules for BLE init/advertising, the Device Information service, the BulkXfer GATT service (`_BLK_SVC`), the RAM segment store and serial dump (`_DATA_STORE`), logging and helpers |
-| [`_DI/`](_DI) | Build configuration (`prj.conf`) and the board devicetree overlay (console UART at 921600 baud) |
+| [`_ASW/`](_ASW) | Application: `main.c` plus modules for BLE init/advertising, the Device Information service, the BulkXfer GATT service (`_BLK_SVC`), the RAM segment store and its serial log (`_DATA_STORE`), logging and helpers |
+| [`_DI/`](_DI) | Build configuration: `prj.conf`, application Kconfig options (`Kconfig`) and the board devicetree overlay (console UART at 921600 baud) |
 | [`_LIB/GATT_CB/`](_LIB/GATT_CB) | Generic GATT read/write callbacks driven by per-characteristic descriptors |
 | [`_LIB/BulkXfer/`](_LIB/BulkXfer) | Bulk-transfer library, with example client/server apps, host-side unit tests and a Python (`bleak`) test client |
 | [`_TOOLS/BleHostGUI/`](_TOOLS/BleHostGUI) | PC GUI (Tkinter + `bleak`): scan/connect, hex upload, BLE traffic monitor |
@@ -56,7 +56,7 @@ To upload a hex file from a PC, run the GUI (`pip install -r _TOOLS/BleHostGUI/r
 python _LIB/BulkXfer/tools/bulkxfer_client.py hex app.hex --base 16a1-4812-af35-f3f29a92f6ca --name "BLE Bulk Transfer"
 ```
 
-The received data appears on the board's serial terminal at **921600 baud with RTS/CTS flow control** (set in the board overlay).
+The received segments appear on the board's serial terminal at **921600 baud with RTS/CTS flow control** (set in the board overlay). To see every byte, set `CONFIG_DS_HEX_DUMP=y` in `_DI/prj.conf`; each 64 KiB segment then holds the upload for several seconds while it prints.
 
 ## Documentation
 

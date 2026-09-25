@@ -5,10 +5,11 @@
  *                Each hex segment arrives as one BulkXfer transfer of type
  *                DS_APP_TYPE_SEGMENT whose object is [u32 LE start address][data].
  *                The data is collected in su8ar_segBuf. Once the transfer ends with
- *                eBS_OK (CRC-32 verified), the dump thread prints it on the serial
- *                terminal as "0xAAAAAAAA: xx xx ..." lines and then tells the client
- *                with a DS_APP_TYPE_STORED short message. New transfers are rejected
- *                until the dump has finished.
+ *                eBS_OK (CRC-32 verified), the dump thread logs it and then tells the
+ *                client with a DS_APP_TYPE_STORED short message. New transfers are
+ *                rejected until the dump has finished. With CONFIG_DS_HEX_DUMP the
+ *                dump prints every byte as "0xAAAAAAAA: xx xx ..." lines (slow, for
+ *                debugging); without it, a single summary line with the CRC-32.
  * @date          25/09/2026
  * @author        Shivam Chudasama [SC]
  * @copyright     Bajaj Auto Technology Limited (BATL)
@@ -346,8 +347,9 @@ static void sv_SendReport(uint8_t u8_appType, uint8_t u8_status, uint32_t u32_ad
 
 /**
  * @private       sv_DumpSegment
- * @brief         Print the segment in su8ar_segBuf as "0xAAAAAAAA: xx xx ..." lines,
- *                DS_BYTES_PER_LINE bytes each, framed by start and end lines.
+ * @brief         Log the segment in su8ar_segBuf. With CONFIG_DS_HEX_DUMP, print it as
+ *                "0xAAAAAAAA: xx xx ..." lines, DS_BYTES_PER_LINE bytes each, framed by
+ *                start and end lines; otherwise print one summary line.
  * @return        None.
  */
 static void sv_DumpSegment(void)
@@ -362,6 +364,13 @@ static void sv_DumpSegment(void)
    // CRC over the whole object, equal to the CRC-32 in the client's START frame
    u32_crc = crc32_ieee(su8ar_addrHdr, sizeof(su8ar_addrHdr));
    u32_crc = crc32_ieee_update(u32_crc, su8ar_segBuf, su32_segLen);
+
+   // Check if the full hex dump is disabled: the summary line is all that is printed
+   if (!IS_ENABLED(CONFIG_DS_HEX_DUMP))
+   {
+      LOG_INF("SEG addr=0x%08x len=%u crc=0x%08x", su32_segAddr, su32_segLen, u32_crc);
+      return;
+   }
 
    LOG_INF("SEG start addr=0x%08x len=%u crc=0x%08x", su32_segAddr, su32_segLen, u32_crc);
 

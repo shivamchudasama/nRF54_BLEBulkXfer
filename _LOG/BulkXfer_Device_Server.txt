@@ -1,0 +1,57 @@
+---- Closed the serial port COM3 ----
+---- Opened the serial port COM3 ----
+*** Booting nRF Connect SDK v3.4.1-b20f8619ba9a ***
+*** Using Zephyr OS v4.4.2-33fa6a7aac6a ***
+[00:00:00.014,284] <inf> APP_LOG: gi_DataStore_Init: BulkXfer server ready, segment buffer 65536 bytes
+[00:00:00.014,289] <inf> APP_LOG: Initializing Bluetooth...
+[00:00:00.014,334] <inf> bt_sdc_hci_driver: SoftDevice Controller build revision: 
+                                            b4 0b 11 18 91 a8 42 2e  f6 71 c1 84 8c 5e ea 79 |......B. .q...^.y
+                                            b1 32 60 8f                                      |.2`.             
+[00:00:00.015,672] <inf> bt_hci_core: HW Platform: Nordic Semiconductor (0x0002)
+[00:00:00.015,686] <inf> bt_hci_core: HW Variant: nRF54Lx (0x0005)
+[00:00:00.015,698] <inf> bt_hci_core: Firmware: Standard Bluetooth controller (0x00) Version 180.4363 Build 1118343448
+[00:00:00.016,196] <inf> bt_hci_core: HCI transport: SDC
+[00:00:00.016,243] <inf> bt_hci_core: Identity: D2:F4:B9:9C:46:E0 (random)
+[00:00:00.016,257] <inf> bt_hci_core: HCI: version 6.3 (0x11) revision 0x3080, manufacturer 0x0059
+[00:00:00.016,270] <inf> bt_hci_core: LMP: version 6.3 (0x11) subver 0x3080
+[00:00:00.016,275] <inf> APP_LOG: Bluetooth initialized
+[00:00:00.016,279] <inf> APP_LOG: Starting BLE advertising...
+[00:00:00.016,795] <inf> APP_LOG: Advertising started
+[00:00:13.791,775] <inf> APP_LOG: Connected
+[00:00:14.046,377] <inf> APP_LOG: Data length updated. Len TX/ RX: 251/ 251 bytes, time TX/ RX: 2120/ 2120 us
+[00:00:14.825,571] <inf> APP_LOG: PHY updated TX:2 RX:2
+[00:00:15.791,869] <inf> APP_LOG: Starting self negotiation after a delay...
+[00:00:15.791,881] <inf> APP_LOG: PHY already at target (TX:2 RX:2), skipping PHY request
+[00:00:15.791,887] <inf> APP_LOG: DLE already at target (TX:251 RX:251), skipping DLE request
+[00:00:15.791,895] <inf> APP_LOG: MTU already at target (247 bytes), skipping MTU request
+[00:00:15.791,899] <inf> APP_LOG: Negotiation complete.
+[00:00:25.461,387] <inf> APP_LOG: si_OnRxStart: segment announced: 49152 bytes
+[00:00:25.461,406] <inf> APP_LOG: sv_RxOnStart: RX transfer 1: type 0x10, 49156 bytes in 205 frames
+[00:00:29.292,833] <inf> APP_LOG: sv_RxFinish: RX transfer 1 done, status 0
+[00:00:29.292,849] <inf> APP_LOG: sv_OnRxDone: segment received: addr 0x00000000, 49152 bytes
+[00:00:29.300,758] <inf> APP_LOG: SEG addr=0x00000000 len=49152 crc=0x33c03c21
+[00:00:29.376,519] <inf> APP_LOG: si_OnRxStart: segment announced: 65536 bytes
+[00:00:29.376,537] <inf> APP_LOG: sv_RxOnStart: RX transfer 2: type 0x10, 65540 bytes in 274 frames
+[00:00:32.932,712] <inf> APP_LOG: sv_RxFinish: RX transfer 2 done, status 0
+[00:00:32.932,728] <inf> APP_LOG: sv_OnRxDone: segment received: addr 0x00018000, 65536 bytes
+[00:00:32.943,203] <inf> APP_LOG: SEG addr=0x00018000 len=65536 crc=0xf34435f7
+[00:00:33.021,607] <inf> APP_LOG: si_OnRxStart: segment announced: 32768 bytes
+[00:00:33.021,625] <inf> APP_LOG: sv_RxOnStart: RX transfer 3: type 0x10, 32772 bytes in 137 frames
+[00:00:34.657,332] <inf> APP_LOG: sv_RxFinish: RX transfer 3 done, status 0
+[00:00:34.657,348] <inf> APP_LOG: sv_OnRxDone: segment received: addr 0x00028000, 32768 bytes
+[00:00:34.662,695] <inf> APP_LOG: SEG addr=0x00028000 len=32768 crc=0x011312c7
+[00:00:34.731,648] <inf> APP_LOG: si_OnRxStart: segment announced: 65536 bytes
+[00:00:34.731,666] <inf> APP_LOG: sv_RxOnStart: RX transfer 4: type 0x10, 65540 bytes in 274 frames
+[00:00:36.226,605] <inf> APP_LOG: sv_RxFinish: RX transfer 4 done, status 0
+[00:00:36.226,621] <inf> APP_LOG: sv_OnRxDone: segment received: addr 0x00040000, 65536 bytes
+[00:00:36.237,098] <inf> APP_LOG: SEG addr=0x00040000 len=65536 crc=0x857f6481
+[00:00:36.306,685] <inf> APP_LOG: si_OnRxStart: segment announced: 61440 bytes
+[00:00:36.306,704] <inf> APP_LOG: sv_RxOnStart: RX transfer 5: type 0x10, 61444 bytes in 257 frames
+[00:00:37.804,292] <inf> APP_LOG: sv_RxFinish: RX transfer 5 done, status 0
+[00:00:37.804,308] <inf> APP_LOG: sv_OnRxDone: segment received: addr 0x00060800, 61440 bytes
+[00:00:37.814,142] <inf> APP_LOG: SEG addr=0x00060800 len=61440 crc=0x59b08262
+[00:00:37.881,723] <inf> APP_LOG: si_OnRxStart: segment announced: 32768 bytes
+[00:00:37.881,741] <inf> APP_LOG: sv_RxOnStart: RX transfer 6: type 0x10, 32772 bytes in 137 frames
+[00:00:38.662,471] <inf> APP_LOG: sv_RxFinish: RX transfer 6 done, status 0
+[00:00:38.662,487] <inf> APP_LOG: sv_OnRxDone: segment received: addr 0x20000000, 32768 bytes
+[00:00:38.667,832] <inf> APP_LOG: SEG addr=0x20000000 len=32768 crc=0x611d39f5
