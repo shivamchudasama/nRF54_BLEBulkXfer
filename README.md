@@ -1,12 +1,12 @@
 # nRF54 BLE Bulk Transfer
 
-Zephyr / nRF Connect SDK firmware for a BLE peripheral that receives bulk data over GATT, targeting the **nRF54L15 DK**.
+Zephyr / nRF Connect SDK firmware for a BLE peripheral that receives bulk data over GATT, targeting the **nRF54L15 DK**, plus a PC GUI that uploads to it.
 
 ## Status
 
 - **Application (`_ASW`)** — advertises as `BLE Bulk Transfer` and exposes GAP, Device Information and the BulkXfer service. It receives an Intel HEX upload one contiguous segment at a time, buffers each segment in RAM and prints it on the serial terminal as `0xADDRESS: xx xx …` lines. Nothing is written to flash yet.
 - **BulkXfer library (`_LIB/BulkXfer`)** — the transfer protocol itself. The firmware runs it in the receiver (Server) role.
-- **Upload client** — a PC GUI is planned. Until then, the `hex` command of the Python test client does the upload.
+- **Upload client** — the PC GUI in [`_TOOLS/BleHostGUI`](_TOOLS/BleHostGUI/README.md) scans, connects, reads CAPS and uploads a hex file, with a switchable BLE traffic monitor. The `hex` command of the Python test client does the same from the command line.
 
 ## BulkXfer in brief
 
@@ -34,6 +34,7 @@ The full contract for client implementations is in [_DOC/HexUpload/PROTOCOL.md](
 | [`_DI/`](_DI) | Build configuration (`prj.conf`) and the board devicetree overlay (console UART at 921600 baud) |
 | [`_LIB/GATT_CB/`](_LIB/GATT_CB) | Generic GATT read/write callbacks driven by per-characteristic descriptors |
 | [`_LIB/BulkXfer/`](_LIB/BulkXfer) | Bulk-transfer library, with example client/server apps, host-side unit tests and a Python (`bleak`) test client |
+| [`_TOOLS/BleHostGUI/`](_TOOLS/BleHostGUI) | PC GUI (Tkinter + `bleak`): scan/connect, hex upload, BLE traffic monitor |
 | [`_DOC/`](_DOC) | Coding guidelines, library documentation and reference notes |
 
 ## Building
@@ -49,7 +50,7 @@ west build -b nrf54l15dk/nrf54l15/cpuapp --sysbuild -d build .
 
 After changing the layout or configuration, do a pristine build (`-p always`).
 
-To upload a hex file from a PC, use [`_LIB/BulkXfer/tools/bulkxfer_client.py`](_LIB/BulkXfer/tools/bulkxfer_client.py). It needs `pip install bleak`.
+To upload a hex file from a PC, run the GUI (`pip install -r _TOOLS/BleHostGUI/requirements.txt`, then `python _TOOLS/BleHostGUI/ble_host_gui.py`), or use the command-line client [`_LIB/BulkXfer/tools/bulkxfer_client.py`](_LIB/BulkXfer/tools/bulkxfer_client.py), which needs `pip install bleak`:
 
 ```sh
 python _LIB/BulkXfer/tools/bulkxfer_client.py hex app.hex --base 16a1-4812-af35-f3f29a92f6ca --name "BLE Bulk Transfer"
@@ -63,6 +64,7 @@ The received data appears on the board's serial terminal at **921600 baud with R
 - [BulkXfer API reference](_DOC/BulkXfer/API_REFERENCE.md)
 - [GATT_CB API reference](_DOC/GATT_CB/API_REFERENCE.md)
 - [Hex upload protocol](_DOC/HexUpload/PROTOCOL.md)
+- [BLE Host GUI](_TOOLS/BleHostGUI/README.md)
 - [BATL coding guidelines](_DOC/BATL%20Coding%20Guidelines/)
 
 ## License

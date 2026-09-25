@@ -1,6 +1,6 @@
 # Hex Upload — Protocol
 
-This is the contract between the firmware in `_ASW` (the BLE peripheral and GATT server that receives data) and a client that uploads an Intel HEX file (the planned PC GUI). Everything runs on top of the BulkXfer library, so the client implements the BulkXfer **Client** role. The wire format of BulkXfer frames is in [../BulkXfer/API_REFERENCE.md](../BulkXfer/API_REFERENCE.md) §6. The reference client is `hex` in [bulkxfer_client.py](../../_LIB/BulkXfer/tools/bulkxfer_client.py).
+This is the contract between the firmware in `_ASW` (the BLE peripheral and GATT server that receives data) and a client that uploads an Intel HEX file. Everything runs on top of the BulkXfer library, so the client implements the BulkXfer **Client** role. The wire format of BulkXfer frames is in [../BulkXfer/API_REFERENCE.md](../BulkXfer/API_REFERENCE.md) §6. There are two clients: the PC GUI in [_TOOLS/BleHostGUI](../../_TOOLS/BleHostGUI/README.md) (Hex Upload tab), and the `hex` command in the reference client [bulkxfer_client.py](../../_LIB/BulkXfer/tools/bulkxfer_client.py), whose protocol code the GUI reuses.
 
 For now the server does not program flash. It buffers each segment in RAM and prints it on the serial terminal (UART, 921600 baud, RTS/CTS flow control) as `0xAAAAAAAA: xx xx …` lines.
 

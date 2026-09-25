@@ -10,7 +10,7 @@ Do not ask on turns that change nothing here (questions, inspection, small edits
 
 ## Repository nature
 
-**Zephyr / nRF Connect SDK firmware** for a BLE peripheral that receives an Intel HEX upload over BLE. It exposes GAP, Device Information and the BulkXfer service, and runs the `_LIB/BulkXfer` Server role: a PC client (a future GUI, today `_LIB/BulkXfer/tools/bulkxfer_client.py hex`) sends each contiguous segment as one transfer, `[u32 LE address][data]` with appType `0x10`. The segment is buffered in RAM and printed on the UART log, which is the only data store for now — nothing is written to flash. The application-level contract is `_DOC/HexUpload/PROTOCOL.md`.
+**Zephyr / nRF Connect SDK firmware** for a BLE peripheral that receives an Intel HEX upload over BLE. It exposes GAP, Device Information and the BulkXfer service, and runs the `_LIB/BulkXfer` Server role: a PC client (the GUI in `_TOOLS/BleHostGUI`, or `_LIB/BulkXfer/tools/bulkxfer_client.py hex`) sends each contiguous segment as one transfer, `[u32 LE address][data]` with appType `0x10`. The segment is buffered in RAM and printed on the UART log, which is the only data store for now — nothing is written to flash. The application-level contract is `_DOC/HexUpload/PROTOCOL.md`.
 
 - SDK: **NCS v3.4.1** (Zephyr 4.4.2), toolchain `C:\ncs\toolchains\4f5b6ad6dd`.
 - Board: **`nrf54l15dk/nrf54l15/cpuapp`**.
@@ -18,7 +18,7 @@ Do not ask on turns that change nothing here (questions, inspection, small edits
 - Command-line build: use PowerShell with the toolchain's `environment.json` variables (PATH, PYTHONPATH, `ZEPHYR_TOOLCHAIN_VARIANT`, `ZEPHYR_SDK_INSTALL_DIR`) plus `ZEPHYR_BASE=C:\ncs\v3.4.1\zephyr`, and run `west build` **from the repo directory**. Git Bash breaks the toolchain's Python (`ctypes` error), and running from `C:\ncs` fails because the source is on another drive. Use a separate `-d build_<name>` so VS Code's `build/` is left alone.
 - No tests, no CI. "It compiles" means a clean build for the board above.
 
-Source files follow the BATL coding guidelines in `_DOC/BATL Coding Guidelines/` (file banner, section headers, Hungarian-style prefixes such as `gv_`, `su8ar_`, `scar_`). `Sample_Format.c`/`.h` there are the templates for new files. `_LIB` sources (and `AppLog.h`) use the same layout but carry an MIT licence header (`SPDX-License-Identifier: MIT`) instead of the BATL copyright.
+Source files follow the BATL coding guidelines in `_DOC/BATL Coding Guidelines/` (file banner, section headers, Hungarian-style prefixes such as `gv_`, `su8ar_`, `scar_`). `Sample_Format.c`/`.h` there are the templates for new files. `_LIB` sources (and `AppLog.h`) use the same layout but carry an MIT licence header (`SPDX-License-Identifier: MIT`) instead of the BATL copyright. The Python tools in `_TOOLS` are not covered by BATL; they follow ordinary PEP 8 style.
 
 ## Layout
 
@@ -36,6 +36,8 @@ Source files follow the BATL coding guidelines in `_DOC/BATL Coding Guidelines/`
 - `_LIB/` — reusable libraries. Its `CMakeLists.txt` sets the BulkXfer roles for the whole build (`BLK_ENABLE_SERVER=1`, `BLK_ENABLE_CLIENT=0` — this device only receives), then adds `GATT_CB` before `BulkXfer`.
   - `GATT_CB/` — generic GATT read/write callbacks driven by a per-characteristic descriptor (`GATT_CB_Types.h`), plus a local read/write API for application threads. Its docs live in `_DOC/GATT_CB/`.
   - `BulkXfer/` — bulk transfer over GATT: sender is the GATT client (Write Without Response to DATA), receiver hosts DATA + CTRL and answers with ACK/NACK/END notifications. Windowed ACKs, Go-Back-N, CRC-32 per object (needs `CONFIG_CRC`). `BulkXfer.h` is the umbrella header; tunables in `BulkXfer_Config.h`. Its docs live in `_DOC/BulkXfer/`.
+- `_TOOLS/` — PC-side tools, not built into the firmware.
+  - `BleHostGUI/` — Tkinter + `bleak` GUI, the BulkXfer Client: scan/connect, read CAPS, hex upload, and a switchable BLE traffic monitor. `ble_host_gui.py` is the entry point and its `FEATURES` list names the tabs. Package `blehost/`: `core/` (asyncio runner thread, event bus, `BleLink` — the only bleak user, which also captures traffic), `protocols/` (codecs; `bulkxfer.py` imports `_LIB/BulkXfer/tools/bulkxfer_client.py` rather than duplicating it), `features/` (one `Feature` subclass per tab), `ui/`. New capabilities (pairing, provisioning, encryption, PC-side server) are added as new features; the recipe is in its `README.md`. Never touch Tk from a coroutine — use `ctx.bus.call()`.
 - `_DOC/` — coding guidelines, SIG UUID YAML sources, Zephyr notes. Not built.
   - `BulkXfer/` — `README.md` (design rationale, protocol walkthrough, integration steps) and `API_REFERENCE.md` (exact API contract). Links point back into `_LIB/BulkXfer/`.
   - `GATT_CB/` — `API_REFERENCE.md` (descriptor fields, callback and hook contract, threading, known limitations).
@@ -50,4 +52,4 @@ Source files follow the BATL coding guidelines in `_DOC/BATL Coding Guidelines/`
 Remote `github.com/shivamchudasama/nRF54_BLEBulkXfer`, default branch `main`.
 
 - **Git LFS** via `.gitattributes`: `*.pdf`, `*.docx`. A new binary extension needs an entry **before** its first commit.
-- `.gitignore` excludes `build*/`, `/.vscode/`, `workspace.code-workspace` and `.codex/config.toml` (local, machine-specific).
+- `.gitignore` excludes `build*/`, `/.vscode/`, `workspace.code-workspace` and `.codex/config.toml` (local, machine-specific), plus `__pycache__/`.

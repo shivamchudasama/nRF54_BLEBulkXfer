@@ -208,7 +208,7 @@ settings:
 |---|---|
 | `examples/bulk_server/` | nRF54L15 DK peripheral, Server role. Receives any transfer, reports status and throughput back as a short message, and echoes shorts |
 | `examples/bulk_client/` | nRF54L15 DK central, Client role. Scans for the service, attaches, and sends 100 kB every 2 s, logging both sides' throughput |
-| `tools/bulkxfer_client.py` | PC GATT client (`bleak`): `send <bytes>` with throughput, `ping`, `caps` |
+| `tools/bulkxfer_client.py` | PC GATT client (`bleak`): `send <bytes>` with throughput, `ping`, `caps`, `hex`. Also importable (`parse_ihex`, `BulkXferClient`) |
 | `tests/test_frame.c` | Host unit tests of the frame codec |
 | `tests/test_engine.c` | Host tests of the **real engine** (both roles) against a simulated link and a scripted peer |
 
