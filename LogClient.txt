@@ -1,0 +1,46 @@
+16:18:49.374  TX  DATA  WNR     14  0c f0 01 10 a4 19 00 00 f0 10 27 28 e7 e2  | START xid=1 SEGMENT len=6564 chunk=240 win=16 crc=0xe2e72827
+16:18:49.457  RX  CTRL  NOTIFY   5  03 f2 01 00 10  | ACK xid=1 next=0 win=16
+16:18:49.457  TX  DATA  WNR    244  f2 f1 01 00 00 00 00 00 80 07 74 2a 00 00 00 00 00 00 00 00 00 00 00 00 80 07 7c 2b 00 00 00 00 … (+212)  | DATA xid=1 seq=0 240 B
+16:18:49.459  TX  DATA  WNR    244  f2 f1 01 01 00 00 00 00 80 07 9c 2a 00 00 00 00 00 00 00 00 00 00 00 00 80 07 8c 2a 00 00 00 00 … (+212)  | DATA xid=1 seq=1 240 B
+16:18:49.460  TX  DATA  WNR    244  f2 f1 01 02 00 00 00 00 80 07 ac 29 00 00 00 00 00 00 00 00 00 00 00 00 80 07 9c 29 00 00 00 00 … (+212)  | DATA xid=1 seq=2 240 B
+16:18:49.461  TX  DATA  WNR    244  f2 f1 01 03 8c 2b 00 00 8c 2b 00 00 8c 2b 00 00 8c 2b 00 00 8c 2b 00 00 8c 2b 00 00 8c 2b 00 00 … (+212)  | DATA xid=1 seq=3 240 B
+16:18:49.463  TX  DATA  WNR    244  f2 f1 01 04 8c 2b 00 00 8c 2b 00 00 8c 2b 00 00 8c 2b 00 00 8c 2b 00 00 8c 2b 00 00 8c 2b 00 00 … (+212)  | DATA xid=1 seq=4 240 B
+16:18:49.463  TX  DATA  WNR    244  f2 f1 01 05 8c 2b 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 … (+212)  | DATA xid=1 seq=5 240 B
+16:18:49.464  TX  DATA  WNR    244  f2 f1 01 06 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 … (+212)  | DATA xid=1 seq=6 240 B
+16:18:49.465  TX  DATA  WNR    244  f2 f1 01 07 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 … (+212)  | DATA xid=1 seq=7 240 B
+16:18:49.466  TX  DATA  WNR    244  f2 f1 01 08 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 8c 2b 00 00 8c 2b 00 00 … (+212)  | DATA xid=1 seq=8 240 B
+16:18:49.467  TX  DATA  WNR    244  f2 f1 01 09 53 81 59 81 5f 81 7d 81 7f 81 89 81 9b 81 9d 81 a7 81 af 81 b3 81 bb 81 c7 81 df 81 … (+212)  | DATA xid=1 seq=9 240 B
+16:18:49.469  TX  DATA  WNR    244  f2 f1 01 0a 17 86 21 86 2f 86 39 86 3f 86 41 86 4d 86 63 86 75 86 7d 86 87 86 99 86 a5 86 a7 86 … (+212)  | DATA xid=1 seq=10 240 B
+16:18:49.470  TX  DATA  WNR    244  f2 f1 01 0b 07 8b 09 8b 0d 8b 13 8b 21 8b 57 8b 5d 8b 91 8b 93 8b a3 8b a9 8b af 8b bb 8b d5 8b … (+212)  | DATA xid=1 seq=11 240 B
+16:18:49.471  TX  DATA  WNR    244  f2 f1 01 0c 07 90 0d 90 17 90 23 90 25 90 31 90 37 90 3b 90 41 90 43 90 4f 90 53 90 6d 90 73 90 … (+212)  | DATA xid=1 seq=12 240 B
+16:18:49.471  TX  DATA  WNR    244  f2 f1 01 0d 21 95 27 95 2d 95 35 95 39 95 4b 95 57 95 5d 95 5f 95 75 95 81 95 89 95 8f 95 9b 95 … (+212)  | DATA xid=1 seq=13 240 B
+16:18:49.472  TX  DATA  WNR    244  f2 f1 01 0e f1 99 fb 99 0f 9a 13 9a 1b 9a 25 9a 4b 9a 4f 9a 55 9a 57 9a 61 9a 75 9a 7f 9a 8b 9a … (+212)  | DATA xid=1 seq=14 240 B
+16:18:49.473  TX  DATA  WNR    244  f2 f1 01 0f 43 9f 53 9f 61 9f 6d 9f 73 9f 77 9f 7d 9f 89 9f 8f 9f 91 9f 95 9f a3 9f af 9f b3 9f … (+212)  | DATA xid=1 seq=15 240 B
+16:18:49.548  RX  CTRL  NOTIFY   5  03 f2 01 02 10  | ACK xid=1 next=2 win=16
+16:18:49.548  TX  DATA  WNR    244  f2 f1 01 10 f1 a3 fd a3 ff a3 0f a4 1d a4 21 a4 23 a4 27 a4 3b a4 4d a4 57 a4 59 a4 63 a4 69 a4 … (+212)  | DATA xid=1 seq=16 240 B
+16:18:49.550  TX  DATA  WNR    244  f2 f1 01 11 a9 a8 b5 a8 c1 a8 c7 a8 d7 a8 e5 a8 fd a8 07 a9 13 a9 1b a9 31 a9 37 a9 39 a9 43 a9 … (+212)  | DATA xid=1 seq=17 240 B
+16:18:49.592  RX  CTRL  NOTIFY   5  03 f2 01 04 10  | ACK xid=1 next=4 win=16
+16:18:49.592  TX  DATA  WNR    244  f2 f1 01 12 f5 ad f9 ad ff ad 05 ae 13 ae 23 ae 2b ae 49 ae 4d ae 4f ae 59 ae 61 ae 67 ae 6b ae … (+212)  | DATA xid=1 seq=18 240 B
+16:18:49.594  TX  DATA  WNR    244  f2 f1 01 13 11 b3 1d b3 27 b3 2d b3 3f b3 45 b3 77 b3 7d b3 81 b3 87 b3 93 b3 9b b3 a5 b3 c5 b3 … (+212)  | DATA xid=1 seq=19 240 B
+16:18:49.637  RX  CTRL  NOTIFY   5  03 f2 01 06 10  | ACK xid=1 next=6 win=16
+16:18:49.638  TX  DATA  WNR    244  f2 f1 01 14 67 b8 75 b8 85 b8 93 b8 a5 b8 af b8 b7 b8 bd b8 c1 b8 c7 b8 cd b8 d5 b8 eb b8 f7 b8 … (+212)  | DATA xid=1 seq=20 240 B
+16:18:49.639  TX  DATA  WNR    244  f2 f1 01 15 6b bd 71 bd 8b bd 8f bd 95 bd 9b bd 9d bd b3 bd bb bd cd bd d1 bd e3 bd eb bd ef bd … (+212)  | DATA xid=1 seq=21 240 B
+16:18:49.682  RX  CTRL  NOTIFY   5  03 f2 01 08 10  | ACK xid=1 next=8 win=16
+16:18:49.682  TX  DATA  WNR    244  f2 f1 01 16 53 c2 5d c2 77 c2 7b c2 7d c2 89 c2 8f c2 93 c2 9f c2 a7 c2 b3 c2 bd c2 cf c2 d5 c2 … (+212)  | DATA xid=1 seq=22 240 B
+16:18:49.684  TX  DATA  WNR    244  f2 f1 01 17 7f c7 a5 c7 bb c7 bd c7 c1 c7 cf c7 d5 c7 e1 c7 f9 c7 fd c7 ff c7 03 c8 11 c8 1d c8 … (+212)  | DATA xid=1 seq=23 240 B
+16:18:49.728  RX  CTRL  NOTIFY   5  03 f2 01 09 10  | ACK xid=1 next=9 win=16
+16:18:49.728  TX  DATA  WNR    244  f2 f1 01 18 61 cc 89 cc 8b cc 91 cc 9b cc a3 cc a7 cc d1 cc e5 cc e9 cc 09 cd 15 cd 1f cd 25 cd … (+212)  | DATA xid=1 seq=24 240 B
+16:18:49.818  RX  CTRL  NOTIFY   5  03 f2 01 0c 10  | ACK xid=1 next=12 win=16
+16:18:49.818  TX  DATA  WNR    244  f2 f1 01 19 95 d1 99 d1 b1 d1 bd d1 c3 d1 d5 d1 d7 d1 e3 d1 ff d1 0d d2 11 d2 17 d2 1f d2 35 d2 … (+212)  | DATA xid=1 seq=25 240 B
+16:18:49.821  TX  DATA  WNR    244  f2 f1 01 1a c3 d6 c7 d6 d9 d6 e1 d6 ed d6 09 d7 0b d7 11 d7 15 d7 21 d7 27 d7 3f d7 45 d7 4d d7 … (+212)  | DATA xid=1 seq=26 240 B
+16:18:49.823  TX  DATA  WNR     88  56 f1 01 1b cd db eb db f7 db 0d dc 27 dc 31 dc 39 dc 3f dc 49 dc 51 dc 61 dc 6f dc 75 dc 7b dc … (+56)  | DATA xid=1 seq=27 84 B
+16:18:49.864  RX  CTRL  NOTIFY   5  03 f2 01 0e 10  | ACK xid=1 next=14 win=16
+16:18:49.908  RX  CTRL  NOTIFY   5  03 f2 01 10 10  | ACK xid=1 next=16 win=16
+16:18:49.954  RX  CTRL  NOTIFY   5  03 f2 01 12 10  | ACK xid=1 next=18 win=16
+16:18:49.998  RX  CTRL  NOTIFY   5  03 f2 01 14 10  | ACK xid=1 next=20 win=16
+16:18:50.044  RX  CTRL  NOTIFY   5  03 f2 01 15 10  | ACK xid=1 next=21 win=16
+16:18:50.088  RX  CTRL  NOTIFY   5  03 f2 01 17 10  | ACK xid=1 next=23 win=16
+16:18:50.133  RX  CTRL  NOTIFY   5  03 f2 01 19 10  | ACK xid=1 next=25 win=16
+16:18:50.177  RX  CTRL  NOTIFY   4  02 f4 01 00  | END xid=1 OK
+16:18:50.178  RX  CTRL  NOTIFY  11  09 01 00 00 00 00 00 a0 19 00 00  | RESULT OK addr=0x00000000 len=6560
+16:18:50.762  RX  CTRL  NOTIFY  11  09 11 00 00 00 00 00 a0 19 00 00  | STORED OK addr=0x00000000 len=6560
