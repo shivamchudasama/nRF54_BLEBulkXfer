@@ -22,11 +22,11 @@ Source files follow the BATL coding guidelines in `_DOC/BATL Coding Guidelines/`
 
 ## Layout
 
-- `CMakeLists.txt` — sets `APPLICATION_CONFIG_DIR` to `_DI` and `KCONFIG_ROOT` to `_DI/Kconfig`, then pulls in `_ASW` and `_LIB`.
+- `CMakeLists.txt` — sets `KCONFIG_ROOT` to `_DI/Kconfig` and defaults `CONF_FILE` to `_DI/prj.conf` and `DTC_OVERLAY_FILE` to `_DI/boards/<board>.overlay`, then pulls in `_ASW` and `_LIB`. Never set `APPLICATION_CONFIG_DIR`: Zephyr resolves a relative `CONF_FILE` against it, so the extension's `_DI/prj.conf` would become `_DI/_DI/prj.conf`.
 - `_ASW/` — application software. `main.c` plus one folder per module:
   - `_BLE/` — stack init, advertising, connection callbacks, and PHY/DLE/MTU negotiation (so BulkXfer's `b_autoTuneLink` is off). Forwards connect/disconnect to BulkXfer, and advertises the BulkXfer service UUID (the name is in the scan response).
   - `_BLK_SVC/` — the BulkXfer GATT service (DATA, CTRL + CCC, CAPS) built on `GATT_CB`. `gstpt_BulkSvc_Init()` returns the CTRL attribute.
-  - `_DATA_STORE/` — BulkXfer Server callbacks, the 64 KiB segment buffer (`DS_BUF_SIZE`) and a low-priority dump thread that logs each verified segment: one `SEG addr= len= crc=` line by default, or, with `CONFIG_DS_HEX_DUMP=y` (debugging, several seconds per 64 KiB), every byte as `0xADDR: xx …` lines paced by `log_buffered_cnt()` so the deferred log never drops lines. Sends RESULT/STORED short messages. `gi_DataStore_Init()` runs in `main()` before advertising.
+  - `_DATA_STORE/` — BulkXfer Server callbacks, the 64 KiB segment buffer (`DS_BUF_SIZE`) and a low-priority dump thread that logs each verified segment: with `CONFIG_DS_HEX_DUMP=n`, one `SEG addr= len= crc=` line; with `CONFIG_DS_HEX_DUMP=y` (currently set in `prj.conf`; several seconds per 64 KiB), every byte as `0xADDR: xx …` lines paced by `log_buffered_cnt()` so the deferred log never drops lines. Sends RESULT/STORED short messages. `gi_DataStore_Init()` runs in `main()` before advertising.
   - `_GAP/` — Device Information GATT service. GAP itself is Zephyr's built-in service (`CONFIG_BT_GAP_SVC`); device name and appearance are set by `CONFIG_BT_DEVICE_NAME`/`CONFIG_BT_DEVICE_APPEARANCE` in `prj.conf`. Never define a second GAP service — the host allows exactly one, and `bt_enable()` fails with `-EINVAL`.
   - `_BLE_GENERIX/` — Bluetooth SIG UUID and appearance tables (headers only).
   - `_APP_LOG/` — `APP_LOG` logging module; `AppLog.h` has `APP_LOG_ERR/WRN/INF/DBG`, which prefix `__func__`.
