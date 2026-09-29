@@ -51,6 +51,7 @@ STATUS = {0: "OK", 1: "CRC_ERROR", 2: "TIMEOUT", 3: "ABORTED", 4: "REMOTE_ABORTE
           5: "REJECTED", 6: "DISCONNECTED", 7: "SOURCE_ERROR", 8: "SINK_ERROR",
           9: "PROTOCOL_ERROR", 10: "NO_RESOURCES", 11: "OUT_OF_ORDER"}
 ST_TIMEOUT, ST_ABORTED = 2, 3
+CTRL_PAYLOAD_LEN = {T_ACK: 3, T_NACK: 3, T_END: 2, T_ABORT: 3}   # minimum payload per frame type
 MAX_FRAME = 244
 WINDOW = 16
 ACK_TIMEOUT = 1.0
@@ -67,6 +68,7 @@ def parse_ihex(path: str, seg_max: int = SEG_MAX) -> list:
     """
     mem = {}
     upper = 0
+    seg_wrap = False                                  # type 02: offsets wrap at 64 KiB
     with open(path) as f:
         for n, line in enumerate(f, 1):
             line = line.strip()
@@ -83,13 +85,14 @@ def parse_ihex(path: str, seg_max: int = SEG_MAX) -> list:
             addr, rtype, data = (rec[1] << 8) | rec[2], rec[3], rec[4:-1]
             if rtype == 0x00:
                 for i, b in enumerate(data):
-                    mem[upper + addr + i] = b
+                    off = addr + i
+                    mem[upper + (off & 0xFFFF if seg_wrap else off)] = b
             elif rtype == 0x01:
                 break
             elif rtype == 0x02:
-                upper = int.from_bytes(data, "big") << 4
+                upper, seg_wrap = int.from_bytes(data, "big") << 4, True
             elif rtype == 0x04:
-                upper = int.from_bytes(data, "big") << 16
+                upper, seg_wrap = int.from_bytes(data, "big") << 16, False
             elif rtype in (0x03, 0x05):
                 pass                                      # start address: not flash data
             else:
@@ -131,6 +134,9 @@ class BulkXferClient:
             self.log(f"! malformed frame {data.hex()}")
             return
         ftype = data[1]
+        if ftype in CTRL_PAYLOAD_LEN and data[0] < CTRL_PAYLOAD_LEN[ftype]:
+            self.log(f"! truncated frame 0x{ftype:02x}: {data.hex()}")
+            return
         if ftype <= 0xEF:
             self.short_q.put_nowait((ftype, data[2:]))
         elif ftype in (T_ACK, T_NACK, T_END) or (ftype == T_ABORT and data[4] == ABORT_BY_RECEIVER):

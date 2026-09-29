@@ -51,7 +51,7 @@
 /*                              EXTERN FUNCTIONS                              */
 /*                                                                            */
 /******************************************************************************/
-extern inline void gv_ReverseByteOrder(uint8_t *u8pt_dst, const uint8_t *u8pt_src,
+extern void gv_ReverseByteOrder(uint8_t *u8pt_dst, const uint8_t *u8pt_src,
    uint32_t u32_numBytes);
 
 #endif //!_HELPERS_H

@@ -82,12 +82,17 @@ def test_malformed_lines_report_file_and_line(tmp_path, line, why):
     assert str(e.value) == f"{p}:2: {why}"
 
 
-@pytest.mark.xfail(strict=True, reason="KNOWN BUG: type 02 (extended segment) addresses must wrap "
-                   "at 64 KiB: (SBA*16 + ((offset + i) mod 65536)). parse_ihex adds without wrapping.")
 def test_extended_segment_address_wraps_within_64k(tmp_path):
+    # Intel HEX: type 02 address = SBA*16 + ((offset + i) mod 65536).
     # SBA 0x1000 -> base 0x10000; record at offset 0xFFFE with 4 bytes
     p = write_hex(tmp_path, rec(0, 2, b"\x10\x00"), rec(0xFFFE, 0, b"\x01\x02\x03\x04"))
     assert sorted(bx.parse_ihex(p)) == [(0x10000, b"\x03\x04"), (0x1FFFE, b"\x01\x02")]
+
+
+def test_linear_address_does_not_wrap(tmp_path):
+    # Type 04 (what nRF toolchains write): LBA + offset + i, no 64 KiB wrap
+    p = write_hex(tmp_path, rec(0, 4, b"\x00\x01"), rec(0xFFFE, 0, b"\x01\x02\x03\x04"))
+    assert bx.parse_ihex(p) == [(0x1FFFE, b"\x01\x02\x03\x04")]
 
 
 def test_extended_segment_address_without_wrap(tmp_path):

@@ -9,10 +9,7 @@
 #include <stdio.h>
 #include <string.h>
 #include "unity.h"
-/* Helpers.h declares the function 'extern inline', which C99 only allows in a
-   translation unit that also defines it, so the source is included here.
-   check_headers.py reports the header problem itself. */
-#include "Helpers.c"
+#include "Helpers.h"
 
 void setUp(void) {}
 void tearDown(void) {}

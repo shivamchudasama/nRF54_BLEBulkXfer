@@ -129,7 +129,7 @@ add_unit_test(hex_upload_e2e
 
 # ---- _ASW/_GENERIX -----------------------------------------------------------
 add_unit_test(helpers
-   SOURCES unit/Helpers/test_helpers.c
+   SOURCES unit/Helpers/test_helpers.c ${ASW_DIR}/_GENERIX/Helpers.c
    INCLUDES ${ASW_DIR}/_GENERIX)
 
 # ---- Header hygiene: each header of a tested unit compiles on its own -------

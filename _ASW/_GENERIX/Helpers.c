@@ -86,7 +86,7 @@
  * @param[in]     u32_numBytes Number of bytes to swap.
  * @return        None.
  */
-inline void gv_ReverseByteOrder(uint8_t *u8pt_dst, const uint8_t *u8pt_src, uint32_t u32_numBytes)
+void gv_ReverseByteOrder(uint8_t *u8pt_dst, const uint8_t *u8pt_src, uint32_t u32_numBytes)
 {
    // Check if neither the source nor the destination is empty
    if ((u8pt_dst != 0) && (u8pt_src != 0))

@@ -28,7 +28,7 @@ FIELDS = {                                            # order of VEC_F[] per kin
 
 def read_ihex(path: str) -> dict:
     """Intel HEX -> {address: byte}. Types 00, 01, 02, 04; 03/05 ignored."""
-    mem, upper = {}, 0
+    mem, upper, seg_wrap = {}, 0, False
     with open(path) as f:
         for line in f:
             line = line.strip()
@@ -39,13 +39,14 @@ def read_ihex(path: str) -> dict:
             addr, rtype, data = (rec[1] << 8) | rec[2], rec[3], rec[4:-1]
             if rtype == 0:
                 for i, b in enumerate(data):
-                    mem[upper + addr + i] = b
+                    off = addr + i
+                    mem[upper + ((off & 0xFFFF) if seg_wrap else off)] = b
             elif rtype == 1:
                 break
-            elif rtype == 2:
-                upper = int.from_bytes(data, "big") << 4
+            elif rtype == 2:                          # segment: offsets wrap at 64 KiB
+                upper, seg_wrap = int.from_bytes(data, "big") << 4, True
             elif rtype == 4:
-                upper = int.from_bytes(data, "big") << 16
+                upper, seg_wrap = int.from_bytes(data, "big") << 16, False
     return mem
 
 

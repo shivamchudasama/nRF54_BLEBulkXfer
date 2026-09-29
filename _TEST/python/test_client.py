@@ -183,12 +183,12 @@ def test_on_notify_drops_bad_length_and_sender_frames():
     assert len(logged) == 3
 
 
-@pytest.mark.xfail(strict=True, reason="KNOWN BUG: on_notify checks only the length byte, not the "
-                   "minimum payload per frame type; a truncated ABORT raises IndexError in the "
-                   "notification callback and a truncated ACK/NACK/END is queued and later crashes "
-                   "send() with IndexError")
 @pytest.mark.parametrize("ftype", [bx.T_ACK, bx.T_NACK, bx.T_END, bx.T_ABORT])
 def test_on_notify_rejects_truncated_control_frames(ftype):
-    c = bx.BulkXferClient(FakeServer(), log=lambda *_: None)
+    # A control frame shorter than its type needs is logged and dropped: it must
+    # neither raise in the notification callback nor reach send()
+    logged = []
+    c = bx.BulkXferClient(FakeServer(), log=logged.append)
     c.on_notify(0, bytearray(bx.frame(ftype, b"\x01")))
-    assert c.ctrl_q.empty()
+    assert c.ctrl_q.empty() and c.short_q.empty()
+    assert len(logged) == 1 and "truncated" in logged[0]
