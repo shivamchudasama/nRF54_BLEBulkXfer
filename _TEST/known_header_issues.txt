@@ -1,0 +1,7 @@
+# Headers with a known, reported problem. check_headers.py reports them as
+# skipped while they still fail, and fails once they compile, so remove the
+# line together with the fix.
+#
+# <path from repo root>: <reason>
+
+_ASW/_GENERIX/Helpers.h: declares gv_ReverseByteOrder 'extern inline' but defines it only in Helpers.c; C99 6.7.4 needs an inline definition in every TU that declares it inline, so any user of the header gets "inline function declared but never defined". Declare it as a plain 'extern void'.

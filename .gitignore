@@ -4,3 +4,4 @@ build*/
 workspace.code-workspace
 .codex/config.toml
 __pycache__/
+.coverage

@@ -1,0 +1,82 @@
+{
+  "_comment": [
+    "Golden wire-format vectors shared by the C tests (via gen_vectors.py ->",
+    "wire_vectors.h) and the Python tests. Both sides must produce and parse",
+    "exactly these bytes, so the firmware and the PC client cannot drift apart.",
+    "Values marked 'from _LOG' were captured from a real upload of",
+    "AA00000100.hex (_LOG/BulkXfer_GUI_Client.txt, _LOG/BulkXfer_Device_Server.txt)."
+  ],
+
+  "protocol_version": 2,
+  "max_frame_len": 244,
+  "window": 16,
+  "app_type_max": 239,
+
+  "frame_types": { "START": 240, "DATA": 241, "ACK": 242, "NACK": 243, "END": 244, "ABORT": 245 },
+
+  "status": {
+    "OK": 0, "CRC_ERROR": 1, "TIMEOUT": 2, "ABORTED": 3, "REMOTE_ABORTED": 4, "REJECTED": 5,
+    "DISCONNECTED": 6, "SOURCE_ERROR": 7, "SINK_ERROR": 8, "PROTOCOL_ERROR": 9,
+    "NO_RESOURCES": 10, "OUT_OF_ORDER": 11
+  },
+
+  "abort_dir": { "BY_SENDER": 0, "BY_RECEIVER": 1 },
+
+  "hex_app_types": { "RESULT": 1, "SEGMENT": 16, "STORED": 17 },
+
+  "frames": [
+    { "name": "start_from_log", "kind": "START",
+      "xid": 1, "app_type": 16, "total_len": 6564, "chunk": 240, "window": 16, "crc32": 3806799911,
+      "hex": "0cf00110a4190000f0102728e7e2" },
+    { "name": "start_all_fields", "kind": "START",
+      "xid": 7, "app_type": 51, "total_len": 305419896, "chunk": 240, "window": 16, "crc32": 3405691582,
+      "hex": "0cf0073378563412f010bebafeca" },
+    { "name": "data_small", "kind": "DATA",
+      "xid": 3, "seq": 255, "data": "a0a1a2",
+      "hex": "05f103ffa0a1a2" },
+    { "name": "ack_from_log", "kind": "ACK",
+      "xid": 1, "seq": 0, "window": 16,
+      "hex": "03f2010010" },
+    { "name": "nack_no_resources", "kind": "NACK",
+      "xid": 9, "seq": 4, "reason": 10,
+      "hex": "03f309040a" },
+    { "name": "end_ok_from_log", "kind": "END",
+      "xid": 1, "status": 0,
+      "hex": "02f40100" },
+    { "name": "end_crc_error", "kind": "END",
+      "xid": 9, "status": 1,
+      "hex": "02f40901" },
+    { "name": "abort_rejected_by_receiver", "kind": "ABORT",
+      "xid": 9, "reason": 5, "dir": 1,
+      "hex": "03f5090501" },
+    { "name": "abort_timeout_by_sender", "kind": "ABORT",
+      "xid": 2, "reason": 2, "dir": 0,
+      "hex": "03f5020200" },
+    { "name": "short_two_bytes", "kind": "SHORT",
+      "app_type": 5, "payload": "0102",
+      "hex": "02050102" },
+    { "name": "short_empty", "kind": "SHORT",
+      "app_type": 0, "payload": "",
+      "hex": "0000" }
+  ],
+
+  "reports": [
+    { "name": "result_ok_from_log", "app_type": 1, "status": 0, "address": 0, "length": 6560,
+      "hex": "09 01 00 00000000 a0190000" },
+    { "name": "stored_ok_from_log", "app_type": 17, "status": 0, "address": 0, "length": 6560,
+      "hex": "09 11 00 00000000 a0190000" },
+    { "name": "result_crc_error", "app_type": 1, "status": 1, "address": 0, "length": 0,
+      "hex": "09 01 01 00000000 00000000" },
+    { "name": "stored_high_address", "app_type": 17, "status": 0, "address": 4027580416, "length": 65536,
+      "hex": "09 11 00 000010f0 00000100" }
+  ],
+
+  "caps": { "hex": "02f41000" },
+
+  "hex_upload": {
+    "file": "AA00000100.hex",
+    "segments": [ { "address": 0, "length": 6560 } ],
+    "start_frame": "start_from_log",
+    "seg_line": "SEG addr=0x00000000 len=6560 crc=0xe2e72827"
+  }
+}

@@ -1,18 +1,17 @@
 """BulkXfer protocol glue: reuse of the reference client, traffic decoding and the
 per-connection BulkXfer service.
 
-The protocol itself lives in _LIB/BulkXfer/tools/bulkxfer_client.py and is not
-duplicated here.
+The protocol itself lives in bulkxfer_client.py next to ble_host_gui.py and is
+not duplicated here.
 """
 
 import os
 import struct
 import sys
 
-_TOOLS_DIR = os.path.normpath(os.path.join(os.path.dirname(__file__), "..", "..", "..", "..",
-                                           "_LIB", "BulkXfer", "tools"))
-if _TOOLS_DIR not in sys.path:
-    sys.path.insert(0, _TOOLS_DIR)
+_GUI_DIR = os.path.normpath(os.path.join(os.path.dirname(__file__), "..", ".."))
+if _GUI_DIR not in sys.path:
+    sys.path.insert(0, _GUI_DIR)
 
 import bulkxfer_client as bx  # noqa: E402  (path set up above)
 

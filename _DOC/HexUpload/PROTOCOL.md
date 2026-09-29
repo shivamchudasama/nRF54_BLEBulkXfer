@@ -1,6 +1,6 @@
 # Hex Upload — Protocol
 
-This is the contract between the firmware in `_ASW` (the BLE peripheral and GATT server that receives data) and a client that uploads an Intel HEX file. Everything runs on top of the BulkXfer library, so the client implements the BulkXfer **Client** role. The wire format of BulkXfer frames is in [../BulkXfer/API_REFERENCE.md](../BulkXfer/API_REFERENCE.md) §6. There are two clients: the PC GUI in [_TOOLS/BleHostGUI](../../_TOOLS/BleHostGUI/README.md) (Hex Upload tab), and the `hex` command in the reference client [bulkxfer_client.py](../../_LIB/BulkXfer/tools/bulkxfer_client.py), whose protocol code the GUI reuses.
+This is the contract between the firmware in `_ASW` (the BLE peripheral and GATT server that receives data) and a client that uploads an Intel HEX file. Everything runs on top of the BulkXfer library, so the client implements the BulkXfer **Client** role. The wire format of BulkXfer frames is in [../BulkXfer/API_REFERENCE.md](../BulkXfer/API_REFERENCE.md) §6. There are two clients: the PC GUI in [_TOOLS/BleHostGUI](../../_TOOLS/BleHostGUI/README.md) (Hex Upload tab), and the `hex` command in the reference client [bulkxfer_client.py](../../_TOOLS/BleHostGUI/bulkxfer_client.py), whose protocol code the GUI reuses.
 
 For now the server does not program flash. It buffers each segment in RAM and logs it on the serial terminal (UART, 921600 baud, RTS/CTS flow control): by default one summary line per segment, or every byte as `0xAAAAAAAA: xx xx …` lines when the firmware is built with `CONFIG_DS_HEX_DUMP=y` (see §6).
 
@@ -54,7 +54,7 @@ The START frame's length and CRC-32 cover the whole object, **address header inc
 
 ## 5. Rejections
 
-The server rejects a START (END status `REJECTED`) when:
+The server rejects a START by answering it with **ABORT** (direction *by receiver*, reason `REJECTED` = `0x05`) instead of the first ACK. No END follows (`bulkxfer_client.py` reports this as `ABORTED_BY_SERVER:REJECTED`). This happens when:
 
 | Cause | Fix |
 |---|---|
