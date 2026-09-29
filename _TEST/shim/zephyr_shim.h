@@ -311,7 +311,11 @@ struct bt_uuid_128 { struct bt_uuid uuid; uint8_t val[16]; };
 #define BT_UUID_INIT_128(...)              { { BT_UUID_TYPE_128 }, { __VA_ARGS__ } }
 #define BT_UUID_DECLARE_16(v)    ((const struct bt_uuid *)(&(const struct bt_uuid_16){ { BT_UUID_TYPE_16 }, (v) }))
 #define BT_UUID_DECLARE_128(...)    ((const struct bt_uuid *)(&(const struct bt_uuid_128){ { BT_UUID_TYPE_128 }, { __VA_ARGS__ } }))
-#define BT_UUID_GATT_CCC                   BT_UUID_DECLARE_16(0x2902)
+#define BT_UUID_INIT_16(v)                 { { BT_UUID_TYPE_16 }, (v) }
+#define BT_UUID_GATT_CCC_VAL               0x2902
+/* As in Zephyr: a compound literal, so inside a function it lives on that
+   function's stack (ASan catches pointers to it kept past the return) */
+#define BT_UUID_GATT_CCC                   BT_UUID_DECLARE_16(BT_UUID_GATT_CCC_VAL)
 static inline int bt_uuid_cmp(const struct bt_uuid *u1, const struct bt_uuid *u2)
 {
    if (u1->type != u2->type) { return (int)u1->type - (int)u2->type; }

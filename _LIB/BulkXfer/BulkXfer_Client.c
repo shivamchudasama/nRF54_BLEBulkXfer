@@ -234,6 +234,15 @@ static const struct bt_uuid_128 sst_BLKC_defDataUuid = BT_UUID_INIT_128(BT_UUID_
 static const struct bt_uuid_128 sst_BLKC_defCtrlUuid = BT_UUID_INIT_128(BT_UUID_BLK_CTRL_VAL);
 
 /**
+ * @var           sst_BLKC_cccUuid
+ * @brief         CCC descriptor UUID for the descriptor discovery. File scope:
+ *                the stack reads discover_params.uuid after the discovery
+ *                callback that set it has returned, so BT_UUID_GATT_CCC (a
+ *                compound literal on that callback's stack) must not be used.
+ */
+static const struct bt_uuid_16 sst_BLKC_cccUuid = BT_UUID_INIT_16(BT_UUID_GATT_CCC_VAL);
+
+/**
  * @var           sb_BLKC_initialized
  * @brief         Set once gi_BLKC_Init() has succeeded.
  */
@@ -641,7 +650,7 @@ static uint8_t su8_CliDiscoverCb(struct bt_conn *stpt_conn, const struct bt_gatt
             return BT_GATT_ITER_STOP;
          }
 
-         stpt_params->uuid = BT_UUID_GATT_CCC;
+         stpt_params->uuid = &sst_BLKC_cccUuid.uuid;
          stpt_params->start_handle = su16_BLKC_ctrlHandle + 1U;
          stpt_params->end_handle = (su16_BLKC_ctrlEnd != 0U) ? su16_BLKC_ctrlEnd : su16_BLKC_svcEnd;
          stpt_params->type = BT_GATT_DISCOVER_DESCRIPTOR;
