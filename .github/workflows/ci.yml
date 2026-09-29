@@ -144,9 +144,18 @@ jobs:
           python3 _TEST/tools/report.py junit --md summary.md --html report.html \
             --title "nRF54_BLEBulkXfer tests"
           cat summary.md >> "$GITHUB_STEP_SUMMARY"
-          for f in reports/report-c/coverage/c/summary.txt reports/report-python/coverage-python.txt; do
-            [ -f "$f" ] && { echo; echo '```'; tail -n 15 "$f"; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
-          done
+          c=reports/report-c/coverage/c/summary.txt
+          py=reports/report-python/coverage-python.txt
+          if [ -f "$c" ]; then
+            { echo; echo '### C coverage (gcovr, _LIB and _ASW)'; echo '```'
+              grep -E '^(lines|functions|branches):' "$c"; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+          fi
+          if [ -f "$py" ]; then
+            # The whole table, from its "Name Stmts Miss Cover" header to TOTAL
+            { echo; echo '### Python coverage (pytest-cov, _TOOLS/BleHostGUI)'
+              echo 'Stmts = executable statements, Miss = statements no test ran, Cover = share that ran.'
+              echo '```'; sed -n '/^Name /,/^TOTAL/p' "$py"; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+          fi
       - uses: mikepenz/action-junit-report@v6
         if: always()
         with:
