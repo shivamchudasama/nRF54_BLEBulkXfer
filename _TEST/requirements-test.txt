@@ -1,0 +1,4 @@
+# Test-only dependencies (host C tests need CMake + a C compiler; see _TEST/README.md)
+pytest>=8
+pytest-cov>=5
+gcovr>=7

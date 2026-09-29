@@ -15,7 +15,7 @@ pip install -r requirements.txt
 python ble_host_gui.py
 ```
 
-Python 3.10 or later. The BulkXfer protocol code is imported from [`_LIB/BulkXfer/tools/bulkxfer_client.py`](../../_LIB/BulkXfer/tools/bulkxfer_client.py), so keep this folder inside the repository.
+Python 3.10 or later. The BulkXfer protocol code lives in [`bulkxfer_client.py`](bulkxfer_client.py), which is also a command-line client (`python bulkxfer_client.py --help`); keep it next to `ble_host_gui.py`.
 
 Typical session: **Scan**, select `BLE Bulk Transfer`, **Connect**, **Read Caps**, then on the Hex Upload tab **Browse…**, **Start Upload**. The board prints each segment on its serial terminal (921600 baud, RTS/CTS).
 
@@ -25,6 +25,7 @@ Typical session: **Scan**, select `BLE Bulk Transfer`, **Connect**, **Read Caps*
 
 ```
 ble_host_gui.py          entry point; FEATURES lists the tabs
+bulkxfer_client.py       BulkXfer reference client (protocol + command line); imported by protocols/bulkxfer.py
 blehost/
   context.py             AppContext: settings, event bus, asyncio runner, link, services
   core/
@@ -54,6 +55,7 @@ Tk runs on the main thread. BLE work runs on an asyncio loop in a worker thread.
 2. Talk to the device only through `ctx.link` (`gatt.write_gatt_char`, `gatt.read_gatt_char`, `start_notify`) or a service in `ctx.services`. Traffic then shows in the monitor automatically.
 3. If the feature has its own wire format, put the codec in `blehost/protocols/` and register its characteristics with `ctx.decoders.register(uuid, name, decoder)`. BulkXfer appTypes are named with `bulkxfer.register_app_type()`.
 4. Add the class to `FEATURES` in `ble_host_gui.py`.
+5. Test the codec and protocol logic, but not the Tk code, in `_TEST/python/`. The `conftest.py` there provides a fake GATT link and a scripted BulkXfer server, so no adapter is needed (see [_TEST/README.md](../../_TEST/README.md)).
 
 A connection-wide service, such as a shared protocol endpoint, registers `link.add_connect_hook()` / `add_disconnect_hook()` and goes in `ctx.services` (see `BulkXferService`).
 

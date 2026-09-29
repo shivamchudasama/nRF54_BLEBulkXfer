@@ -20,7 +20,7 @@ Applications include only `GATT_GenericCallbacks.h`.
 
 **Used by:** the BulkXfer Server — its DATA characteristic uses `gt_GATT_GenericWrite` with
 `gt_BLKS_DataWriteHook` as `fpt_customWriteCb`, and its Caps characteristic uses
-`gt_GATT_GenericRead`. See [BulkXfer_Service.c](../../_LIB/BulkXfer/examples/bulk_server/src/BulkXfer_Service.c)
+`gt_GATT_GenericRead`. See [BulkSvc.c](../../_ASW/_BLK_SVC/BulkSvc.c)
 for a complete service built on this library.
 
 **Build:** [`_LIB/CMakeLists.txt`](../../_LIB/CMakeLists.txt) adds `GATT_CB` before `BulkXfer`.
@@ -222,8 +222,10 @@ For anyone using or modifying the library:
 - **Offset gaps are not zero-filled.** A variable-length write at an offset past
   `u16_actualLen` extends the length over whatever bytes were already in the buffer.
 - **Fixed-length values cannot be written in pieces.** Every write must end exactly at
-  `u16_dataLen`, so a long write (Prepare / Execute) split into several offsets is rejected.
-  Make such a characteristic variable-length.
+  `u16_dataLen`, so the earlier pieces of a long write (Prepare / Execute) split into several
+  offsets are rejected. Only the last piece is accepted, and it then updates only the tail of
+  the value (a write at `u16_offset > 0` that ends at `u16_dataLen` is valid). Make such a
+  characteristic variable-length.
 - **Prepare-write flag is ignored.** If the attribute has `BT_GATT_PERM_PREPARE_WRITE`, Zephyr
   also calls the write callback during the Prepare phase (with `BT_GATT_WRITE_FLAG_PREPARE`),
   and this callback copies the data then. Leave that permission off.

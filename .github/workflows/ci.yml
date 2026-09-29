@@ -1,0 +1,183 @@
+# CI: host tests (C + Python), firmware build, one merged test report.
+# Runs locally the same way with _TEST/run_tests.ps1 (see _TEST/README.md).
+
+name: CI
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+    inputs:
+      hil:
+        description: "Also run the hardware-in-the-loop job (needs a self-hosted runner with a DK)"
+        type: boolean
+        default: false
+
+env:
+  NCS_VERSION: v3.4.1
+  BOARD: nrf54l15dk/nrf54l15/cpuapp
+
+jobs:
+  # ---- Tier 1: C unit tests of _LIB and _ASW on the host ----------------------
+  host-tests:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install tools
+        run: |
+          sudo apt-get update -q && sudo apt-get install -y -q ninja-build
+          pip install -r _TEST/requirements-test.txt
+      - name: Configure (ASan + UBSan + coverage)
+        run: cmake -G Ninja -S _TEST -B build_test -DSANITIZE=ON -DCOVERAGE=ON
+      - name: Build
+        run: cmake --build build_test
+      - name: Test
+        run: ctest --test-dir build_test --output-on-failure
+      - name: Coverage
+        if: always()
+        run: |
+          mkdir -p build_test/report/coverage/c
+          gcovr --root . --object-directory build_test --filter '_LIB/' --filter '_ASW/' \
+            --html-details build_test/report/coverage/c/index.html \
+            --cobertura build_test/report/coverage/c/cobertura.xml --print-summary \
+            | tee build_test/report/coverage/c/summary.txt
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: report-c
+          path: build_test/report/
+
+  # ---- Tier 2: PC tools (_TOOLS/BleHostGUI) -----------------------------------
+  python-tests:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install tools
+        run: pip install -r _TEST/requirements-test.txt
+      - name: Test
+        run: |
+          mkdir -p report
+          pytest _TEST/python -q -p no:cacheprovider \
+            --junitxml=report/junit/python.xml -o junit_suite_name=python_tools \
+            --cov=_TOOLS/BleHostGUI --cov-report=html:report/coverage/python \
+            --cov-report=term | tee report/coverage-python.txt
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: report-python
+          path: report/
+
+  # ---- Tier 3: the real firmware, in Nordic's toolchain container -------------
+  firmware-build:
+    runs-on: ubuntu-24.04
+    container:
+      image: ghcr.io/nrfconnect/sdk-nrf-toolchain:v3.4.1   # keep in step with NCS_VERSION
+      env:
+        ACCEPT_JLINK_LICENSE: 1
+    defaults:
+      run:
+        shell: bash          # the container needs bash to load the toolchain environment
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: app
+      - name: Cache the NCS workspace
+        uses: actions/cache@v4
+        with:
+          path: ncs
+          key: ncs-${{ env.NCS_VERSION }}
+      - name: West workspace
+        run: |
+          git config --global --add safe.directory '*'
+          if [ ! -d ncs/.west ]; then
+            west init -m https://github.com/nrfconnect/sdk-nrf --mr "$NCS_VERSION" ncs
+          fi
+          cd ncs && west update --narrow -o=--depth=1
+      - name: Build (sysbuild, pristine)
+        working-directory: ncs
+        run: |
+          west build -p -b "$BOARD" --sysbuild -d "$GITHUB_WORKSPACE/build_ci" "$GITHUB_WORKSPACE/app" \
+            2>&1 | tee "$GITHUB_WORKSPACE/build.log"
+          test "${PIPESTATUS[0]}" -eq 0
+      - name: Memory usage
+        run: |
+          {
+            echo "## Firmware ($BOARD, NCS $NCS_VERSION)"
+            echo '```'
+            grep -A6 'Memory region' build.log | tail -n 7
+            echo '```'
+          } | tee firmware-size.md >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: firmware
+          path: |
+            build_ci/merged.hex
+            build_ci/app/zephyr/zephyr.elf
+            build_ci/app/zephyr/.config
+            build.log
+            firmware-size.md
+
+  # ---- One report for all tiers -----------------------------------------------
+  report:
+    needs: [host-tests, python-tests]
+    if: always()
+    runs-on: ubuntu-24.04
+    permissions:
+      checks: write            # test results as a check run with annotations
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: report-*
+          path: reports
+      - name: Collect JUnit files
+        run: mkdir -p junit && cp reports/*/junit/*.xml junit/
+      - name: Summary
+        run: |
+          python3 _TEST/tools/report.py junit --md summary.md --html report.html \
+            --title "nRF54_BLEBulkXfer tests"
+          cat summary.md >> "$GITHUB_STEP_SUMMARY"
+          for f in reports/report-c/coverage/c/summary.txt reports/report-python/coverage-python.txt; do
+            [ -f "$f" ] && { echo; echo '```'; tail -n 15 "$f"; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+          done
+      - uses: mikepenz/action-junit-report@v5
+        if: always()
+        with:
+          report_paths: junit/*.xml
+          check_name: Test results
+          include_passed: false
+          detailed_summary: true
+      - uses: actions/upload-artifact@v4
+        with:
+          name: test-report
+          path: |
+            report.html
+            summary.md
+            junit/
+
+  # ---- Placeholder: hardware in the loop --------------------------------------
+  # Needs a self-hosted runner labelled nrf54l15dk: a PC with the DK on USB, a
+  # BLE adapter, nrfutil/west, and Python with bleak. Only runs on request.
+  hil-tests:
+    needs: firmware-build
+    if: github.event_name == 'workflow_dispatch' && inputs.hil
+    runs-on: [self-hosted, nrf54l15dk]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: firmware
+          path: fw
+      - name: Flash
+        run: nrfutil device program --firmware fw/build_ci/merged.hex --options chip_erase_mode=ERASE_ALL
+      - name: Upload AA00000100.hex over BLE
+        run: python _TOOLS/BleHostGUI/bulkxfer_client.py hex AA00000100.hex --name "BLE Bulk Transfer"
+      # Next step when it exists: capture the UART and check the
+      # "SEG addr=0x00000000 len=6560 crc=0xe2e72827" line.

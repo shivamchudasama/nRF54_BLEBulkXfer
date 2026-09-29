@@ -189,8 +189,7 @@ because the host does not call completion callbacks for PDUs lost with the link.
 `BulkXfer_Config.h` holds the defaults (window 16, RX pool 20, timeouts, stack size, role
 selection). Override any of them with compile definitions.
 
-The `prj.conf` files of the examples are a throughput baseline for NCS 3.4.1. Their key
-settings:
+A throughput baseline for NCS 3.4.1:
 
 - `CONFIG_BT_L2CAP_TX_MTU=247`
 - `BT_BUF_ACL_{RX,TX}_SIZE=251`, `BT_CTLR_DATA_LENGTH_MAX=251`
@@ -202,37 +201,26 @@ settings:
 - `CONFIG_CRC=y`
 - `CONFIG_BT_GATT_CLIENT=y` on the sender
 
-## Examples and tests
+## Tests and tools
 
 | Path | What |
 |---|---|
-| `examples/bulk_server/` | nRF54L15 DK peripheral, Server role. Receives any transfer, reports status and throughput back as a short message, and echoes shorts |
-| `examples/bulk_client/` | nRF54L15 DK central, Client role. Scans for the service, attaches, and sends 100 kB every 2 s, logging both sides' throughput |
-| `tools/bulkxfer_client.py` | PC GATT client (`bleak`): `send <bytes>` with throughput, `ping`, `caps`, `hex`. Also importable (`parse_ihex`, `BulkXferClient`) |
-| `tests/test_frame.c` | Host unit tests of the frame codec |
-| `tests/test_engine.c` | Host tests of the **real engine** (both roles) against a simulated link and a scripted peer |
+| [`_TOOLS/BleHostGUI/bulkxfer_client.py`](../../_TOOLS/BleHostGUI/bulkxfer_client.py) | PC GATT client (`bleak`): `hex`, `caps`, and `send <bytes>` / `ping` for a server that accepts any appType. Also importable (`parse_ihex`, `BulkXferClient`) |
+| [`_TEST/unit/BulkXfer/test_frame.c`](../../_TEST/unit/BulkXfer/test_frame.c) | Host unit tests of the frame codec, plus the golden wire vectors shared with the PC client (`_TEST/vectors/wire.json`) |
+| [`_TEST/unit/BulkXfer/test_engine.c`](../../_TEST/unit/BulkXfer/test_engine.c) | Host tests of the **real engine** (both roles) against the simulated link and scripted peer in `sim_link.h` |
 
-`tests/test_engine.c` covers these scenarios:
+`test_engine.c` covers these scenarios:
 - Client: sizes 0 B to 100 kB, frame loss (NACK), silent server (timeout), window stall, MTU 23 with sequence wrap, local abort, disconnect with writes in flight (credit restore), send before attach
 - Client attach: missing service or CTRL, subscribe failure, disconnect during discovery, MTU exchange first
 - Server: sizes, RX pool overflow (NACK), CRC error, reject, unsubscribed client, local abort, disconnect, stale frames after reconnect, malformed DATA, wrong-channel frames
 - Both roles: short messages on both channels, and simultaneous transfers in both directions on one link
 
-It is built three times: both roles, server only, and client only.
+It is built three times: both roles, server only, and client only. The tests are part of the repo-wide host test suite; see [`_TEST/README.md`](../../_TEST/README.md) for how to run them and read the report.
 
 ```bash
-# Build the samples (NCS 3.4.1)
-west build -b nrf54l15dk/nrf54l15/cpuapp lib/BulkXfer/examples/bulk_server
-west build -b nrf54l15dk/nrf54l15/cpuapp lib/BulkXfer/examples/bulk_client
+# Host tests (all libraries, application modules and PC tools)
+powershell -ExecutionPolicy Bypass -File _TEST/run_tests.ps1
 
-# Host tests (any C99 compiler)
-cd lib/BulkXfer/tests
-gcc -std=c99 -Wall -Wextra -I.. -o test_frame test_frame.c ../BulkXfer_Frame.c && ./test_frame
-F="-std=gnu99 -Wall -Wextra -Werror -Wno-missing-field-initializers -Ishim -I.. -DCONFIG_BT_GATT_CLIENT -DBLK_RX_POOL_DEPTH=6"
-gcc $F -o test_engine test_engine.c ../BulkXfer_Frame.c && ./test_engine
-gcc $F -DBLK_ENABLE_CLIENT=0 -o test_server test_engine.c ../BulkXfer_Frame.c && ./test_server
-gcc $F -DBLK_ENABLE_SERVER=0 -o test_client test_engine.c ../BulkXfer_Frame.c && ./test_client
-
-# On hardware: two DKs (bulk_client -> bulk_server), or a PC as the client
-python tools/bulkxfer_client.py send 100000
+# On hardware: the project firmware as the server, a PC as the client
+python _TOOLS/BleHostGUI/bulkxfer_client.py hex app.hex
 ```

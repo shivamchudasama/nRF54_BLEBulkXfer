@@ -33,8 +33,10 @@ The full contract for client implementations is in [_DOC/HexUpload/PROTOCOL.md](
 | [`_ASW/`](_ASW) | Application: `main.c` plus modules for BLE init/advertising, the Device Information service, the BulkXfer GATT service (`_BLK_SVC`), the RAM segment store and its serial log (`_DATA_STORE`), logging and helpers |
 | [`_DI/`](_DI) | Build configuration: `prj.conf`, application Kconfig options (`Kconfig`) and the board devicetree overlay (console UART at 921600 baud) |
 | [`_LIB/GATT_CB/`](_LIB/GATT_CB) | Generic GATT read/write callbacks driven by per-characteristic descriptors |
-| [`_LIB/BulkXfer/`](_LIB/BulkXfer) | Bulk-transfer library, with example client/server apps, host-side unit tests and a Python (`bleak`) test client |
+| [`_LIB/BulkXfer/`](_LIB/BulkXfer) | Bulk-transfer library |
 | [`_TOOLS/BleHostGUI/`](_TOOLS/BleHostGUI) | PC GUI (Tkinter + `bleak`): scan/connect, hex upload, BLE traffic monitor |
+| [`_TEST/`](_TEST) | Host tests of the libraries, the application modules and the PC tools, with a merged test report |
+| [`.github/workflows/`](.github/workflows) | CI: host tests, firmware build and the test report on every push |
 | [`_DOC/`](_DOC) | Coding guidelines, library documentation and reference notes |
 
 ## Building
@@ -50,13 +52,23 @@ west build -b nrf54l15dk/nrf54l15/cpuapp --sysbuild -d build .
 
 After changing the layout or configuration, do a pristine build (`-p always`).
 
-To upload a hex file from a PC, run the GUI (`pip install -r _TOOLS/BleHostGUI/requirements.txt`, then `python _TOOLS/BleHostGUI/ble_host_gui.py`), or use the command-line client [`_LIB/BulkXfer/tools/bulkxfer_client.py`](_LIB/BulkXfer/tools/bulkxfer_client.py), which needs `pip install bleak`:
+To upload a hex file from a PC, run the GUI (`pip install -r _TOOLS/BleHostGUI/requirements.txt`, then `python _TOOLS/BleHostGUI/ble_host_gui.py`), or use the command-line client [`_TOOLS/BleHostGUI/bulkxfer_client.py`](_TOOLS/BleHostGUI/bulkxfer_client.py), which needs `pip install bleak`:
 
 ```sh
-python _LIB/BulkXfer/tools/bulkxfer_client.py hex app.hex --base 16a1-4812-af35-f3f29a92f6ca --name "BLE Bulk Transfer"
+python _TOOLS/BleHostGUI/bulkxfer_client.py hex app.hex --name "BLE Bulk Transfer"
 ```
 
 The received segments appear on the board's serial terminal at **921600 baud with RTS/CTS flow control** (set in the board overlay). To see every byte, set `CONFIG_DS_HEX_DUMP=y` in `_DI/prj.conf`; each 64 KiB segment then holds the upload for several seconds while it prints.
+
+## Testing
+
+Host tests cover `_LIB/BulkXfer`, `_LIB/GATT_CB`, the segment store in `_ASW/_DATA_STORE`, the helpers, and the PC client and decoders in `_TOOLS`. One end-to-end test runs a hex upload through the real BulkXfer Server and data store over a simulated link. Expected bytes come from a real upload captured in `_LOG/`.
+
+```powershell
+powershell -ExecutionPolicy Bypass -File _TEST\run_tests.ps1   # add -Coverage for coverage
+```
+
+This needs a host `gcc` and Python 3.8+. The report is written to `build_test/report/report.html`. On GitHub, [CI](.github/workflows/ci.yml) runs the same tests (plus ASan/UBSan), builds the firmware, and publishes the results on each push and pull request. Details are in [_TEST/README.md](_TEST/README.md).
 
 ## Documentation
 
@@ -65,6 +77,7 @@ The received segments appear on the board's serial terminal at **921600 baud wit
 - [GATT_CB API reference](_DOC/GATT_CB/API_REFERENCE.md)
 - [Hex upload protocol](_DOC/HexUpload/PROTOCOL.md)
 - [BLE Host GUI](_TOOLS/BleHostGUI/README.md)
+- [Tests and CI](_TEST/README.md)
 - [BATL coding guidelines](_DOC/BATL%20Coding%20Guidelines/)
 
 ## License
