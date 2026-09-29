@@ -11,6 +11,7 @@ the EventBus (LINK_STATE) for the Tk side.
 """
 
 import enum
+import sys
 from dataclasses import dataclass, field
 
 from .event_bus import LINK_STATE, LOG
@@ -69,6 +70,7 @@ class BleLink:
         self.info = {}
         self._connect_hooks = []
         self._disconnect_hooks = []
+        self._fast_link = None          # (WinRT device, changed-event token, request)
 
     # ---- hooks -------------------------------------------------------------
     def add_connect_hook(self, coro_fn):
@@ -130,6 +132,7 @@ class BleLink:
         self._client = client
         self.gatt = GattFacade(client, self._tap)
         self._tap.info("CONNECT", f"connected, ATT MTU {client.mtu_size}")
+        self._request_fast_link(client)
         for hook in self._connect_hooks:
             try:
                 await hook(self)
@@ -157,6 +160,7 @@ class BleLink:
             return                          # already torn down
         self._client = None
         self.gatt = None
+        self._release_fast_link()
         self._tap.info("DISCONNECT", reason)
         for hook in self._disconnect_hooks:
             try:
@@ -164,6 +168,55 @@ class BleLink:
             except Exception as e:
                 self._log("warn", f"disconnect hook: {e}")
         self._set_state(LinkState.IDLE, reason=reason)
+
+    # ---- connection parameters (Windows 11) --------------------------------
+    def _request_fast_link(self, client):
+        """Ask Windows for its ThroughputOptimized connection parameters (15 ms).
+
+        After service discovery Windows settles on its Balanced interval (30-60 ms,
+        45 ms in practice), which caps an upload at about 10 KB/s. The request holds
+        only while its object is open, so it is kept until the link goes down.
+        Failure is logged and never drops the link.
+        """
+        if sys.platform != "win32":
+            return
+        try:
+            from winrt.windows.devices.bluetooth import (
+                BluetoothLEPreferredConnectionParameters as Params)
+
+            # bleak internals: the WinRT BluetoothLEDevice behind the BleakClient
+            device = getattr(getattr(client, "_backend", None), "_requester", None)
+            if device is None:
+                self._log("warn", "connection parameters: WinRT device not found in bleak")
+                return
+
+            def on_changed(sender, _args):          # WinRT thread; the tap only posts
+                self._tap.info("CONN", self._describe_params(sender.get_connection_parameters()))
+
+            token = device.add_connection_parameters_changed(on_changed)
+            request = device.request_preferred_connection_parameters(Params.throughput_optimized)
+            self._fast_link = (device, token, request)
+            self._log("info", f"connection parameters: requested throughput-optimized, "
+                              f"{request.status.name.lower()}; now "
+                              f"{self._describe_params(device.get_connection_parameters())}")
+        except Exception as e:                      # e.g. Windows 10: API not present
+            self._log("warn", f"connection parameters: request not possible ({e})")
+
+    def _release_fast_link(self):
+        if self._fast_link is None:
+            return
+        device, token, request = self._fast_link
+        self._fast_link = None
+        for release in (request.close, lambda: device.remove_connection_parameters_changed(token)):
+            try:
+                release()
+            except Exception:
+                pass                                # bleak may have closed the device already
+
+    @staticmethod
+    def _describe_params(p) -> str:
+        return (f"interval {p.connection_interval * 1.25:g} ms, latency {p.connection_latency}, "
+                f"timeout {p.link_timeout * 10} ms")
 
     # ---- GATT --------------------------------------------------------------
     @property

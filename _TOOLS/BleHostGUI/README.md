@@ -4,7 +4,7 @@ PC-side GUI (Tkinter + [bleak](https://github.com/hbldh/bleak)) for the nRF54 BL
 
 Stage 1 covers:
 
-- **Device**: scan, connect, disconnect, and read the BulkXfer CAPS characteristic.
+- **Device**: scan, connect, disconnect, and read the BulkXfer CAPS characteristic. On Windows 11, connecting also asks Windows for its throughput-optimized connection parameters (15 ms interval) for as long as the link is up. Otherwise Windows settles on about 45 ms after service discovery, which caps an upload at about 10 KB/s. The result goes to the log, and each interval change shows in the traffic monitor as `CONN`.
 - **Hex Upload**: browse for an Intel HEX file, split it into contiguous segments, and send each segment as one transfer (`appType 0x10`, `[u32 LE address][data]`). The server must answer with STORED before the next segment is sent. Start and Abort buttons control the upload. The contract is in [_DOC/HexUpload/PROTOCOL.md](../../_DOC/HexUpload/PROTOCOL.md).
 - **BLE traffic monitor**: every write, read, notification and link event, shown as hex and decoded BulkXfer frames. Turn it on or off with **View ▸ BLE Traffic**, the toolbar button or `Ctrl+T`. It captures nothing while it is off.
 

@@ -39,6 +39,32 @@
 #define TARGET_MTU                           (247)
 
 /**
+ * @def           TARGET_CONN_INTERVAL_MIN
+ * @brief         Minimum requested connection interval (units of 1.25 ms): 7.5 ms.
+ */
+#define TARGET_CONN_INTERVAL_MIN             (6)
+
+/**
+ * @def           TARGET_CONN_INTERVAL_MAX
+ * @brief         Maximum requested connection interval (units of 1.25 ms): 15 ms.
+ *                A shorter interval gives more connection events per second, which
+ *                is what limits the upload throughput.
+ */
+#define TARGET_CONN_INTERVAL_MAX             (12)
+
+/**
+ * @def           TARGET_CONN_LATENCY
+ * @brief         Requested peripheral latency (connection events).
+ */
+#define TARGET_CONN_LATENCY                  (0)
+
+/**
+ * @def           TARGET_CONN_TIMEOUT
+ * @brief         Requested supervision timeout (units of 10 ms): 4 s.
+ */
+#define TARGET_CONN_TIMEOUT                  (400)
+
+/**
  * @def           NEGOTIATION_RETRY_DELAY_MS
  * @brief         Delay for retrying a busy negotiation procedure.
  */
@@ -65,6 +91,7 @@ typedef enum
    eCNS_PHY = 0,                             /**< PHY update */
    eCNS_DLE,                                 /**< Data Length Extention */
    eCNS_MTU,                                 /**< MTU exchange */
+   eCNS_CONN_PARAM,                          /**< Connection parameter update */
    eCNS_COMPLETE,                            /**< Negotiation complete */
 } ConnNegotiationStep_E;
 
@@ -94,6 +121,8 @@ static void sv_Recycled(void);
 static void sv_PHYUpdated(struct bt_conn *stpt_conn, struct bt_conn_le_phy_info *stpt_PHYInfo);
 static void sv_DataLengthUpdated(struct bt_conn *stpt_conn,
    struct bt_conn_le_data_len_info *stpt_dataLenInfo);
+static void sv_ConnParamUpdated(struct bt_conn *stpt_conn, uint16_t u16_interval,
+   uint16_t u16_latency, uint16_t u16_timeout);
 static void sv_ResetConnNegotiationState(void);
 
 /******************************************************************************/
@@ -177,6 +206,7 @@ BT_CONN_CB_DEFINE(sst_connCallbacks) = {
    .le_phy_updated = sv_PHYUpdated,          // Callback to be called upon PHY updated
    .le_data_len_updated = sv_DataLengthUpdated,
                                              // Callback to be called upon data length updated
+   .le_param_updated = sv_ConnParamUpdated,  // Callback to be called upon connection parameters updated
 };
 
 /**
@@ -210,8 +240,8 @@ static void sv_ResetConnNegotiationState(void)
 
 /**
  * @private       sv_ConnParamNegotiation
- * @brief         Negotiation for PHY update, MTU exchange, and data length
- *                update after connection.
+ * @brief         Negotiation for PHY update, data length update, MTU exchange
+ *                and connection parameter update after connection.
  * @param[in]     stpt_work Pointer to the work item for this negotiation process.
  * @return        None.
  */
@@ -357,7 +387,7 @@ static void sv_ConnParamNegotiation(struct k_work *stpt_work)
                if (u16_MTU >= TARGET_MTU)
                {
                   LOG_INF("MTU already at target (%d bytes), skipping MTU request", u16_MTU);
-                  se_connNegotiationStep = eCNS_COMPLETE;
+                  se_connNegotiationStep = eCNS_CONN_PARAM;
                   sb_waitingForProcedure = false;
                   continue;
                }
@@ -386,13 +416,57 @@ static void sv_ConnParamNegotiation(struct k_work *stpt_work)
                   else
                   {
                      LOG_WRN("MTU exchange request failed, proceeding without it...");
-                     se_connNegotiationStep = eCNS_COMPLETE;
+                     se_connNegotiationStep = eCNS_CONN_PARAM;
                      continue;
                   }
                }
 
                sb_waitingForProcedure = true;
                return;
+            }
+
+            case eCNS_CONN_PARAM:
+            {
+               // Check if the connection interval is already at target
+               if (st_connInfo.le.interval_us <= BT_CONN_INTERVAL_TO_US(TARGET_CONN_INTERVAL_MAX))
+               {
+                  LOG_INF("Connection interval already at target (%u us), skipping request",
+                     st_connInfo.le.interval_us);
+                  se_connNegotiationStep = eCNS_COMPLETE;
+                  sb_waitingForProcedure = false;
+                  continue;
+               }
+
+               LOG_INF("Requesting connection interval %u-%u us (current %u us)...",
+                  BT_CONN_INTERVAL_TO_US(TARGET_CONN_INTERVAL_MIN),
+                  BT_CONN_INTERVAL_TO_US(TARGET_CONN_INTERVAL_MAX), st_connInfo.le.interval_us);
+               i_err = bt_conn_le_param_update(gstpt_currentConn,
+                  BT_LE_CONN_PARAM(TARGET_CONN_INTERVAL_MIN, TARGET_CONN_INTERVAL_MAX,
+                     TARGET_CONN_LATENCY, TARGET_CONN_TIMEOUT));
+
+               // Check if there was an error initiating the connection parameter update
+               if (i_err)
+               {
+                  // Check if we haven't exceeded max retry count
+                  if (slu8_retryCnt < MAX_NEGOTIATION_RETRY_CNT)
+                  {
+                     slu8_retryCnt++;
+                     LOG_WRN("Connection parameter update request failed (err %d), retrying...",
+                        i_err);
+                     k_work_schedule(&gst_connParamNegotiationWork, K_MSEC(NEGOTIATION_RETRY_DELAY_MS));
+                     return;
+                  }
+                  else
+                  {
+                     LOG_WRN("Connection parameter update request failed, proceeding without it...");
+                  }
+               }
+
+               // Not waited for: the central may reject the request without any callback.
+               // Zephyr sends it once CONFIG_BT_CONN_PARAM_UPDATE_TIMEOUT has passed since the
+               // connection; the result is logged by sv_ConnParamUpdated().
+               se_connNegotiationStep = eCNS_COMPLETE;
+               continue;
             }
 
             case eCNS_COMPLETE:
@@ -437,7 +511,7 @@ static void sv_MTUExchangeCallback(struct bt_conn *stpt_conn, uint8_t u8_err,
    if ((sb_isSelfNegotiation) && (se_connNegotiationStep == eCNS_MTU))
    {
       sb_waitingForProcedure = false;
-      se_connNegotiationStep = eCNS_COMPLETE;
+      se_connNegotiationStep = eCNS_CONN_PARAM;
       k_work_schedule(&gst_connParamNegotiationWork, K_NO_WAIT);
    }
 }
@@ -620,6 +694,29 @@ static void sv_DataLengthUpdated(struct bt_conn *stpt_conn,
       LOG_INF("Running next negotiation step after DLE update...");
       k_work_schedule(&gst_connParamNegotiationWork, K_NO_WAIT);
    }
+}
+
+/**
+ * @private       sv_ConnParamUpdated
+ * @brief         Callback to be called upon connection parameters updated, whether
+ *                requested by us or changed by the central.
+ * @param[in]     stpt_conn Connection handle.
+ * @param[in]     u16_interval Connection interval (units of 1.25 ms).
+ * @param[in]     u16_latency Peripheral latency (connection events).
+ * @param[in]     u16_timeout Supervision timeout (units of 10 ms).
+ * @return        None.
+ */
+static void sv_ConnParamUpdated(struct bt_conn *stpt_conn, uint16_t u16_interval,
+   uint16_t u16_latency, uint16_t u16_timeout)
+{
+   // Check if the callback is for the current connection
+   if ((gstpt_currentConn == NULL) || (stpt_conn != gstpt_currentConn))
+   {
+      return;
+   }
+
+   LOG_INF("Connection parameters updated: interval %u us, latency %u, timeout %u ms",
+      BT_CONN_INTERVAL_TO_US(u16_interval), u16_latency, u16_timeout * 10U);
 }
 
 /******************************************************************************/

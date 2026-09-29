@@ -27,7 +27,7 @@ The UUIDs are `B1C0xxxx` followed by the project base `-16A1-4812-AF35-F3F29A92F
 
 The device also exposes Zephyr's GAP service and the Device Information service.
 
-Link setup: the server itself requests 2M PHY, data length 251 and MTU 247 about 2 s after connecting. A client should also request MTU 247. BulkXfer's chunk size is `min(ATT_MTU − 3, 244) − 4`, fixed when each transfer starts.
+Link setup: the server itself requests 2M PHY, data length 251 and MTU 247 about 2 s after connecting, then a connection interval of 7.5–15 ms (latency 0, supervision timeout 4 s), which Zephyr sends 5 s after connecting (`CONFIG_BT_CONN_PARAM_UPDATE_TIMEOUT`). The interval sets the throughput, so a client that uploads right after connecting runs at the central's default interval until then. The central may refuse the request. A client should also request MTU 247. BulkXfer's chunk size is `min(ATT_MTU − 3, 244) − 4`, fixed when each transfer starts.
 
 ## 3. Application messages
 

@@ -125,7 +125,10 @@ class TrafficView(ttk.Frame):
     def _insert(self, evs):
         args = []
         for ev in evs:
-            kind, summary = self.ctx.decoders.decode(ev.uuid, ev.data) if ev.uuid else ("", "")
+            # A CCCD write carries the descriptor value, not a characteristic payload,
+            # so it keeps its note ("subscribe" / "unsubscribe") instead of a decode
+            decode = ev.uuid and ev.op != "CCCD"
+            kind, summary = self.ctx.decoders.decode(ev.uuid, ev.data) if decode else ("", "")
             if self._visible(ev, kind):
                 args += [self._format(ev, summary), ev.dir]
         if not args:
