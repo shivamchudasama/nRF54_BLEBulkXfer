@@ -22,8 +22,8 @@ jobs:
   host-tests:
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
         with:
           python-version: "3.12"
       - name: Install tools
@@ -44,7 +44,7 @@ jobs:
             --html-details build_test/report/coverage/c/index.html \
             --cobertura build_test/report/coverage/c/cobertura.xml --print-summary \
             | tee build_test/report/coverage/c/summary.txt
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         if: always()
         with:
           name: report-c
@@ -54,8 +54,8 @@ jobs:
   python-tests:
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
         with:
           python-version: "3.12"
       - name: Install tools
@@ -67,7 +67,7 @@ jobs:
             --junitxml=report/junit/python.xml -o junit_suite_name=python_tools \
             --cov=_TOOLS/BleHostGUI --cov-report=html:report/coverage/python \
             --cov-report=term | tee report/coverage-python.txt
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         if: always()
         with:
           name: report-python
@@ -84,11 +84,11 @@ jobs:
       run:
         shell: bash          # the container needs bash to load the toolchain environment
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           path: app
       - name: Cache the NCS workspace
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: ncs
           key: ncs-${{ env.NCS_VERSION }}
@@ -113,7 +113,7 @@ jobs:
             grep -A6 'Memory region' build.log | tail -n 7
             echo '```'
           } | tee firmware-size.md >> "$GITHUB_STEP_SUMMARY"
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: firmware
           path: |
@@ -132,8 +132,8 @@ jobs:
       checks: write            # test results as a check run with annotations
       pull-requests: write
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/download-artifact@v4
+      - uses: actions/checkout@v7
+      - uses: actions/download-artifact@v8
         with:
           pattern: report-*
           path: reports
@@ -147,14 +147,14 @@ jobs:
           for f in reports/report-c/coverage/c/summary.txt reports/report-python/coverage-python.txt; do
             [ -f "$f" ] && { echo; echo '```'; tail -n 15 "$f"; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
           done
-      - uses: mikepenz/action-junit-report@v5
+      - uses: mikepenz/action-junit-report@v6
         if: always()
         with:
           report_paths: junit/*.xml
           check_name: Test results
           include_passed: false
           detailed_summary: true
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: test-report
           path: |
@@ -170,8 +170,8 @@ jobs:
     if: github.event_name == 'workflow_dispatch' && inputs.hil
     runs-on: [self-hosted, nrf54l15dk]
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/download-artifact@v4
+      - uses: actions/checkout@v7
+      - uses: actions/download-artifact@v8
         with:
           name: firmware
           path: fw
