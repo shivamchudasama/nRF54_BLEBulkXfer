@@ -51,6 +51,8 @@ Source files follow the BATL coding guidelines in `_DOC/BATL Coding Guidelines/`
   - `GATT_CB/` — `README.md` (structure, design, integration) and `API_REFERENCE.md` (descriptor fields, callback and hook contract, threading, known limitations).
   - `HexUpload/` — `PROTOCOL.md`, the contract for the upload client: GATT table, appTypes, segment format, sequence, rejection rules. Update it whenever `_BLK_SVC` or `_DATA_STORE` changes behaviour.
 
+- `Supporting Scripts/` — third-party Silicon Labs reference scripts (Zlib licence) for certificate-based provisioning: `create_authority_certificate.py` (creates the root CA), `production_line_tool.py` (signs a device's CSR via Simplicity Commander), a Jinja template for the root-cert header, and `requirements.txt`. Kept as reference for the device-provisioning work; not built, not tested, not BATL.
+
 **Adding a module or library:** create `_ASW/_NAME/` (or `_LIB/<LIB>/`) with a `CMakeLists.txt` copied from a sibling (it globs `*.c` into `app` and adds its folder to the include path), then `add_subdirectory(_NAME)` in `_ASW/CMakeLists.txt` (or `_LIB/CMakeLists.txt`). Every module folder is on the include path, so headers are included by bare name. A library is not done until it has the docs and tests below.
 
 ## Library and tool requirements
