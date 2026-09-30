@@ -2,11 +2,9 @@
 
 ## Routine
 
-After a **significant change** — one that makes something in this file wrong or incomplete (files added/renamed/reorganized, a new convention adopted, git/LFS setup changed) — say which section is affected and ask:
+Every change updates, in the same change, each Markdown file that describes what it touched: the unit's `README.md`, `API_REFERENCE.md` and `PROTOCOL.md`, `_TEST/README.md`, `_TOOLS/BleHostGUI/README.md`, and this file. A change is not done while any of them is stale. When this file is updated, say which sections changed.
 
-> Would you like to modify `CLAUDE.md` accordingly?
-
-Do not ask on turns that change nothing here (questions, inspection, small edits that fit existing conventions). Keep this file lean — only what's needed to understand the repo.
+Do not touch docs on turns that change nothing they describe (questions, inspection). Keep this file lean — only what's needed to understand the repo.
 
 ## Repository nature
 
@@ -48,14 +46,28 @@ Source files follow the BATL coding guidelines in `_DOC/BATL Coding Guidelines/`
   - Known open bugs are documented as tests: strict `xfail` (Python), `known_header_issues.txt` (header check), `TEST_IGNORE_MESSAGE("KNOWN BUG: …")` (Unity). They show in the report and fail once fixed.
 - `.github/workflows/ci.yml` — jobs `host-tests` (ASan/UBSan + gcovr), `python-tests`, `firmware-build`, `report` (merged JUnit summary), and a manual `hil-tests` placeholder for a self-hosted runner with a DK.
 - `_LOG/` — sample logs of one upload: `BulkXfer_GUI_Client.txt` (the GUI's traffic monitor) and `BulkXfer_Device_Server.txt` (the board's UART). `AA00000100.hex` at the root is the test file they were made with; `LogClient.txt` at the root is an earlier client log of the same upload at Windows' 45 ms interval.
-- `_DOC/` — coding guidelines, SIG UUID YAML sources, Zephyr notes. Not built.
+- `_DOC/` — coding guidelines, SIG UUID YAML sources, Zephyr notes, and one folder per `_LIB` library (see *Library and tool requirements*). Not built.
   - `BulkXfer/` — `README.md` (design rationale, protocol walkthrough, integration steps) and `API_REFERENCE.md` (exact API contract). Links point back into `_LIB/BulkXfer/`.
-  - `GATT_CB/` — `API_REFERENCE.md` (descriptor fields, callback and hook contract, threading, known limitations).
+  - `GATT_CB/` — `README.md` (structure, design, integration) and `API_REFERENCE.md` (descriptor fields, callback and hook contract, threading, known limitations).
   - `HexUpload/` — `PROTOCOL.md`, the contract for the upload client: GATT table, appTypes, segment format, sequence, rejection rules. Update it whenever `_BLK_SVC` or `_DATA_STORE` changes behaviour.
 
-**Adding a module:** create `_ASW/_NAME/` with a `CMakeLists.txt` copied from a sibling (it globs `*.c` into `app` and adds its folder to the include path), then `add_subdirectory(_NAME)` in `_ASW/CMakeLists.txt`. Every module folder is on the include path, so headers are included by bare name. `_LIB` libraries use the same `CMakeLists.txt` pattern. Logic that does not only call the BT stack gets host tests in `_TEST/unit/<Name>/`, and its public headers are added to `CHECKED_HEADERS` in `_TEST/CMakeLists.txt`.
+**Adding a module or library:** create `_ASW/_NAME/` (or `_LIB/<LIB>/`) with a `CMakeLists.txt` copied from a sibling (it globs `*.c` into `app` and adds its folder to the include path), then `add_subdirectory(_NAME)` in `_ASW/CMakeLists.txt` (or `_LIB/CMakeLists.txt`). Every module folder is on the include path, so headers are included by bare name. A library is not done until it has the docs and tests below.
 
-**Adding a library:** every `_LIB` library needs an API reference manual at `_DOC/<LIB>/API_REFERENCE.md` — the exact contract of its public headers (types, functions, return/error values, threading, known limitations), so it can be used and modified without reading the source. Add it with the library, and update it whenever the public API or behaviour changes. `_DOC/BulkXfer/API_REFERENCE.md` and `_DOC/GATT_CB/API_REFERENCE.md` are the models. It also needs host tests in `_TEST/unit/<LIB>/`, written against that reference.
+## Library and tool requirements
+
+Every `_LIB` library and `_TOOLS` tool ships with its docs and tests, added with it and kept current with it. `_ASW` modules are exempt: their existing tests (`_DATA_STORE`, `_GENERIX`) and `_DOC/HexUpload/PROTOCOL.md` are kept current, but new modules need neither docs nor tests.
+
+- **Docs** in `_DOC/<Name>/` (for a `_TOOLS` tool, beside it, as `_TOOLS/BleHostGUI/README.md`):
+  - `README.md` — purpose, overall structure (each file and its role), design rationale, how it fits with the other units, integration steps. Model: `_DOC/BulkXfer/README.md`.
+  - `API_REFERENCE.md` — the exact contract of its public headers: types, functions, return/error values, threading, known limitations, so it can be used and modified without reading the source. Models: `_DOC/BulkXfer/API_REFERENCE.md`, `_DOC/GATT_CB/API_REFERENCE.md`.
+  - `PROTOCOL.md` — when it defines anything exchanged with a peer: GATT table, message formats, sequences, rejection rules. Model: `_DOC/HexUpload/PROTOCOL.md`.
+  - Other documents as the unit needs them (state machines, timing, memory budget).
+- **Tests**, written against the API reference and run both locally by `_TEST/run_tests.ps1` and on GitHub by `.github/workflows/ci.yml`:
+  - C: Unity tests in `_TEST/unit/<Name>/`, registered with `add_unit_test()`; public headers added to `CHECKED_HEADERS` in `_TEST/CMakeLists.txt`. Cover the normal path, every documented error return, and boundaries.
+  - Python: pytest in `_TEST/python/test_<name>.py`.
+  - `_LIB` code that mostly calls the BT stack is still tested — extend the shim to record the calls; behaviour that needs the radio goes in `hil-tests`.
+  - Wire format changes go into `vectors/wire.json` first.
+  - A test that needs a new tool, dependency or job is added to `run_tests.ps1` and `ci.yml` together, so local and GitHub runs stay the same.
 
 ## Git
 
