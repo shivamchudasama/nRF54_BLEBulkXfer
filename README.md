@@ -16,7 +16,7 @@ Zephyr / nRF Connect SDK firmware for a BLE peripheral that receives bulk data o
 - Data streams through source and sink callbacks, so an object never has to fit in RAM.
 - Frames are up to 244 bytes (ATT_MTU 247 with Data Length Extension).
 
-The design rationale and protocol walkthrough are in [_DOC/BulkXfer/README.md](_DOC/BulkXfer/README.md).
+The wire protocol is specified in [_DOC/BulkXfer/PROTOCOL.md](_DOC/BulkXfer/PROTOCOL.md), and the design rationale in [_DOC/BulkXfer/README.md](_DOC/BulkXfer/README.md).
 
 ## Hex upload in brief
 
@@ -73,6 +73,7 @@ This needs a host `gcc` and Python 3.8+. The report is written to `build_test/re
 ## Documentation
 
 - [BulkXfer design and integration](_DOC/BulkXfer/README.md)
+- [BulkXfer protocol](_DOC/BulkXfer/PROTOCOL.md)
 - [BulkXfer API reference](_DOC/BulkXfer/API_REFERENCE.md)
 - [GATT_CB API reference](_DOC/GATT_CB/API_REFERENCE.md)
 - [Hex upload protocol](_DOC/HexUpload/PROTOCOL.md)

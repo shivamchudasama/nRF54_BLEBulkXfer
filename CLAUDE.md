@@ -47,7 +47,7 @@ Source files follow the BATL coding guidelines in `_DOC/BATL Coding Guidelines/`
 - `.github/workflows/ci.yml` — jobs `host-tests` (ASan/UBSan + gcovr), `python-tests`, `firmware-build`, `report` (merged JUnit summary), and a manual `hil-tests` placeholder for a self-hosted runner with a DK.
 - `_LOG/` — sample logs of one upload: `BulkXfer_GUI_Client.txt` (the GUI's traffic monitor) and `BulkXfer_Device_Server.txt` (the board's UART). `AA00000100.hex` at the root is the test file they were made with.
 - `_DOC/` — coding guidelines, SIG UUID YAML sources, Zephyr notes, and one folder per `_LIB` library (see *Library and tool requirements*). Not built.
-  - `BulkXfer/` — `README.md` (design rationale, protocol walkthrough, integration steps) and `API_REFERENCE.md` (exact API contract). Links point back into `_LIB/BulkXfer/`.
+  - `BulkXfer/` — `PROTOCOL.md` (the wire contract, independent of the code: GATT service, frame layouts, CRC, state machines, timing, errors, examples), `README.md` (design rationale, integration steps) and `API_REFERENCE.md` (exact API contract). Links point back into `_LIB/BulkXfer/`. Update `PROTOCOL.md` whenever the frame format or either role's on-wire behaviour changes.
   - `GATT_CB/` — `README.md` (structure, design, integration) and `API_REFERENCE.md` (descriptor fields, callback and hook contract, threading, known limitations).
   - `HexUpload/` — `PROTOCOL.md`, the contract for the upload client: GATT table, appTypes, segment format, sequence, rejection rules. Update it whenever `_BLK_SVC` or `_DATA_STORE` changes behaviour.
 

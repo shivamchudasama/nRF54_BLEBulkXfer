@@ -17,7 +17,8 @@ A device that must both send and receive runs both roles. The Server sits on top
 - **Throughput:** the Client keeps the controller queue full with Write Without Response. CTRL carries only about one small notification per half window.
 - **Streaming:** data is pulled from a source callback and pushed to a sink callback, so objects never have to fit in RAM.
 
-The exact API contract is in [API_REFERENCE.md](API_REFERENCE.md).
+The wire protocol is specified in [PROTOCOL.md](PROTOCOL.md), and the exact API contract is in
+[API_REFERENCE.md](API_REFERENCE.md).
 
 ## Why the sender is the GATT client
 
@@ -63,18 +64,14 @@ by the time it reports ready.
 
 ## Protocol
 
-Types `0x00–0xEF` are **application types**. A message that fits in one frame is sent as
-`[len][appType][data]`, with no handshake and no ACK, in either direction: client → server on
-DATA, server → client on CTRL. Types `0xF0–0xFF` are reserved for the framework:
+The complete wire contract, independent of this code, is in [PROTOCOL.md](PROTOCOL.md): GATT
+service, byte layout of every frame, CRC-32 definition, sender and receiver state machines,
+timing, error handling and worked examples. In short:
 
-| Type | Frame | Characteristic | Payload |
-|---|---|---|---|
-| `0xF0` | START | DATA (client → server) | xferId, appType, totalLen(LE32), chunkSize, window, crc32(LE32) |
-| `0xF1` | DATA | DATA | xferId, seq (frame index mod 256), data |
-| `0xF2` | ACK | CTRL (server → client) | xferId, nextExpectedSeq, window (cumulative) |
-| `0xF3` | NACK | CTRL | xferId, nextExpectedSeq, reason → client goes back |
-| `0xF4` | END | CTRL | xferId, status (OK / CRC_ERROR / …) |
-| `0xF5` | ABORT | DATA if sent by the client, CTRL if sent by the server | xferId, reason, direction (0 = by sender, 1 = by receiver) |
+- Every frame is `[len][type][payload]`. Types `0x00–0xEF` are application short messages
+  (no handshake, no ACK). `0xF0–0xF5` are START, DATA, ACK, NACK, END and ABORT.
+- The client writes START and DATA to **DATA**. The server answers ACK / NACK / END on
+  **CTRL**. Each characteristic carries frames in one direction only.
 
 ```
 client (GATT client)                              server (GATT server)
@@ -82,24 +79,22 @@ client (GATT client)                              server (GATT server)
   START(id, type, len, chunk, W, crc)  ─WwR DATA─►  fpt_onRxStart() may reject → ABORT
                         ◄─CTRL ntf─ ACK(seq 0, W')   window = min(W, W')
   DATA 0 … DATA W-1                    ─WwR DATA─►  fpt_onRxData(offset, chunk) in order
-                        ◄─CTRL ntf─ ACK(next)        every W/2 frames, or after 20 ms idle
+                        ◄─CTRL ntf─ ACK(next)        every W/2 frames, or after 20 ms
   DATA …   (gap seen / RX pool full)   ─WwR DATA─►
                         ◄─CTRL ntf─ NACK(next)       client rewinds to `next` (Go-Back-N)
   DATA last                            ─WwR DATA─►  CRC check
                         ◄─CTRL ntf─ END(status)      both sides report the result
 ```
 
-- The BLE link layer already acknowledges and orders packets. Loss can only happen when the
-  receiving application drops a frame, for example when its RX queue is full. The NACK covers
-  that immediately; the ACK timeout (1 s, 5 retries) covers a stalled peer.
-- The client keeps **no retransmit buffer**. A resend re-reads the source at
-  `frameIndex × chunkSize`, so the source must stay readable until `fpt_onTxDone`.
-- The window can be at most 128, which keeps the 8-bit sequence number unambiguous. The
-  engine tracks 32-bit absolute frame indices internally.
-- Each characteristic fixes the direction of its frames. A frame that arrives on the wrong
-  characteristic is dropped.
-- The server ignores START from a client that is not subscribed to CTRL, since no answer
-  could reach it.
+The design choices behind it:
+
+- The BLE link layer already acknowledges and orders packets. A frame can only be lost when
+  the receiver drops it, for example when its RX queue is full. So the protocol only needs a
+  NACK for that case and an ACK timeout for a stalled peer, not per-frame acknowledgement.
+- The client keeps **no retransmit buffer**. A resend reads the source again, which is what
+  lets objects stream from flash or a file without fitting in RAM.
+- The window is capped at 128, so an 8-bit sequence number stays unambiguous. The engine
+  counts frames with 32-bit indices internally.
 
 ## Integration
 

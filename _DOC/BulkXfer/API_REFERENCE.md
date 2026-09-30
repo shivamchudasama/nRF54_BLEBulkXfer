@@ -12,8 +12,9 @@ The **sender is always the GATT client** and the **receiver always hosts the GAT
 A device that needs both directions runs both roles. Each role binds **one connection
 at a time**, and the two roles may use the same link or different links.
 
-For design rationale, the protocol walkthrough and throughput tuning, see
-[README.md](README.md). This file is the exact API contract.
+For design rationale and throughput tuning, see [README.md](README.md). The wire protocol
+(frames, sequences, timing, error handling) is specified independently of this code in
+[PROTOCOL.md](PROTOCOL.md). This file is the exact API contract.
 
 | Header | Contents | Zephyr dependency |
 |---|---|---|
@@ -426,6 +427,9 @@ typedef void (*BlkTxDone_F)(uint8_t u8_appType, BlkStatus_E e_status);
 ---
 
 ## 6. Wire format & codec — `BulkXfer_Frame.h`
+
+The C view of the wire format. The normative byte layouts, the CRC-32 definition and the
+rules for handling each frame are in [PROTOCOL.md](PROTOCOL.md) §3–§7.
 
 One frame per GATT write or notification. Multi-byte fields are little-endian.
 
