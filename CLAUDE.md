@@ -2,7 +2,19 @@
 
 ## Routine
 
-Every change updates, in the same change, each Markdown file that describes what it touched: the unit's `README.md`, `API_REFERENCE.md` and `PROTOCOL.md`, `_TEST/README.md`, `_TOOLS/BleHostGUI/README.md`, and this file. A change is not done while any of them is stale. When this file is updated, say which sections changed.
+Every change updates, in the same change (the same commit), each Markdown file that describes what it touched. A change is not done while any of them is stale.
+
+| The change touches | Update |
+|---|---|
+| Anything a reader of the repo would notice: a feature, module, library, tool, protocol, folder, build or usage step, test area, CI job, licence | Root `README.md`: Status, the "in brief" sections, layout table, building/usage, testing, documentation links |
+| `_LIB/<Lib>` | `_DOC/<Lib>/README.md`, `API_REFERENCE.md`, `PROTOCOL.md` |
+| `_BLK_SVC`, `_DATA_STORE`, the appType registry | `_DOC/HexUpload/PROTOCOL.md` |
+| `_PROV`, `_CSR`, `_DEVICE_CERT`, the PC provisioning code | `_DOC/Provisioning/PROTOCOL.md`, `README.md` |
+| `_TOOLS/BleHostGUI` | `_TOOLS/BleHostGUI/README.md` |
+| `_TEST`, `run_tests.ps1`, `ci.yml` | `_TEST/README.md` |
+| Layout, conventions, build, git/LFS setup | This file |
+
+The root `README.md` summarises everything, so it goes stale most easily: a new feature, module or tool always reaches it. Before reporting a change as done, and again before merging a feature branch into `main`, sweep the docs: run `git ls-files '*.md'` (the reference copies under `Sample Code*` excepted), check each file against the change, and list in the reply the docs you updated and the ones you checked and left alone. When this file is updated, say which sections changed.
 
 Do not touch docs on turns that change nothing they describe (questions, inspection). Keep this file lean — only what's needed to understand the repo.
 
@@ -23,6 +35,7 @@ Source files follow the BATL coding guidelines in `_DOC/BATL Coding Guidelines/`
 
 ## Layout
 
+- `README.md` — the repo overview: status, BulkXfer / hex upload / provisioning in brief, layout table, building, PC usage, testing, documentation links, licence. Kept current per *Routine*.
 - `CMakeLists.txt` — sets `KCONFIG_ROOT` to `_DI/Kconfig` and defaults `CONF_FILE` to `_DI/prj.conf` and `DTC_OVERLAY_FILE` to `_DI/boards/<board>.overlay`, then pulls in `_ASW` and `_LIB`. Never set `APPLICATION_CONFIG_DIR`: Zephyr resolves a relative `CONF_FILE` against it, so the extension's `_DI/prj.conf` would become `_DI/_DI/prj.conf`.
 - `_ASW/` — application software. `main.c` plus one folder per module:
   - `_BLE/` — stack init, advertising, connection callbacks, and PHY/DLE/MTU negotiation (so BulkXfer's `b_autoTuneLink` is off), then a 7.5–15 ms connection-interval request (Zephyr sends it 5 s after connecting; `CONFIG_BT_GAP_AUTO_UPDATE_CONN_PARAMS` stays `n`). The interval is what sets upload throughput; Windows ignores the peripheral's request and settles on ~45 ms, so the GUI requests 15 ms itself. Forwards connect/disconnect to BulkXfer, and advertises the BulkXfer service UUID (the name is in the scan response).
