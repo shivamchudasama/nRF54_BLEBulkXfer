@@ -11,6 +11,7 @@ no display (headless CI).
 
 import asyncio
 import os
+import types
 
 import pytest
 from cryptography import x509
@@ -48,20 +49,6 @@ class Button:
 
     def after(self, ms, fn):
         self.after_calls.append((ms, fn))
-
-
-class Text:
-    def __init__(self):
-        self.text = ""
-
-    def configure(self, **_):
-        pass
-
-    def insert(self, _where, text):
-        self.text += text
-
-    def see(self, _where):
-        pass
 
 
 # ---- fakes for the context ---------------------------------------------------------
@@ -182,8 +169,12 @@ def tab(tmp_path, monkeypatch, dialogs, ca):
     f.dev_days_var.set("365")
     for name in ("status_btn", "prov_btn", "abort_btn", "deprov_btn", "save_btn"):
         setattr(f, name, Button())
-    f.log_text = Text()
     return f
+
+
+def logged(f) -> str:
+    """What the tab wrote to the application log (it has no log of its own)."""
+    return "\n".join(text for _, text in f.ctx.logs)
 
 
 def enabled(f):
@@ -246,7 +237,7 @@ def test_create_ca(tab, dialogs):
     assert tab.ca is not None and tab.ca.subject == "CN=Tab CA 2,O=Org,C=IN"
     assert os.path.exists(os.path.join(tab.folder_var.get(), "ca_key.pem"))
     assert "SHA-256" in tab.ca_var.get() and "0 certificate(s) issued" in tab.ca_var.get()
-    assert "keep this folder private" in tab.log_text.text
+    assert "keep this folder private" in logged(tab)
 
 
 @pytest.mark.parametrize("days, exists, match", [
@@ -268,7 +259,7 @@ def test_load_ca(tab, dialogs, ca):
     tab._load_ca()
     assert tab.ca is not None and tab.ca.fingerprint == ca.fingerprint
     assert dialogs["errors"] == []
-    assert f"CA loaded from {ca.folder}" in tab.log_text.text
+    assert f"CA loaded from {ca.folder}" in logged(tab)
 
 
 def test_load_ca_missing(tab, dialogs, tmp_path):
@@ -294,7 +285,7 @@ def test_session_is_wired_to_the_link_and_the_pc_service(tab):
     assert (s.client, s.receiver) == ("device-client", "pc-receiver")
     s.log("hello")
     s.step("step 1")
-    assert "hello" in tab.log_text.text and tab.step_var.get() == "step 1"
+    assert "hello" in logged(tab) and tab.step_var.get() == "step 1"
     assert ("info", "provisioning: hello") in tab.ctx.logs
 
 
@@ -317,7 +308,7 @@ def test_provision(tab, ca):
     assert Session.made[-1].calls == [("provision", ca, 90)]
     assert tab._outcome is Session.outcome and not tab.busy
     assert tab.dev_var.get() == "Device: PROVISIONED, certificate serial 1a2b"
-    assert "serial 1a2b" in tab.log_text.text and "CSR received" in tab.log_text.text
+    assert "serial 1a2b" in logged(tab) and "CSR received" in logged(tab)
     assert tab.step_var.get() == "sending certificates"
     assert "save" in enabled(tab)
 
@@ -352,7 +343,7 @@ def test_deprovision_asks_first(tab, dialogs):
     tab.ctx.flush()
     assert Session.made[-1].calls == ["deprovision", "status"]
     assert tab._outcome is None, "a wipe forgets the last result"
-    assert "provisioning removed: device KEY_READY" in tab.log_text.text
+    assert "provisioning removed: device KEY_READY" in logged(tab)
 
 
 def test_deprovision_failure(tab, dialogs):
@@ -373,7 +364,7 @@ def test_save_certificate(tab, dialogs, ca, tmp_path, ext, loader):
     tab._save_cert()
     with open(dialogs["save"], "rb") as fh:
         assert loader(fh.read()).public_bytes(serialization.Encoding.DER) == ca.cert_der
-    assert f"saved to device{ext}" in tab.log_text.text
+    assert f"saved to device{ext}" in logged(tab)
 
 
 def test_connect_and_disconnect(tab):
@@ -388,6 +379,35 @@ def test_connect_and_disconnect(tab):
     assert held.cancelled and not tab.busy
 
 
+def test_follow_wrap_sets_wraplength_only_when_the_width_changes():
+    """Setting wraplength changes the label's height, which can start another
+    <Configure>: an unchanged width must not touch it."""
+    class Label:
+        def __init__(self):
+            self.wrap, self.sets = 0, 0
+
+        def cget(self, _opt):
+            return self.wrap
+
+        def configure(self, wraplength):
+            self.wrap, self.sets = wraplength, self.sets + 1
+
+    class Frame:
+        def bind(self, _seq, fn):
+            self.handler = fn
+
+    label, frame = Label(), Frame()
+    fp.follow_wrap(label, frame, 40, 200)
+    event = types.SimpleNamespace
+    frame.handler(event(width=500))
+    frame.handler(event(width=500))
+    assert (label.wrap, label.sets) == (460, 1)
+    frame.handler(event(width=100))
+    assert label.wrap == 200, "never narrower than the minimum"
+    frame.handler(event(width=150))
+    assert label.sets == 2
+
+
 # ---- the real tab ------------------------------------------------------------------------
 def test_build_real_tab(monkeypatch, tmp_path, ca, tk_root):
     root = tk_root
@@ -400,3 +420,12 @@ def test_build_real_tab(monkeypatch, tmp_path, ca, tk_root):
     assert f.ca is not None, "an existing CA folder is loaded at start-up"
     assert f.folder_var.get() == ca.folder
     assert "disabled" in f.prov_btn.state()
+    assert not f._ca_settings.is_open, "a loaded CA closes the CA settings"
+    assert not f.save_btn.enabled and not f.deprov_btn.enabled, "More menu: not connected"
+    f.ctx.link.connected = True
+    f._update()
+    assert f.deprov_btn.enabled and not f.save_btn.enabled, "nothing to save yet"
+    assert f.pc_pill.text == "PC service: published" and "CSR" in f._pc_tip.text
+    f.ca = None
+    f.ca_var.set("No CA loaded")
+    assert f._ca_settings.is_open, "no CA: the settings open again"

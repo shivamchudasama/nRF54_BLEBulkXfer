@@ -9,7 +9,7 @@ from tkinter import filedialog, messagebox, ttk
 from ..protocols import bulkxfer
 from ..protocols.bulkxfer import bx
 from ..ui import theme as th
-from ..ui.widgets import Pill, StatTile, card
+from ..ui.widgets import Disclosure, Pill, StatTile, card, set_icon, set_var
 from .base import Feature
 
 
@@ -24,12 +24,20 @@ bulkxfer.register_app_type(bx.APP_TYPE_SEGMENT, "SEGMENT")
 bulkxfer.register_app_type(bx.APP_TYPE_RESULT, "RESULT", _result)
 bulkxfer.register_app_type(bx.APP_TYPE_STORED, "STORED", _result)
 
+# Progress reaches the tab once per ACK window; it is shown at most this often
+PROGRESS_MS = 66
+
 # Upload phase -> (pill text, tone)
 PHASE_PILL = {
     "nofile": ("No file", "idle"), "error": ("Parse error", "err"), "ready": ("Ready", "ok"),
     "uploading": ("Uploading", "info"), "done": ("Done", "ok"),
     "failed": ("Failed", "err"), "aborted": ("Aborted", "warn"),
 }
+
+
+def segments_title(n: int) -> str:
+    """The segment list's section title."""
+    return f"Segments ({n})" if n else "Segments"
 
 
 def status_tone(text: str) -> str:
@@ -47,6 +55,7 @@ def status_tone(text: str) -> str:
 
 class HexUploadFeature(Feature):
     title = "Hex Upload"
+    icon = "upload"
 
     def __init__(self, ctx):
         super().__init__(ctx)
@@ -54,11 +63,14 @@ class HexUploadFeature(Feature):
         self._parsed = None              # (path, seg_max) the segments came from
         self._future = None
         self._current = None             # index of the segment in flight
+        self._pending_progress = None    # latest (i, done, total, rate) not shown yet
+        self._progress_after = None
 
     # ---- UI ----------------------------------------------------------------
     def build(self, parent):
         theme = th.of(self.ctx)
-        f = ttk.Frame(parent, padding=(12, 12, 12, 10))
+        sp = theme.sp
+        f = ttk.Frame(parent)
 
         filec, _ = card(f, "Hex file")
         filec.pack(fill="x")
@@ -67,26 +79,27 @@ class HexUploadFeature(Feature):
         self.path_var = tk.StringVar()
         ttk.Entry(row, textvariable=self.path_var, state="readonly").pack(side="left", fill="x", expand=True)
         self.browse_btn = ttk.Button(row, text="Browse…", command=self._browse)
-        self.browse_btn.pack(side="left", padx=(6, 0))
+        self.browse_btn.pack(side="left", padx=(sp("s"), 0))
+        set_icon(self.browse_btn, theme, "folder")
         opt = ttk.Frame(filec)
-        opt.pack(fill="x", pady=(8, 0))
+        opt.pack(fill="x", pady=(sp("s"), 0))
         ttk.Label(opt, text="Max segment (bytes)").pack(side="left")
         self.seg_max_var = tk.StringVar(value=str(bx.SEG_MAX))
         self.seg_max_entry = ttk.Entry(opt, textvariable=self.seg_max_var, width=8)
-        self.seg_max_entry.pack(side="left", padx=6)
+        self.seg_max_entry.pack(side="left", padx=sp("s"))
         self.seg_max_entry.bind("<Return>", lambda e: self._load())
         self.seg_max_entry.bind("<FocusOut>", lambda e: self._load(quiet=True))
         self.summary_var = tk.StringVar(value="No file loaded")
-        ttk.Label(opt, textvariable=self.summary_var, style="Caption.TLabel").pack(side="left", padx=12)
+        ttk.Label(opt, textvariable=self.summary_var, style="Caption.TLabel").pack(side="left", padx=sp("m"))
 
         tiles = ttk.Frame(f)
-        tiles.pack(fill="x", pady=10)
+        tiles.pack(fill="x", pady=sp("m"))
         self.tile_segments = StatTile(tiles, "Segments", "–", "no file")
         self.tile_size = StatTile(tiles, "Size", "–", "")
         self.tile_sent = StatTile(tiles, "Sent", "–", "not started")
         self.tile_rate = StatTile(tiles, "Rate", "–", "")
         for i, t in enumerate((self.tile_segments, self.tile_size, self.tile_sent, self.tile_rate)):
-            t.grid(row=0, column=i, sticky="ew", padx=(0 if i == 0 else 10, 0))
+            t.grid(row=0, column=i, sticky="ew", padx=(0 if i == 0 else sp("m"), 0))
             tiles.columnconfigure(i, weight=1, uniform="tile")
 
         up, head = card(f, "Upload")
@@ -99,23 +112,25 @@ class HexUploadFeature(Feature):
         self.progress.pack(side="left", fill="x", expand=True)
         self.progress_var = tk.StringVar()
         ttk.Label(prow, textvariable=self.progress_var, width=38, anchor="e",
-                  style="MonoCaption.TLabel").pack(side="left", padx=(10, 0))
+                  style="MonoCaption.TLabel").pack(side="left", padx=(sp("m"), 0))
         btns = ttk.Frame(up)
-        btns.pack(fill="x", pady=(10, 0))
+        btns.pack(fill="x", pady=(sp("m"), 0))
         self.start_btn = ttk.Button(btns, text="Start Upload", style="Accent.TButton", command=self._start)
         self.start_btn.pack(side="left")
         self.abort_btn = ttk.Button(btns, text="Abort", style="Danger.TButton", command=self.cancel)
-        self.abort_btn.pack(side="left", padx=6)
+        self.abort_btn.pack(side="left", padx=sp("s"))
+        set_icon(self.start_btn, theme, "upload", accent=True)
+        set_icon(self.abort_btn, theme, "stop")
 
-        seg, _ = card(f, "Segments")
-        seg.pack(fill="both", expand=True, pady=(10, 0))
-        body = ttk.Frame(seg)
+        self.seg_section = Disclosure(f, segments_title(0), theme=theme, fill="both")
+        self.seg_section.pack(fill="both", expand=True, pady=(sp("m"), 0))
+        body = ttk.Frame(self.seg_section.body)
         body.pack(fill="both", expand=True)
         cols = ("addr", "len", "status")
         self.tree = ttk.Treeview(body, columns=cols, show="headings", height=4)
         for c, text, w in (("addr", "Address", 120), ("len", "Length", 90), ("status", "Status", 320)):
             self.tree.heading(c, text=text, anchor="w")
-            self.tree.column(c, width=w, anchor="w", stretch=(c == "status"))
+            self.tree.column(c, width=theme.px(w), anchor="w", stretch=(c == "status"))
         self.tree.pack(side="left", fill="both", expand=True)
         sb = ttk.Scrollbar(body, orient="vertical", command=self.tree.yview)
         sb.pack(side="right", fill="y")
@@ -187,6 +202,7 @@ class HexUploadFeature(Feature):
             self.segments, self._parsed = [], None
             self.summary_var.set("Parse error")
             self.tree.delete(*self.tree.get_children())
+            self.seg_section.set_title(segments_title(0))
             self.tile_segments.set("–", "parse error")
             self._phase = "error"
             self._update_buttons()
@@ -201,6 +217,7 @@ class HexUploadFeature(Feature):
         for i, (addr, data) in enumerate(self.segments):
             self.tree.insert("", "end", iid=str(i), values=(f"0x{addr:08X}", len(data), "pending"),
                              tags=("idle",))
+        self.seg_section.set_title(segments_title(len(self.segments)))
         self.progress.configure(maximum=max(total, 1), value=0)
         self.progress_var.set("")
         self._show_loaded(path, total)
@@ -268,15 +285,33 @@ class HexUploadFeature(Feature):
         return len(segments)
 
     def _progress(self, i, done, total, rate):
+        """Progress from the upload (once per ACK window): keep the latest and
+        show it at most every PROGRESS_MS, so the tab redraws a few times a
+        second however fast the ACKs come."""
+        last_rate = self._pending_progress[3] if self._pending_progress else None
+        self._pending_progress = (i, done, total, rate or last_rate)
+        if self._progress_after is None:
+            self._progress_after = self.progress.after(PROGRESS_MS, self._flush_progress)
+
+    def _flush_progress(self):
+        """Show the pending progress now (the timer, and the end of an upload)."""
+        if self._progress_after is not None:
+            self.progress.after_cancel(self._progress_after)
+            self._progress_after = None
+        if self._pending_progress is None:
+            return
+        i, done, total, rate = self._pending_progress
+        self._pending_progress = None
         self.progress.configure(maximum=max(total, 1), value=done)
         r = f", {rate * 8 / 1000:.0f} kbit/s" if rate else ""
-        self.progress_var.set(f"segment {i + 1}/{len(self.segments)}  {done}/{total} B{r}")
+        set_var(self.progress_var, f"segment {i + 1}/{len(self.segments)}  {done}/{total} B{r}")
         self.tile_segments.set(str(len(self.segments)), f"segment {i + 1} of {len(self.segments)}")
         self.tile_sent.set(f"{done:,} B", f"{100 * done // max(total, 1)} %")
         if rate:
             self.tile_rate.set(f"{rate * 8 / 1000:.0f} kbit/s", "current segment")
 
     def _finished(self, n):
+        self._flush_progress()
         self._future = None
         dt = time.perf_counter() - self._t_start
         self.progress_var.set(f"done: {n} segment(s) in {dt:.1f} s")
@@ -288,6 +323,7 @@ class HexUploadFeature(Feature):
         self._update_buttons()
 
     def _failed(self, exc):
+        self._flush_progress()
         self._future = None
         if self._current is not None:
             self._set_status(self._current, f"failed: {exc}")
@@ -298,6 +334,7 @@ class HexUploadFeature(Feature):
         self._update_buttons()
 
     def _aborted(self):
+        self._flush_progress()
         self._future = None
         if self._current is not None:
             self._set_status(self._current, "aborted")

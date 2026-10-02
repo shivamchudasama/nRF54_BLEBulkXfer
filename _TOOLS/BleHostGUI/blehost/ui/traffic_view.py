@@ -1,4 +1,7 @@
-"""BLE traffic monitor: a terminal-style view of every TX / RX on the link."""
+"""BLE traffic monitor: a terminal-style view of every TX / RX on the link.
+
+Capture (ctx.tap.enabled) is switched here and stays on while other pages are
+shown, so a transfer can be watched afterwards."""
 
 import time
 import tkinter as tk
@@ -8,6 +11,7 @@ from tkinter import filedialog, ttk
 from ..core.event_bus import TRAFFIC
 from ..core.traffic import INFO, RX, TX
 from . import theme as th
+from .widgets import set_icon
 
 MAX_EVENTS = 5000          # history kept for re-filtering; older lines are dropped
 FLUSH_MS = 100
@@ -16,26 +20,34 @@ FORMATS = ("hex + decoded", "hex", "decoded")
 
 
 class TrafficView(ttk.Frame):
-    def __init__(self, parent, ctx):
-        super().__init__(parent, style="Card.TFrame", padding=(12, 8))
-        self.ctx = ctx
+    def __init__(self, parent, ctx, on_capture=None):
+        """on_capture(on): called when capture is switched (the window's rail badge)."""
         theme = th.of(ctx)
+        super().__init__(parent)
+        self.ctx = ctx
+        self._on_capture = on_capture
         self._events = deque(maxlen=MAX_EVENTS)
         self._pending = deque(maxlen=MAX_EVENTS)
         self._flush_scheduled = False
 
         bar = ttk.Frame(self)
         bar.pack(fill="x")
-        ttk.Label(bar, text="BLE traffic", style="Strong.TLabel").pack(side="left", padx=(0, 10))
+        self.capture = tk.BooleanVar(value=ctx.tap.enabled)
+        ttk.Checkbutton(bar, text="Capture", variable=self.capture, style="Switch.TCheckbutton",
+                        command=self._apply_capture).pack(side="left", padx=(0, theme.sp("m")))
         self.paused = tk.BooleanVar(value=False)
-        ttk.Checkbutton(bar, text="Pause", variable=self.paused, style="Toggle.TButton",
-                        command=self._schedule_flush).pack(side="left", padx=2)
-        ttk.Button(bar, text="Clear", command=self.clear).pack(side="left", padx=2)
-        ttk.Button(bar, text="Save…", command=self._save).pack(side="left", padx=2)
+        pause = ttk.Checkbutton(bar, text="Pause", variable=self.paused, style="Toggle.TButton",
+                                command=self._schedule_flush)
+        clear = ttk.Button(bar, text="Clear", command=self.clear)
+        save = ttk.Button(bar, text="Save…", command=self._save)
+        for b, icon in ((pause, "pause"), (clear, "clear"), (save, "save")):
+            b.pack(side="left", padx=theme.px(2))
+            set_icon(b, theme, icon)
         self.fmt = tk.StringVar(value=FORMATS[0])
         cb = ttk.Combobox(bar, textvariable=self.fmt, values=FORMATS, state="readonly", width=14)
         cb.pack(side="right", padx=(6, 0))
         cb.bind("<<ComboboxSelected>>", lambda e: self._rerender())
+        theme.on_change(lambda p: th.style_combobox(cb, p))
         ttk.Label(bar, text="Format", style="Caption.TLabel").pack(side="right")
         self.autoscroll = tk.BooleanVar(value=True)
         ttk.Checkbutton(bar, text="Autoscroll", variable=self.autoscroll,
@@ -79,6 +91,18 @@ class TrafficView(ttk.Frame):
         ctx.bus.subscribe(TRAFFIC, self._on_event)
 
     # ---- capture -----------------------------------------------------------
+    def set_capture(self, on: bool):
+        if self.capture.get() != on:
+            self.capture.set(on)
+            self._apply_capture()
+
+    def _apply_capture(self):
+        on = self.capture.get()
+        self.ctx.tap.enabled = on
+        self.ctx.log(f"BLE traffic capture {'on' if on else 'off'}")
+        if self._on_capture:
+            self._on_capture(on)
+
     def _on_event(self, ev):
         self._events.append(ev)
         self._pending.append(ev)

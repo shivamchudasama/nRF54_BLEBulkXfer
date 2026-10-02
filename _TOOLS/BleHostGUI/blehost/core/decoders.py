@@ -1,6 +1,6 @@
 """Characteristic names and payload decoders for the traffic monitor.
 
-A protocol module registers its characteristics here; the traffic pane then
+A protocol module registers its characteristics here; the traffic monitor then
 shows a short name instead of the UUID and a one-line summary of each payload.
 """
 
@@ -12,7 +12,7 @@ class DecoderRegistry:
 
     def register(self, uuid: str, name: str, decoder=None):
         """decoder(data: bytes) -> (kind, summary). `kind` is a short frame class
-        (e.g. "DATA", "ACK") the traffic pane can filter on; "" if none."""
+        (e.g. "DATA", "ACK") the traffic monitor can filter on; "" if none."""
         uuid = uuid.lower()
         self._names[uuid] = name
         if decoder:
