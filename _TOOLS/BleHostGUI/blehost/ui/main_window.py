@@ -1,17 +1,50 @@
-"""Main window: device panel, feature tabs, application log and the toggleable
-BLE traffic pane."""
+"""Main window: a navigation rail on the left and one page at a time beside it
+(Device, one per feature, Log, BLE traffic). A header names the page and
+shows the link; a status line under it shows the latest log line. Light or
+dark theme (ui/theme.py).
+
+Pages are built the first time they are shown, and only the current one is
+mapped, so Tk lays out and redraws one page's widgets, not the whole window's.
+
+ble_host_gui.py builds it with the root withdrawn and shows it with show(),
+so the first frame on screen is already themed and laid out."""
 
 import time
 import tkinter as tk
-from tkinter import font as tkfont
 from tkinter import messagebox, ttk
 
 from ..core.ble_link import LinkState
 from ..core.event_bus import LINK_STATE, LOG
-from .connection_panel import ConnectionPanel
+from . import icons
+from . import theme as th
+from .connection_panel import STATE_PILL, ConnectionPanel
 from .traffic_view import TrafficView
+from .widgets import Pill, Tooltip, set_icon, set_var
 
 APP_TITLE = "BLE Host"
+LOG_LINES = 2000                       # the log page keeps this many lines
+RAIL_ICON = 20                         # rail glyphs, pixels at 100 %
+
+
+class Page:
+    """One page: its rail button, and its frame once built."""
+
+    def __init__(self, key, title, icon, build, shortcut="", label=None):
+        self.key, self.title, self.icon, self.shortcut = key, title, icon, shortcut
+        self.label = label or title            # under the rail icon
+        self._build = build
+        self.frame = None
+        self.button = None
+        self.badge = None                  # a palette tone shown as a dot on the button
+
+    @property
+    def built(self) -> bool:
+        return self.frame is not None
+
+    def build(self, parent):
+        if self.frame is None:
+            self.frame = self._build(parent)
+        return self.frame
 
 
 class MainWindow:
@@ -21,121 +54,269 @@ class MainWindow:
         root.title(APP_TITLE)
         k = root.winfo_fpixels("1i") / 96            # display scale (1.0 at 100 %)
         w = min(int(1100 * k), int(root.winfo_screenwidth() * 0.9))
-        h = min(int(820 * k), int(root.winfo_screenheight() * 0.85))
+        h = min(int(760 * k), int(root.winfo_screenheight() * 0.85))
         root.geometry(f"{w}x{h}")
-        root.minsize(int(800 * k), int(560 * k))
-        style = ttk.Style(root)
-        style.configure("Treeview", rowheight=int(tkfont.nametofont("TkDefaultFont").metrics("linespace") * 1.4))
+        root.minsize(int(820 * k), int(560 * k))
+
+        self.theme = ctx.theme = th.Theme(root, th.system_mode())
+        self.theme.apply()
+        self.mode_var = tk.StringVar(value=self.theme.mode)
+        t = self.theme
 
         self.features = [cls(ctx) for cls in feature_classes]
-        self.traffic_visible = tk.BooleanVar(value=False)
+        self.pages = {"device": Page("device", "Device", "device", self._build_device)}
+        for i, f in enumerate(self.features):
+            self.pages[f"feature{i}"] = Page(f"feature{i}", f.title, f.icon,
+                                             lambda parent, f=f: f.build(parent))
+        self.pages["log"] = Page("log", "Log", "log", self._build_log, "Ctrl+L")
+        self.pages["traffic"] = Page("traffic", "BLE traffic", "traffic", self._build_traffic, "Ctrl+T",
+                                     label="Traffic")
+        for i, page in enumerate(p for p in self.pages.values() if p.key not in ("log", "traffic")):
+            page.shortcut = f"Ctrl+{i + 1}"
+        self.page_var = tk.StringVar()
+        self.title_var = tk.StringVar()
+        self._current = None
+        self.conn = None
+        self.traffic = None
 
-        self._build_menu()
+        self._build_status_bar()
+        body = ttk.Frame(root)
+        body.pack(fill="both", expand=True)
+        self._build_rail(body)
+        ttk.Separator(body, orient="vertical").pack(side="left", fill="y")
+        main = ttk.Frame(body)
+        main.pack(side="left", fill="both", expand=True)
+        self._build_header(main)
+        self.content = ttk.Frame(main, padding=(t.sp("m"), t.sp("s"), t.sp("m"), t.sp("m")))
+        self.content.pack(fill="both", expand=True)
 
-        toolbar = ttk.Frame(root, padding=(6, 4, 6, 0))
-        toolbar.pack(fill="x")
-        ttk.Checkbutton(toolbar, text="BLE traffic  (Ctrl+T)", style="Toolbutton",
-                        variable=self.traffic_visible, command=self._apply_traffic).pack(side="right")
+        # The device page and the log are needed from the start (link state, log lines)
+        self.pages["log"].build(self.content)
+        self.show_page("device")
 
-        self.conn = ConnectionPanel(root, ctx, is_busy=lambda: any(f.busy for f in self.features))
-        self.conn.pack(fill="x", padx=6, pady=4)
-
-        self.status_var = tk.StringVar(value="Idle")
-        ttk.Label(root, textvariable=self.status_var, relief="sunken", anchor="w",
-                  padding=(6, 2)).pack(side="bottom", fill="x")
-
-        self.panes = ttk.Panedwindow(root, orient="vertical")
-        self.panes.pack(fill="both", expand=True, padx=6, pady=(0, 4))
-
-        self.notebook = ttk.Notebook(self.panes)
-        for f in self.features:
-            self.notebook.add(f.build(self.notebook), text=f.title)
-        self.panes.add(self.notebook, weight=3)
-
-        self.log_text = self._build_log(self.panes)
-        self.panes.add(self.log_text.master, weight=1)
-
-        self.traffic = TrafficView(self.panes, ctx)
-
-        root.bind_all("<Control-t>", lambda e: self._toggle_traffic())
+        keys = [p.key for p in self.pages.values() if p.key not in ("log", "traffic")]
+        for i, key in enumerate(keys[:9]):
+            root.bind_all(f"<Control-Key-{i + 1}>", lambda e, key=key: self.show_page(key))
+        root.bind_all("<Control-t>", lambda e: self.open_traffic())
+        root.bind_all("<Control-l>", lambda e: self.show_page("log"))
+        root.bind_all("<Control-L>", lambda e: self._toggle_mode())     # Ctrl+Shift+L
         root.protocol("WM_DELETE_WINDOW", self._on_close)
         ctx.bus.subscribe(LINK_STATE, self._on_link_state)
         ctx.bus.subscribe(LOG, self._on_log)
+        self.theme.on_change(self._on_theme)
+
+    def show(self):
+        """Put the window on screen (ble_host_gui.py: it was built withdrawn):
+        title bar and icon first, so the first frame is the finished one."""
+        self.root.update_idletasks()
+        self.theme.title_bar()
+        self._app_icons = icons.app_icon(self.root, th.PALETTES[th.LIGHT]["accent"])
+        if self._app_icons:
+            self.root.iconphoto(True, *self._app_icons)
+        self.root.deiconify()
 
     # ---- construction ------------------------------------------------------
-    def _build_menu(self):
-        m = tk.Menu(self.root)
-        file_m = tk.Menu(m, tearoff=False)
-        file_m.add_command(label="Exit", command=self._on_close)
-        m.add_cascade(label="File", menu=file_m)
-        view_m = tk.Menu(m, tearoff=False)
-        view_m.add_checkbutton(label="BLE Traffic", accelerator="Ctrl+T",
-                               variable=self.traffic_visible, command=self._apply_traffic)
-        view_m.add_command(label="Clear Log", command=lambda: self.log_text.delete("1.0", "end"))
-        m.add_cascade(label="View", menu=view_m)
-        self.root.config(menu=m)
+    def _build_rail(self, parent):
+        t = self.theme
+        rail = ttk.Frame(parent, style="Rail.TFrame", padding=(t.sp("xs"), t.sp("s")))
+        rail.pack(side="left", fill="y")
+        self._logo = ttk.Label(rail, style="Rail.TLabel", anchor="center")
+        self._logo.pack(fill="x", pady=(t.sp("xs"), t.sp("m")))
+        for page in self.pages.values():
+            b = ttk.Radiobutton(rail, text=page.label,
+                                value=page.key, variable=self.page_var, style="Rail.Toolbutton",
+                                takefocus=False, command=lambda key=page.key: self.show_page(key))
+            if page.key not in ("log", "traffic"):
+                b.pack(side="top", fill="x", pady=t.px(2))
+            page.button = b
+            page.tip = Tooltip(b, f"{page.title} ({page.shortcut})", t)
+        # At the bottom, from the bottom up: theme, a rule, BLE traffic, Log
+        self.mode_btn = ttk.Button(rail, style="Rail.Toolbutton", takefocus=False,
+                                   command=self._toggle_mode)
+        self.mode_btn.pack(side="bottom", fill="x", pady=t.px(2))
+        self.mode_tip = Tooltip(self.mode_btn, "", t)
+        ttk.Separator(rail, orient="horizontal").pack(side="bottom", fill="x", pady=t.sp("s"))
+        for key in ("traffic", "log"):
+            self.pages[key].button.pack(side="bottom", fill="x", pady=t.px(2))
+
+    def _build_header(self, parent):
+        t = self.theme
+        head = ttk.Frame(parent, padding=(t.sp("m"), t.sp("s"), t.sp("m"), t.sp("xs")))
+        head.pack(fill="x")
+        ttk.Label(head, textvariable=self.title_var, style="Title.TLabel").pack(side="left")
+        self.status_pill = Pill(head, t, "Idle", "idle")
+        self.status_pill.pack(side="right")
+        self.status_pill.configure(cursor="hand2")
+        self.status_pill.bind("<Button-1>", lambda e: self.show_page("device"))
+        Tooltip(self.status_pill, "Device page (Ctrl+1)", t)
+        self.status_var = tk.StringVar(value="Not connected")
+        ttk.Label(head, textvariable=self.status_var, style="Caption.TLabel").pack(
+            side="right", padx=t.sp("s"))
+
+    def _build_status_bar(self):
+        t = self.theme
+        bar = ttk.Frame(self.root, padding=(t.sp("m"), t.sp("xs")))
+        bar.pack(side="bottom", fill="x")
+        ttk.Separator(self.root, orient="horizontal").pack(side="bottom", fill="x")
+        self.last_log_var = tk.StringVar(value="")
+        self._last_level = "info"
+        self.last_log = ttk.Label(bar, textvariable=self.last_log_var, style="Caption.TLabel",
+                                  width=1, anchor="w")
+        self.last_log.pack(side="left", fill="x", expand=True)
+        open_log = ttk.Button(bar, text="Log ›", style="Link.TLabel", cursor="hand2",
+                              takefocus=False, command=lambda: self.show_page("log"))
+        open_log.pack(side="right")
+
+    def _build_device(self, parent):
+        self.conn = ConnectionPanel(parent, self.ctx, is_busy=lambda: any(f.busy for f in self.features))
+        return self.conn
 
     def _build_log(self, parent):
+        t = self.theme
         frame = ttk.Frame(parent)
-        text = tk.Text(frame, height=6, wrap="word", font=("Consolas", 9), state="normal")
-        sb = ttk.Scrollbar(frame, orient="vertical", command=text.yview)
+        bar = ttk.Frame(frame)
+        bar.pack(fill="x", pady=(0, t.sp("s")))
+        ttk.Label(bar, text="Application log: the link, every feature, errors.",
+                  style="Caption.TLabel").pack(side="left")
+        clear = ttk.Button(bar, text="Clear", command=lambda: text.delete("1.0", "end"))
+        clear.pack(side="right")
+        set_icon(clear, t, "clear")
+        body = ttk.Frame(frame)
+        body.pack(fill="both", expand=True)
+        text = tk.Text(body, height=5, wrap="word", font=t.fonts["mono"], state="normal",
+                       padx=8, pady=6)
+        sb = ttk.Scrollbar(body, orient="vertical", command=text.yview)
         text.configure(yscrollcommand=sb.set)
         text.pack(side="left", fill="both", expand=True)
         sb.pack(side="right", fill="y")
-        text.tag_configure("warn", foreground="#b36b00")
-        text.tag_configure("error", foreground="#c00000")
         text.bind("<Key>", lambda e: None if (e.state & 0x4 and e.keysym.lower() == "c") else "break")
-        return text
+        t.on_change(lambda p: th.style_text(text, p))
+        self.log_text = text
+        return frame
 
-    # ---- traffic pane ------------------------------------------------------
-    def _toggle_traffic(self):
-        self.traffic_visible.set(not self.traffic_visible.get())
-        self._apply_traffic()
+    def _build_traffic(self, parent):
+        self.traffic = TrafficView(parent, self.ctx, on_capture=self._on_capture)
+        return self.traffic
 
-    def _apply_traffic(self):
-        show = self.traffic_visible.get()
-        shown = str(self.traffic) in [str(p) for p in self.panes.panes()]
-        if show and not shown:
-            self.panes.add(self.traffic, weight=3)
-        elif not show and shown:
-            self.panes.forget(self.traffic)
-        self.ctx.tap.enabled = show
-        self.ctx.log(f"BLE traffic monitor {'on' if show else 'off'}")
+    # ---- pages -------------------------------------------------------------
+    @property
+    def current_page(self) -> str:
+        return self._current.key if self._current else ""
+
+    def show_page(self, key: str):
+        """Show page key (building it the first time) in place of the current one."""
+        page = self.pages[key]
+        if page is self._current:
+            return
+        frame = page.build(self.content)
+        if self._current is not None:
+            self._current.frame.pack_forget()
+        frame.pack(fill="both", expand=True)
+        self._current = page
+        set_var(self.page_var, key)
+        set_var(self.title_var, page.title)
+        if key == "log":
+            self._set_badge("log", None)
+
+    def _built_features(self):
+        return [f for i, f in enumerate(self.features) if self.pages[f"feature{i}"].built]
+
+    def _set_badge(self, key: str, tone):
+        page = self.pages[key]
+        if page.badge != tone:
+            page.badge = tone
+            self._rail_icon(page)
+
+    def _rail_icon(self, page):
+        p = self.theme.palette
+        spec = icons.button_spec(page.button, self.theme, page.icon, size=RAIL_ICON,
+                                 selected="accent", badge=p[page.badge][0] if page.badge else None)
+        page.button.configure(image=spec, compound="top" if spec else "none")
+
+    # ---- traffic -----------------------------------------------------------
+    def open_traffic(self):
+        """Ctrl+T: the traffic page, capturing."""
+        self.show_page("traffic")
+        self.traffic.set_capture(True)
+
+    def _on_capture(self, on: bool):
+        self._set_badge("traffic", "info" if on else None)
+
+    # ---- theme -------------------------------------------------------------
+    def _toggle_mode(self):
+        self._set_mode(th.DARK if self.theme.mode == th.LIGHT else th.LIGHT)
+
+    def _set_mode(self, mode):
+        self.theme.apply(mode)
+        self.mode_var.set(self.theme.mode)
+
+    def _on_theme(self, palette):
+        t = self.theme
+        dark = t.mode == th.DARK
+        target = "light" if dark else "dark"
+        self.mode_tip.text = f"Switch to {target} mode (Ctrl+Shift+L)"
+        img = icons.glyph(self.mode_btn, "sun" if dark else "moon", t.px(RAIL_ICON), palette["sub"])
+        if img is not None:                             # an icon button, the tooltip says what it does
+            self.mode_btn.configure(image=img, text="")
+        else:
+            self.mode_btn.configure(image="", text="☀" if dark else "☾")
+        self.mode_btn.mode = target                     # what a click switches to (tests)
+        logo = icons.app_icon(self._logo, palette["accent"], sizes=(t.px(28),))
+        self._logo.configure(image=logo[0] if logo else "", text="" if logo else APP_TITLE)
+        for page in self.pages.values():
+            self._rail_icon(page)
+        self._show_last_level()
 
     # ---- events ------------------------------------------------------------
     def _on_log(self, payload):
         level, text = payload
         t = time.strftime("%H:%M:%S")
-        self.log_text.insert("end", f"{t}  {text}\n", level)
+        self.log_text.insert("end", f"{t}  ", "time", f"{text}\n", level)
         lines = int(self.log_text.index("end-1c").split(".")[0])
-        if lines > 2000:
-            self.log_text.delete("1.0", f"{lines - 2000}.0")
+        if lines > LOG_LINES:
+            self.log_text.delete("1.0", f"{lines - LOG_LINES}.0")
         self.log_text.see("end")
+        set_var(self.last_log_var, f"{t}  {text}")
+        if level != self._last_level:
+            self._last_level = level
+            self._show_last_level()
+        if level == "error" and self.current_page != "log":
+            self._set_badge("log", "err")
+
+    def _show_last_level(self):
+        p = self.theme.palette
+        colour = {"error": p["err"][0], "warn": p["warn"][0]}.get(self._last_level, p["sub"])
+        self.last_log.configure(foreground=colour)
 
     def _on_link_state(self, payload):
         state, info = payload
-        self.conn.update_state()
+        self.conn.show_link(state, info)
+        self.status_pill.set(*STATE_PILL.get(state, (state.value, "idle")))
         if state == LinkState.CONNECTED:
-            self.status_var.set(f"Connected to {info.get('name') or '?'} [{info.get('address')}]"
-                                f"  ·  ATT MTU {info.get('mtu')}")
+            set_var(self.status_var, f"{info.get('name') or '?'} [{info.get('address')}]"
+                                     f"  ·  ATT MTU {info.get('mtu')}")
             self.ctx.log(f"connected to {info.get('name') or info.get('address')}")
-            for f in self.features:
+            for f in self._built_features():
                 f.on_connected(info)
+            if self.current_page == "device" and self.features:
+                self.show_page("feature0")
         elif state == LinkState.IDLE and "reason" in info:
-            self.status_var.set(f"Idle ({info['reason']})")
+            set_var(self.status_var, f"Not connected ({info['reason']})")
             self.ctx.log(info["reason"], "warn" if info["reason"] == "link lost" else "info")
-            for f in self.features:
+            for f in self._built_features():
                 f.on_disconnected(info["reason"])
         elif state in (LinkState.CONNECTING, LinkState.SCANNING):
-            self.status_var.set(f"{state.value}…")
+            set_var(self.status_var, f"{state.value}…")
+        elif state == LinkState.IDLE:
+            set_var(self.status_var, "Not connected")
         else:
-            self.status_var.set(state.value)
+            set_var(self.status_var, state.value)
 
     def _on_close(self):
         if any(f.busy for f in self.features) and not messagebox.askyesno(
                 "Exit", "A transfer is in progress. Abort it and exit?"):
             return
-        for f in self.features:
+        for f in self._built_features():
             try:
                 f.shutdown()
             except Exception:

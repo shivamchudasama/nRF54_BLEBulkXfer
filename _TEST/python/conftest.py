@@ -4,7 +4,8 @@
 Puts _TOOLS/BleHostGUI on sys.path (bulkxfer_client.py and the blehost
 package live there) and provides the golden wire vectors shared with the C
 tests, plus a fake GATT transport and a scripted BulkXfer server so that
-BulkXferClient can be tested without a BLE adapter.
+BulkXferClient can be tested without a BLE adapter, and one shared Tk root
+for the tests that build widgets.
 """
 
 import asyncio
@@ -33,6 +34,32 @@ def repo():
 def vectors():
     with open(os.path.join(REPO, "_TEST", "vectors", "wire.json")) as f:
         return json.load(f)
+
+
+@pytest.fixture(scope="session")
+def _tk_session():
+    """One Tk interpreter for the whole run: on Windows, creating several in
+    one process now and then fails to find tk.tcl. None without a display."""
+    try:
+        import tkinter as tk
+        root = tk.Tk()
+    except Exception as e:                       # ImportError, TclError
+        yield e
+        return
+    root.withdraw()
+    yield root
+    root.destroy()
+
+
+@pytest.fixture
+def tk_root(_tk_session):
+    """The shared Tk root (skips without a display); widgets a test creates
+    on it are destroyed after the test."""
+    if isinstance(_tk_session, Exception):
+        pytest.skip(f"no display for Tk ({_tk_session})")
+    yield _tk_session
+    for w in _tk_session.winfo_children():
+        w.destroy()
 
 
 class FakeServer:

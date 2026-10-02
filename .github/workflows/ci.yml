@@ -64,8 +64,8 @@ jobs:
         run: |
           sudo apt-get update -q && sudo apt-get install -y -q xvfb
           pip install -r _TEST/requirements-test.txt
-      # xvfb: a virtual display, so the test that builds the real Tk tab runs
-      # here too (it skips itself where Tk has no display)
+      # xvfb: a virtual display, so the tests that build the real Tk window and pages run
+      # here too (they skip themselves where Tk has no display)
       - name: Test
         run: |
           mkdir -p report

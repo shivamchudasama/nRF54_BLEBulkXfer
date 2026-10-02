@@ -16,7 +16,7 @@ from blehost.features.provisioning import ProvisioningFeature
 from blehost.protocols.bulkxfer import BulkXferService
 from blehost.ui.main_window import MainWindow
 
-# Feature tabs, in display order. Add new features here.
+# Feature pages, in rail order. Add new features here.
 FEATURES = [HexUploadFeature, ProvisioningFeature]
 
 
@@ -39,7 +39,8 @@ def main():
     ctx.link.add_disconnect_hook(lambda _link, _reason: pc.link_lost())
 
     root = tk.Tk()
-    MainWindow(root, ctx, FEATURES)
+    root.withdraw()              # shown once built and themed: no white flash, no layout jump
+    MainWindow(root, ctx, FEATURES).show()
     ctx.bus.attach(root)
     ctx.runner.start()
     ctx.run(pc.start(), on_done=lambda _: ctx.log("PC BulkXfer service published"),

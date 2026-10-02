@@ -1,8 +1,11 @@
-"""Feature: one tab of the main window.
+"""Feature: one page of the main window, with its button on the navigation rail.
 
 To add a capability (pairing, provisioning, ...): subclass Feature in a new
 module under features/, and list the class in ble_host_gui.py. A feature
-  - builds its own tab in build(),
+  - names its page (title) and its rail icon (icon: a name in ui/icons.GLYPHS),
+  - builds its own page in build(), the first time the page is opened: the
+    window calls on_connected / on_disconnected only once it is built, so
+    build() shows the link as it is then,
   - reaches the device only through ctx.link / ctx.services (never bleak),
   - runs BLE work with ctx.run(coro, on_done=..., ...) and touches Tk only
     from the Tk thread (callbacks from ctx.run and the EventBus already are).
@@ -13,13 +16,14 @@ from abc import ABC, abstractmethod
 
 class Feature(ABC):
     title = "Feature"
+    icon = "add"
 
     def __init__(self, ctx):
         self.ctx = ctx
 
     @abstractmethod
     def build(self, parent):
-        """Create and return the tab's top widget (child of `parent`)."""
+        """Create and return the page's top widget (child of `parent`)."""
 
     def on_connected(self, info: dict):
         """The link is up (Tk thread). info: address, name, mtu."""

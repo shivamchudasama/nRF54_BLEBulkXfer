@@ -3,3 +3,5 @@
 bleak>=1.0
 # Device provisioning: the CA (X.509, ECDSA P-256)
 cryptography>=43
+# Look and feel: smooth shapes, check boxes and switches, icon glyphs and the window icon (blehost/ui/icons.py)
+Pillow>=10
