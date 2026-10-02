@@ -1,0 +1,6 @@
+{
+  "sdkRoot" : "D:/SVN_Repo/SL_BG24_BLE/_SDK/trunk/",
+  "apackRoot" : "D:\\SVN_Repo\\SL_BG24_BLE\\_SDK\\trunk\\bluetooth_bgbuild",
+  "partOpn" : "efr32mg24b210f1536im48",
+  "boards" : "brd2606arevA04"
+}

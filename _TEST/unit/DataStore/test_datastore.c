@@ -3,8 +3,10 @@
  * @brief         Host unit tests for _ASW/_DATA_STORE against the hex-upload
  *                contract in _DOC/HexUpload/PROTOCOL.md (section numbers
  *                below refer to it). DataStore.c is included so its private
- *                callbacks and state can be driven directly; the BulkXfer
- *                Server API it calls is stubbed.
+ *                callbacks and state can be driven directly. It registers with
+ *                the real router (BulkRouter.c, included too), as in the
+ *                firmware, and the tests drive the Server callbacks the router
+ *                hands to the stubbed BulkXfer Server API.
  *
  *                Built twice by _TEST/CMakeLists.txt: as is (summary line)
  *                and with -DCONFIG_DS_HEX_DUMP=1 (full hex dump).
@@ -15,6 +17,7 @@
  */
 
 #include "DataStore.c"
+#include "BulkRouter.c"
 #include "unity.h"
 #include "wire_vectors.h"
 
@@ -22,7 +25,7 @@
 /*  Stubs of the BulkXfer Server and the GATT service                         */
 /******************************************************************************/
 static struct bt_gatt_attr sst_ctrlAttr;
-static BlkSrvCfg_T sst_cfg;                  /* what gi_DataStore_Init registered */
+static BlkSrvCfg_T sst_cfg;                  /* what the router passed to the Server */
 static int si_initRet;                       /* what gi_BLKS_Init returns         */
 static int si_sendRet;                       /* what gi_BLKS_SendShort returns    */
 
@@ -136,12 +139,18 @@ void setUp(void)
    (void)memset(su8ar_segBuf, 0, sizeof(su8ar_segBuf));
    (void)memset(su8ar_addrHdr, 0, sizeof(su8ar_addrHdr));
 
+   // Fresh router (it has no reset API either)
+   su8_routeCnt = 0U;
+   sb_isStarted = false;
+
    si_initRet = 0;
    si_sendRet = 0;
    su32_sentCount = 0U;
    gu32_simLogBuffered = 0U;
    gv_SimLogClear();
+   // As main() does: register, then start the Server
    TEST_ASSERT_EQUAL_INT(0, gi_DataStore_Init());
+   TEST_ASSERT_EQUAL_INT(0, gi_BulkRouter_Start());
 }
 
 void tearDown(void) {}
@@ -158,8 +167,16 @@ static void test_InitRegistersServer(void)
    TEST_ASSERT_NOT_NULL(sst_cfg.fpt_onRxShort);
    TEST_ASSERT_FALSE_MESSAGE(sst_cfg.b_autoTuneLink, "_BLE negotiates the link itself");
 
-   si_initRet = -EALREADY;
+   // Registering after the Server has started is refused and logged
    TEST_ASSERT_EQUAL_INT(-EALREADY, gi_DataStore_Init());
+   TEST_ASSERT_NOT_NULL(gcpt_SimLogFind("gi_BulkRouter_Register failed"));
+
+   // A Server start failure is reported
+   su8_routeCnt = 0U;
+   sb_isStarted = false;
+   si_initRet = -EIO;
+   TEST_ASSERT_EQUAL_INT(0, gi_DataStore_Init());
+   TEST_ASSERT_EQUAL_INT(-EIO, gi_BulkRouter_Start());
    TEST_ASSERT_NOT_NULL(gcpt_SimLogFind("gi_BLKS_Init failed"));
 }
 

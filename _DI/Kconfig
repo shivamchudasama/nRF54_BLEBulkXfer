@@ -17,6 +17,43 @@ config DS_HEX_DUMP
 	  When disabled, each segment is reported with a single
 	  "SEG addr=... len=... crc=..." line and STORED follows at once.
 
+config PROV_WIPE_HOLD_MS
+	int "Hold time of the provisioning wipe button (ms)"
+	default 5000
+	range 500 60000
+	help
+	  Holding DK Button 0 this long wipes the provisioning credentials
+	  (device key, CSR, CA and device certificate) and generates a fresh
+	  key and CSR, as the DEPROVISION message does. Releasing the button
+	  earlier does nothing.
+
+menu "Device certificate subject (CSR)"
+
+config CSR_SUBJ_C
+	string "Country (C)"
+	default "IN"
+	help
+	  Two-letter country code placed in the CSR subject. The CN is not
+	  configurable: it is a UUIDv5 derived from the hardware device ID.
+
+config CSR_SUBJ_ST
+	string "State or province (ST)"
+	default "Maharashtra"
+
+config CSR_SUBJ_L
+	string "Locality (L)"
+	default "Pune"
+
+config CSR_SUBJ_O
+	string "Organization (O)"
+	default "Bajaj Auto Technology Limited"
+
+config CSR_SUBJ_OU
+	string "Organizational unit (OU)"
+	default "IS Team"
+
+endmenu
+
 endmenu
 
 source "Kconfig.zephyr"

@@ -1,12 +1,13 @@
 # BLE Host GUI
 
-PC-side GUI (Tkinter + [bleak](https://github.com/hbldh/bleak)) for the nRF54 BLE Bulk Transfer firmware. The PC is the BLE central and the BulkXfer **Client**; the board is the GATT server and BulkXfer Server.
+PC-side GUI (Tkinter + [bleak](https://github.com/hbldh/bleak)) for the nRF54 BLE Bulk Transfer firmware. The PC is the BLE central and the BulkXfer **Client**; the board is the GATT server and BulkXfer Server. For device provisioning the PC also hosts a BulkXfer service of its own, so the board can send its CSR to it.
 
-Stage 1 covers:
+It covers:
 
 - **Device**: scan, connect, disconnect, and read the BulkXfer CAPS characteristic. On Windows 11, connecting also asks Windows for its throughput-optimized connection parameters (15 ms interval) for as long as the link is up. Otherwise Windows settles on about 45 ms after service discovery, which caps an upload at about 10 KB/s. The result goes to the log, and each interval change shows in the traffic monitor as `CONN`.
 - **Hex Upload**: browse for an Intel HEX file, split it into contiguous segments, and send each segment as one transfer (`appType 0x10`, `[u32 LE address][data]`). The server must answer with STORED before the next segment is sent. Start and Abort buttons control the upload. The contract is in [_DOC/HexUpload/PROTOCOL.md](../../_DOC/HexUpload/PROTOCOL.md).
-- **BLE traffic monitor**: every write, read, notification and link event, shown as hex and decoded BulkXfer frames. Turn it on or off with **View ▸ BLE Traffic**, the toolbar button or `Ctrl+T`. It captures nothing while it is off.
+- **Provisioning**: the PC is the Certificate Authority. Create or load a CA folder, read the device's STATUS, then **Provision**: the device sends its CSR, the PC checks it and issues a device certificate, and sends it with the CA certificate; the device verifies both, stores both, deletes its CSR and logs them as PEM. **Save device certificate…** writes the result. Provisioning is one-time: a provisioned device is refused. **Remove provisioning…** (after a confirmation) sends DEPROVISION, which wipes the device's key, CSR and certificates; the device makes a new key and CSR and can be provisioned again. The contract is in [_DOC/Provisioning/PROTOCOL.md](../../_DOC/Provisioning/PROTOCOL.md), the design in [_DOC/Provisioning/README.md](../../_DOC/Provisioning/README.md).
+- **BLE traffic monitor**: every write, read, notification and link event, shown as hex and decoded BulkXfer frames (provisioning's STATUS and RESULT decoded too). Traffic of the PC's own service is marked `PC service`. Turn it on or off with **View ▸ BLE Traffic**, the toolbar button or `Ctrl+T`. It captures nothing while it is off.
 
 ## Run
 
@@ -15,30 +16,41 @@ pip install -r requirements.txt
 python ble_host_gui.py
 ```
 
-Python 3.10 or later. The BulkXfer protocol code lives in [`bulkxfer_client.py`](bulkxfer_client.py), which is also a command-line client (`python bulkxfer_client.py --help`); keep it next to `ble_host_gui.py`.
+Python 3.10 or later; `requirements.txt` installs bleak (≥ 1, for the winrt 3.x packages) and cryptography. The BulkXfer protocol code lives in [`bulkxfer_client.py`](bulkxfer_client.py), which is also a command-line client (`python bulkxfer_client.py --help`), and [`bulkxfer_receiver.py`](bulkxfer_receiver.py) (the receiver role); keep both next to `ble_host_gui.py`.
 
 Typical session: **Scan**, select `BLE Bulk Transfer`, **Connect**, **Read Caps**, then on the Hex Upload tab **Browse…**, **Start Upload**. The board prints each segment on its serial terminal (921600 baud, RTS/CTS).
+
+Provisioning session: on the Provisioning tab **Create CA** once (or **Load** a folder; the default `~/.blehost/ca` holds the CA private key, keep it private), connect, **Get Status**, **Provision**. Headless: `python bulkxfer_client.py provision --name "BLE Bulk Transfer" [--ca DIR] [--out device.pem] [--negative]` (`--negative` wipes a device that is not fresh, sends the certificates it must reject and checks each answer, then provisions it) and `python bulkxfer_client.py deprovision --name "BLE Bulk Transfer"` (wipe).
+
+The PC's own BulkXfer service is published at start-up through WinRT's `GattServiceProvider` (Windows 10/11, adapter with the peripheral role; the tab says whether it is up). `bless` is not used: it cannot be installed next to bleak ≥ 1 on Python 3.12.
 
 **Base UUID** must match the firmware's `BaseUUIDs.h`. The default is the project base, `16a1-4812-af35-f3f29a92f6ca`. **Max segment** must not exceed the server's `DS_BUF_SIZE` (65536).
 
 ## Layout
 
 ```
-ble_host_gui.py          entry point; FEATURES lists the tabs
-bulkxfer_client.py       BulkXfer reference client (protocol + command line); imported by protocols/bulkxfer.py
+ble_host_gui.py          entry point; FEATURES lists the tabs; starts the PC GATT service
+bulkxfer_client.py       BulkXfer reference client (protocol + command line, incl. provision/deprovision); imported by protocols/bulkxfer.py
+bulkxfer_receiver.py     BulkXfer receiver role (protocol §7), transport independent
 blehost/
   context.py             AppContext: settings, event bus, asyncio runner, link, services
   core/
     async_runner.py      asyncio loop on a worker thread (all bleak calls run here)
     event_bus.py         thread-safe worker -> Tk messaging (LINK_STATE, LOG, TRAFFIC)
     ble_link.py          BleLink: the only bleak user; scan/connect/GATT, traffic capture
+    gatt_server.py       PcGattServer: the PC's BulkXfer service (WinRT) + receiver; the only WinRT GATT-server user
     traffic.py           TrafficEvent + TrafficTap
     decoders.py          characteristic names and payload decoders for the monitor
   protocols/
     bulkxfer.py          imports the reference client, frame decoder, BulkXferService
+    provisioning.py      provisioning appTypes, STATUS/RESULT codecs, ProvisioningSession (incl. deprovision)
+  pki/
+    authority.py         the CA: create/load, check a CSR, issue a device certificate
+    negative.py          certificates the device must reject (hardware tests)
   features/
     base.py              Feature base class (one tab each)
     hex_upload.py        Hex Upload tab
+    provisioning.py      Provisioning tab
   ui/
     main_window.py       window, menus, panes, status bar
     connection_panel.py  scan / connect / caps
@@ -57,11 +69,8 @@ Tk runs on the main thread. BLE work runs on an asyncio loop in a worker thread.
 4. Add the class to `FEATURES` in `ble_host_gui.py`.
 5. Test the codec and protocol logic, but not the Tk code, in `_TEST/python/`. The `conftest.py` there provides a fake GATT link and a scripted BulkXfer server, so no adapter is needed (see [_TEST/README.md](../../_TEST/README.md)).
 
-A connection-wide service, such as a shared protocol endpoint, registers `link.add_connect_hook()` / `add_disconnect_hook()` and goes in `ctx.services` (see `BulkXferService`).
+A connection-wide service, such as a shared protocol endpoint, registers `link.add_connect_hook()` / `add_disconnect_hook()` and goes in `ctx.services` (see `BulkXferService`, and `PcGattServer` for a service the PC hosts: `ctx.services["pc_server"].receiver` receives what the device sends).
 
 ## Planned
 
-OOB pairing, device provisioning (CSR → signed certificate over BLE), encrypted communication, and a PC-side BulkXfer Server. Known constraints:
-
-- bleak cannot host a GATT server, so the Server role needs another backend (for example `bless`). It will be a second link class next to `BleLink`.
-- bleak's `pair()` on Windows supports basic pairing only. OOB will likely need WinRT custom pairing inside `BleLink.pair()`, which is a stub for now.
+OOB pairing (phase 2 of certificate-based authentication) and encrypted communication. Known constraint: bleak's `pair()` on Windows supports basic pairing only. OOB will likely need WinRT custom pairing inside `BleLink.pair()`, which is a stub for now.

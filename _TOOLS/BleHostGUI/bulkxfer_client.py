@@ -9,16 +9,27 @@ Implements the Client role of BulkXfer protocol v2 on top of `bleak`:
   - receives ACK / NACK / END / ABORT and short messages as CTRL notifications
   - sends single-frame ("short") messages
 
-The PC cannot receive bulk data: in v2 the receiver must host the GATT server,
-and bleak has no GATT server, so device -> PC transfers are not possible.
+This client only sends. To receive (device -> PC), the receiver must host the
+GATT service and bleak cannot: bulkxfer_receiver.py is the receiver, behind the
+PC's own GATT service in blehost/core/gatt_server.py (Windows).
 
 Usage:
     pip install bleak
     python bulkxfer_client.py caps
     python bulkxfer_client.py hex app.hex --name "BLE Bulk Transfer"
     python bulkxfer_client.py hex app.hex --address AA:BB:CC:DD:EE:FF
+    python bulkxfer_client.py provision --name "BLE Bulk Transfer" [--ca DIR] [--out dev.pem]
+    python bulkxfer_client.py provision --negative --name "BLE Bulk Transfer"
+    python bulkxfer_client.py deprovision --name "BLE Bulk Transfer"
 
 hex is the upload the project firmware in _ASW accepts (_DOC/HexUpload/PROTOCOL.md).
+provision runs device provisioning (_DOC/Provisioning/PROTOCOL.md) with the CA
+in --ca (the GUI's default folder if omitted; created if it does not exist);
+it needs cryptography and Windows (the PC hosts a GATT service to receive the
+CSR, see blehost/core/gatt_server.py). Provisioning is one-time: a provisioned
+device refuses it until deprovision wipes its key, CSR and certificates (the
+device then makes a fresh key and CSR). provision --negative wipes the device
+first, sends every certificate it must reject, then provisions it.
 ping and send need a server that echoes shorts and accepts any appType; the
 project firmware rejects every appType except 0x10.
 
@@ -256,12 +267,129 @@ async def find_device(address, name):
     return dev
 
 
+async def provision_with_rejections(session, ca, validity_days):
+    """Provision the device and, on the way, send every certificate it must
+    reject, comparing each RESULT with the expected status. A provisioned device
+    refuses certificates, so it is wiped first (DEPROVISION) when needed; the
+    rejected cases run before the good CA and the good device certificate.
+    Returns (failures, Outcome)."""
+    from blehost.pki.negative import CA_CERT, DEV_CERT, negative_cases
+    from blehost.protocols.provisioning import (KEY_READY, Outcome, ProvisioningError,
+                                                status_name)
+
+    status = await session.get_status()
+    if status.state != KEY_READY:
+        print(f"- device is {status.state_name}: removing its provisioning")
+        await session.deprovision()
+    got = await session.fetch_and_sign(ca, validity_days)
+    issued = got.certificate
+
+    async def expect(case) -> bool:
+        try:
+            await session.send_certificate(case.app_type, case.der)
+            res = 0
+        except ProvisioningError as e:
+            if e.status is None:
+                raise
+            res = e.status
+        ok = res == case.expected
+        print(f"  {'ok  ' if ok else 'FAIL'} {case.name}: {status_name(res)}"
+              f"{'' if ok else f' (expected {status_name(case.expected)})'}")
+        return ok
+
+    cases = negative_cases(ca, got.csr)
+    failures = 0
+    for case in (c for c in cases if c.app_type == CA_CERT):
+        failures += not await expect(case)
+    await session.send_certificate(CA_CERT, ca.cert_der)
+    for case in (c for c in cases if c.app_type == DEV_CERT):
+        failures += not await expect(case)
+    await session.send_certificate(DEV_CERT, issued.der)
+    return failures, Outcome(got.status, got.csr, issued.certificate, issued.der, issued.serial_hex)
+
+
+async def provision(args):
+    """Device provisioning from the command line (the GUI's Provisioning tab, headless)."""
+    from bleak import BleakClient
+    from cryptography.hazmat.primitives import serialization
+
+    from blehost.core.gatt_server import PcGattServer
+    from blehost.pki.authority import DEFAULT_FOLDER, CaError, CertificateAuthority
+    from blehost.protocols.provisioning import ProvisioningError, ProvisioningSession
+
+    folder = args.ca or DEFAULT_FOLDER
+    try:
+        ca = (CertificateAuthority.load(folder) if CertificateAuthority.exists(folder)
+              else CertificateAuthority.create(folder))
+    except CaError as e:
+        sys.exit(f"CA: {e}")
+    print(f"CA {ca.subject} ({folder})")
+
+    # Publish the PC's service before connecting: the device discovers it on CSR_REQ
+    pc = PcGattServer(args.base, log=print)
+    try:
+        await pc.start()
+    except Exception as e:
+        sys.exit(f"PC BulkXfer service not available: {e}")
+
+    target = await find_device(args.address, args.name)
+    try:
+        async with BleakClient(target, disconnected_callback=lambda _c: pc.link_lost()) as client:
+            blk = BulkXferClient(client, args.base)
+            await client.start_notify(blk.ctrl_uuid, blk.on_notify)
+            session = ProvisioningSession(blk, pc.receiver, log=print, step=lambda t: print(f"- {t}"))
+            try:
+                if args.negative:
+                    failures, out = await provision_with_rejections(session, ca, args.validity)
+                    if failures:
+                        sys.exit(f"device verification: {failures} case(s) answered wrongly")
+                else:
+                    out = await session.provision(ca, args.validity)
+            except (ProvisioningError, ValueError) as e:
+                sys.exit(f"provisioning failed: {e}")
+    finally:
+        await pc.stop()
+    print(f"provisioned: serial {out.serial_hex}, {out.device_cert.subject.rfc4514_string()}")
+    if args.out:
+        with open(args.out, "wb") as f:
+            f.write(out.device_cert.public_bytes(serialization.Encoding.PEM))
+        print(f"device certificate written to {args.out}")
+
+
+async def deprovision(args):
+    """Wipe the device's provisioning (key, CSR, certificates); it makes a fresh
+    key and CSR and is back in KEY_READY."""
+    from bleak import BleakClient
+
+    from blehost.protocols.provisioning import ProvisioningError, ProvisioningSession
+
+    target = await find_device(args.address, args.name)
+    async with BleakClient(target) as client:
+        blk = BulkXferClient(client, args.base)
+        await client.start_notify(blk.ctrl_uuid, blk.on_notify)
+        session = ProvisioningSession(blk, None, log=print)
+        try:
+            await session.deprovision()
+            st = await session.get_status()
+        except ProvisioningError as e:
+            sys.exit(f"deprovisioning failed: {e}")
+    print(f"deprovisioned: device {st.state_name}, new CSR {st.csr_len} B, "
+          f"key SHA-256 {st.pubkey_sha256.hex()[:16]}...")
+
+
 async def main():
     from bleak import BleakClient
 
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("command", choices=["ping", "send", "caps", "hex"])
+    ap.add_argument("command", choices=["ping", "send", "caps", "hex", "provision", "deprovision"])
     ap.add_argument("arg", nargs="?", help="send: size in bytes (default 20000); hex: .hex file")
+    ap.add_argument("--ca", help="provision: CA folder (default: the GUI's)")
+    ap.add_argument("--validity", type=int, default=365, help="provision: device certificate days")
+    ap.add_argument("--out", help="provision: write the device certificate (PEM) here")
+    ap.add_argument("--negative", action="store_true",
+                    help="provision: wipe the device if needed, send the certificates it "
+                         "must reject (blehost/pki/negative.py) and check each RESULT, "
+                         "then provision it")
     ap.add_argument("--address")
     ap.add_argument("--name", default="BulkXfer")
     ap.add_argument("--base", default=PROJECT_BASE,
@@ -279,6 +407,13 @@ async def main():
         except (OSError, ValueError) as e:
             sys.exit(str(e))
         print(f"{args.arg}: {len(segments)} segment(s), {sum(len(d) for _, d in segments)} bytes")
+
+    if args.command == "provision":
+        await provision(args)
+        return
+    if args.command == "deprovision":
+        await deprovision(args)
+        return
 
     target = await find_device(args.address, args.name)
     async with BleakClient(target) as client:

@@ -57,6 +57,45 @@ def c_bytes(b: bytes, indent: str = "      ") -> str:
     return (",\n" + indent).join(rows)
 
 
+def c_array(name: str, len_macro: str, b: bytes) -> str:
+    """A const byte array (one dummy byte if b is empty: C has no empty arrays)."""
+    return (f"#define {len_macro} ({len(b)}U)\n"
+            f"static const uint8_t {name}[] =\n{{\n   {c_bytes(b or bytes(1), '   ')}\n}};\n")
+
+
+def emit_provisioning(p: dict, o: list) -> None:
+    """Device provisioning: appTypes, states, statuses, short frames and the CSR."""
+    o.append("/* ---- Device provisioning (_DOC/Provisioning/PROTOCOL.md) ---- */")
+    for group, prefix in (("app_types", "VEC_PROV_APP_"), ("states", "VEC_PROV_STATE_"),
+                          ("status", "VEC_PROV_ST_"), ("flags", "VEC_PROV_FLAG_")):
+        for name, val in p[group].items():
+            o.append(f"#define {prefix}{name} ({val}U)")
+    o.append(f"#define VEC_PROV_MAX_CERT_LEN ({p['max_cert_len']}U)\n")
+
+    o.append("typedef struct\n{\n   const char *cpt_name;\n   uint8_t u8_appType;\n"
+             "   uint8_t u8ar_wire[40];\n   uint8_t u8_wireLen;\n} ProvShortVector_T;\n")
+    o.append("static const ProvShortVector_T gstar_vecProvShorts[] =\n{")
+    for s in p["shorts"]:
+        wire = bytes.fromhex(s["hex"])
+        assert len(wire) <= 40 and wire[0] == len(wire) - 2 and wire[1] == s["app_type"], s["name"]
+        o.append(f"   {{ \"{s['name']}\", {s['app_type']}U,\n"
+                 f"      {{ {c_bytes(wire)} }}, {len(wire)}U }},")
+    o.append("};\n")
+
+    c = p["csr"]
+    o.append(f"#define VEC_CSR_SUBJ_CNT ({len(c['subject'])}U)")
+    o.append("static const char *const gcptar_vecCsrSubjName[] = { "
+             + ", ".join(f"\"{n}\"" for n, _ in c["subject"]) + " };")
+    o.append("static const char *const gcptar_vecCsrSubjValue[] = { "
+             + ", ".join(f"\"{val}\"" for _, val in c["subject"]) + " };\n")
+    for name, macro, key in (("gu8ar_vecCsrPubKey", "VEC_CSR_PUBKEY_LEN", "public_key"),
+                             ("gu8ar_vecCsrSki", "VEC_CSR_SKI_LEN", "ski_sha1"),
+                             ("gu8ar_vecCsrSig", "VEC_CSR_SIG_LEN", "signature_raw"),
+                             ("gu8ar_vecCsrTbs", "VEC_CSR_TBS_LEN", "tbs"),
+                             ("gu8ar_vecCsrDer", "VEC_CSR_DER_LEN", "der")):
+        o.append(c_array(name, macro, bytes.fromhex(c[key])))
+
+
 def main(json_path: str, root: str, out_path: str) -> None:
     with open(json_path) as f:
         v = json.load(f)
@@ -111,6 +150,8 @@ def main(json_path: str, root: str, out_path: str) -> None:
     o.append(f"#define VEC_HEX_START_IDX    ({start}U)")
     o.append(f"#define VEC_HEX_SEG_LINE     \"{hu['seg_line']}\"")
     o.append(f"static const uint8_t gu8ar_vecHexSeg[VEC_HEX_SEG_LEN] =\n{{\n   {c_bytes(data, '   ')}\n}};\n")
+
+    emit_provisioning(v["provisioning"], o)
     o.append("#endif /* WIRE_VECTORS_H */\n")
 
     os.makedirs(os.path.dirname(os.path.abspath(out_path)), exist_ok=True)

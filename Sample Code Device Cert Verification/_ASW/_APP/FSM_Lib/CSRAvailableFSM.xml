@@ -1,0 +1,49 @@
+<?xml version="1.0" ?>
+<FSMConfiguration generated_on="2025-09-17T10:09:43.537044Z">
+  <FSM name="CSRAvailable">
+    <ContextName>CSRAvailableContext_T</ContextName>
+    <States>
+      <State id="0">
+        <Name>SystemBoot_CSRAvailable</Name>
+        <Flags>0</Flags>
+        <Handler>SystemBoot_CSRAvailable_Handler</Handler>
+        <IsEntry>1</IsEntry>
+        <AllowedEvents/>
+      </State>
+      <State id="1">
+        <Name>ConnectionOpened_CSRAvailable</Name>
+        <Flags>0</Flags>
+        <Handler>ConnectionOpened_CSRAvailable_Handler</Handler>
+        <IsEntry>0</IsEntry>
+        <AllowedEvents/>
+      </State>
+      <State id="2">
+        <Name>GATTServerAttrValue_CSRAvailable</Name>
+        <Flags>0</Flags>
+        <Handler>GATTServerAttrValue_CSRAvailable_Handler</Handler>
+        <IsEntry>0</IsEntry>
+        <AllowedEvents/>
+      </State>
+      <State id="3">
+        <Name>ConnectionClosed_CSRAvailable</Name>
+        <Flags>0</Flags>
+        <Handler>ConnectionClosed_CSRAvailable_Handler</Handler>
+        <IsEntry>0</IsEntry>
+        <AllowedEvents/>
+      </State>
+      <State id="4">
+        <Name>Default_CSRAvailable</Name>
+        <Flags>0</Flags>
+        <Handler>Default_CSRAvailable_Handler</Handler>
+        <IsEntry>0</IsEntry>
+        <AllowedEvents/>
+      </State>
+    </States>
+    <Events>
+      <Event id="0">
+        <Name>ALL_EVENTS</Name>
+      </Event>
+    </Events>
+    <UnhandledHandler/>
+  </FSM>
+</FSMConfiguration>

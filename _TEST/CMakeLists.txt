@@ -127,6 +127,42 @@ add_unit_test(hex_upload_e2e
    INCLUDES ${DS_INCLUDES}
    DEFINES CONFIG_BT_GATT_CLIENT BLK_ENABLE_CLIENT=0)
 
+# ---- _ASW/_BLK_SVC -----------------------------------------------------------
+# The appType router, with the GATT service and the BulkXfer Server stubbed
+add_unit_test(bulk_router
+   SOURCES unit/BlkSvc/test_router.c
+   INCLUDES ${ASW_DIR}/_BLK_SVC ${BLK_INCLUDES})
+
+# ---- _ASW/_PROV --------------------------------------------------------------
+# Provisioning flow; key/CSR, certificate verification, PSA, router and the
+# BulkXfer roles are stubbed (verification itself needs mbedTLS: hil-tests)
+set(PROV_INCLUDES ${ASW_DIR}/_PROV ${ASW_DIR}/_BLK_SVC ${ASW_DIR}/_CSR ${ASW_DIR}/_DEVICE_CERT
+   ${BLK_INCLUDES})
+add_unit_test(prov
+   SOURCES unit/Prov/test_prov.c
+   INCLUDES ${PROV_INCLUDES}
+   DEFINES CONFIG_BT_GATT_CLIENT)
+
+# Provisioning end to end: real BulkXfer (both roles) + router + Prov.c over the
+# simulated link, with the peer as the provisioner
+add_unit_test(prov_e2e
+   SOURCES unit/Prov/test_prov_e2e.c ${BLK_DIR}/BulkXfer_Frame.c
+   INCLUDES ${PROV_INCLUDES}
+   DEFINES CONFIG_BT_GATT_CLIENT)
+
+# ---- _ASW/_DEVICE_CERT -------------------------------------------------------
+# Certificate storage (DeviceCert.c) against an in-memory PSA ITS
+add_unit_test(devicecert_store
+   SOURCES unit/DeviceCert/test_devicecert_store.c
+   INCLUDES ${ASW_DIR}/_DEVICE_CERT ${ASW_DIR}/_CSR)
+
+# ---- _ASW/_CSR ---------------------------------------------------------------
+# The sample's CSR DER encoder, with PSA stubbed by the "csr" vector of wire.json
+# (gen_csr_vector.py rebuilds this target to regenerate that vector)
+add_unit_test(csr_der
+   SOURCES unit/CSR/test_der.c
+   INCLUDES ${ASW_DIR}/_CSR)
+
 # ---- _ASW/_GENERIX -----------------------------------------------------------
 add_unit_test(helpers
    SOURCES unit/Helpers/test_helpers.c ${ASW_DIR}/_GENERIX/Helpers.c
@@ -138,10 +174,13 @@ set(CHECKED_HEADERS
    ${BLK_DIR}/BulkXfer_Frame.h ${BLK_DIR}/BulkXfer_Server.h ${BLK_DIR}/BulkXfer_Types.h
    ${BLK_DIR}/BulkXfer_Uuid.h
    ${GATT_CB_DIR}/GATT_CB_Types.h ${GATT_CB_DIR}/GATT_GenericCallbacks.h
-   ${ASW_DIR}/_BLK_SVC/BulkSvc.h ${ASW_DIR}/_DATA_STORE/DataStore.h
+   ${ASW_DIR}/_BLK_SVC/BulkSvc.h ${ASW_DIR}/_BLK_SVC/BulkRouter.h ${ASW_DIR}/_DATA_STORE/DataStore.h
+   ${ASW_DIR}/_PROV/Prov.h ${ASW_DIR}/_PROV/ProvButton.h
+   ${ASW_DIR}/_DEVICE_CERT/DeviceCert.h ${ASW_DIR}/_DEVICE_CERT/DeviceCert_Verify.h
+   ${ASW_DIR}/_DEVICE_CERT/DeviceCert_Types.h
    ${ASW_DIR}/_GENERIX/Helpers.h)
 set(HDR_INCLUDES "")
-foreach(DIR ${SHIM_DIR} ${BLK_INCLUDES} ${GATT_CB_DIR} ${DS_INCLUDES} ${ASW_DIR}/_GENERIX)
+foreach(DIR ${SHIM_DIR} ${BLK_INCLUDES} ${GATT_CB_DIR} ${DS_INCLUDES} ${PROV_INCLUDES} ${ASW_DIR}/_GENERIX)
    list(APPEND HDR_INCLUDES -I${DIR})
 endforeach()
 add_test(NAME header_hygiene

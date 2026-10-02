@@ -188,5 +188,33 @@ jobs:
         run: nrfutil device program --firmware fw/build_ci/merged.hex --options chip_erase_mode=ERASE_ALL
       - name: Upload AA00000100.hex over BLE
         run: python _TOOLS/BleHostGUI/bulkxfer_client.py hex AA00000100.hex --name "BLE Bulk Transfer"
+      # Device provisioning (_DOC/Provisioning/PROTOCOL.md): the runner hosts the
+      # PC-side BulkXfer service (Windows), acts as the CA and provisions the DK.
+      # The chip erase above makes the device generate a fresh key and CSR.
+      # --negative sends every certificate the device must reject
+      # (blehost/pki/negative.py) before the good CA and device certificate (a
+      # provisioned device refuses certificates; a non-fresh one is wiped first)
+      # and fails on any wrong RESULT: this is where
+      # _ASW/_DEVICE_CERT/DeviceCert_Verify.c (mbedTLS + PSA) gets tested.
+      - name: Provision the device and test its certificate verification
+        run: python _TOOLS/BleHostGUI/bulkxfer_client.py provision --negative --name "BLE Bulk Transfer" --ca ${{ runner.temp }}/ca --out ${{ runner.temp }}/device.pem
+      - name: Check the issued certificate against the CA
+        run: openssl verify -CAfile ${{ runner.temp }}/ca/ca_cert.pem ${{ runner.temp }}/device.pem
+      # One-time provisioning: a provisioned device refuses another run, so the
+      # second provision must fail; DEPROVISION wipes the ITS credentials and a
+      # new key and CSR make it provisionable again.
+      - name: A provisioned device refuses another provisioning
+        shell: pwsh
+        run: |
+          python _TOOLS/BleHostGUI/bulkxfer_client.py provision --name "BLE Bulk Transfer" --ca ${{ runner.temp }}/ca
+          if ($LASTEXITCODE -eq 0) { throw "provisioned twice" } else { $global:LASTEXITCODE = 0 }
+      - name: Wipe the provisioning and provision again
+        shell: pwsh
+        run: |
+          python _TOOLS/BleHostGUI/bulkxfer_client.py deprovision --name "BLE Bulk Transfer"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python _TOOLS/BleHostGUI/bulkxfer_client.py provision --name "BLE Bulk Transfer" --ca ${{ runner.temp }}/ca
       # Next step when it exists: capture the UART and check the
-      # "SEG addr=0x00000000 len=6560 crc=0xe2e72827" line.
+      # "SEG addr=0x00000000 len=6560 crc=0xe2e72827" line, the two PEM blocks,
+      # "device provisioned", and after a reset "provisioned: stored
+      # certificates verified".
