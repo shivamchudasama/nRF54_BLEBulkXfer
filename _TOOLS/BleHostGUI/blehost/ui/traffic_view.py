@@ -7,6 +7,7 @@ from tkinter import filedialog, ttk
 
 from ..core.event_bus import TRAFFIC
 from ..core.traffic import INFO, RX, TX
+from . import theme as th
 
 MAX_EVENTS = 5000          # history kept for re-filtering; older lines are dropped
 FLUSH_MS = 100
@@ -16,46 +17,51 @@ FORMATS = ("hex + decoded", "hex", "decoded")
 
 class TrafficView(ttk.Frame):
     def __init__(self, parent, ctx):
-        super().__init__(parent)
+        super().__init__(parent, style="Card.TFrame", padding=(12, 8))
         self.ctx = ctx
+        theme = th.of(ctx)
         self._events = deque(maxlen=MAX_EVENTS)
         self._pending = deque(maxlen=MAX_EVENTS)
         self._flush_scheduled = False
 
-        bar = ttk.Frame(self, padding=(4, 2))
+        bar = ttk.Frame(self)
         bar.pack(fill="x")
-        ttk.Label(bar, text="BLE traffic", font=("Segoe UI", 9, "bold")).pack(side="left", padx=(0, 8))
+        ttk.Label(bar, text="BLE traffic", style="Strong.TLabel").pack(side="left", padx=(0, 10))
         self.paused = tk.BooleanVar(value=False)
-        ttk.Checkbutton(bar, text="Pause", variable=self.paused, style="Toolbutton",
+        ttk.Checkbutton(bar, text="Pause", variable=self.paused, style="Toggle.TButton",
                         command=self._schedule_flush).pack(side="left", padx=2)
         ttk.Button(bar, text="Clear", command=self.clear).pack(side="left", padx=2)
         ttk.Button(bar, text="Save…", command=self._save).pack(side="left", padx=2)
-        self.autoscroll = tk.BooleanVar(value=True)
-        ttk.Checkbutton(bar, text="Autoscroll", variable=self.autoscroll).pack(side="left", padx=8)
         self.fmt = tk.StringVar(value=FORMATS[0])
         cb = ttk.Combobox(bar, textvariable=self.fmt, values=FORMATS, state="readonly", width=14)
-        cb.pack(side="left", padx=2)
+        cb.pack(side="right", padx=(6, 0))
         cb.bind("<<ComboboxSelected>>", lambda e: self._rerender())
+        ttk.Label(bar, text="Format", style="Caption.TLabel").pack(side="right")
+        self.autoscroll = tk.BooleanVar(value=True)
+        ttk.Checkbutton(bar, text="Autoscroll", variable=self.autoscroll,
+                        style="Switch.TCheckbutton").pack(side="right", padx=12)
 
-        flt = ttk.Frame(self, padding=(4, 0, 4, 2))
-        flt.pack(fill="x")
-        ttk.Label(flt, text="Show").pack(side="left", padx=(0, 4))
+        flt = ttk.Frame(self)
+        flt.pack(fill="x", pady=(6, 6))
+        ttk.Label(flt, text="Show", style="Caption.TLabel").pack(side="left", padx=(0, 6))
         self.show_tx = tk.BooleanVar(value=True)
         self.show_rx = tk.BooleanVar(value=True)
         self.show_info = tk.BooleanVar(value=True)
         self.hide_data = tk.BooleanVar(value=False)
         self.hide_ack = tk.BooleanVar(value=False)
         self.full = tk.BooleanVar(value=False)
-        for text, var in (("TX", self.show_tx), ("RX", self.show_rx), ("Events", self.show_info),
-                          ("Hide DATA", self.hide_data), ("Hide ACK", self.hide_ack),
-                          ("Full payload", self.full)):
-            ttk.Checkbutton(flt, text=text, variable=var, command=self._rerender).pack(side="left", padx=2)
+        for i, (text, var) in enumerate((("TX", self.show_tx), ("RX", self.show_rx), ("Events", self.show_info),
+                                         ("Hide DATA", self.hide_data), ("Hide ACK", self.hide_ack),
+                                         ("Full payload", self.full))):
+            if i == 3:
+                ttk.Separator(flt, orient="vertical").pack(side="left", fill="y", padx=8, pady=4)
+            ttk.Checkbutton(flt, text=text, variable=var, style="Toggle.TButton",
+                            command=self._rerender).pack(side="left", padx=2)
 
         body = ttk.Frame(self)
         body.pack(fill="both", expand=True)
-        self.text = tk.Text(body, height=10, wrap="none", font=("Consolas", 9),
-                            background="#1e1e1e", foreground="#d4d4d4", insertbackground="#d4d4d4",
-                            undo=False)
+        self.text = tk.Text(body, height=10, wrap="none", font=theme.fonts["mono"],
+                            padx=8, pady=6, undo=False)
         ys = ttk.Scrollbar(body, orient="vertical", command=self.text.yview)
         xs = ttk.Scrollbar(body, orient="horizontal", command=self.text.xview)
         self.text.configure(yscrollcommand=ys.set, xscrollcommand=xs.set)
@@ -64,10 +70,11 @@ class TrafficView(ttk.Frame):
         xs.grid(row=1, column=0, sticky="ew")
         body.rowconfigure(0, weight=1)
         body.columnconfigure(0, weight=1)
-        self.text.tag_configure(TX, foreground="#4fc1ff")
-        self.text.tag_configure(RX, foreground="#b5cea8")
-        self.text.tag_configure(INFO, foreground="#9d9d9d")
+        self.text.tag_configure(TX, foreground=th.TERMINAL["tx"])
+        self.text.tag_configure(RX, foreground=th.TERMINAL["rx"])
+        self.text.tag_configure(INFO, foreground=th.TERMINAL["info"])
         self.text.bind("<Key>", self._readonly_key)
+        theme.on_change(lambda p: th.style_text(self.text, p, terminal=True))
 
         ctx.bus.subscribe(TRAFFIC, self._on_event)
 

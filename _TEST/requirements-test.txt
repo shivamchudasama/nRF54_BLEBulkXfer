@@ -4,3 +4,5 @@ pytest-cov>=5
 gcovr>=7
 # The provisioning CA (_TOOLS/BleHostGUI/blehost/pki) and its tests; same pin as the GUI
 cryptography>=43
+# The GUI theme (_TOOLS/BleHostGUI/blehost/ui/theme.py) and its tests; same pin as the GUI
+sv-ttk>=2.6

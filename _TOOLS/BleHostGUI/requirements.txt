@@ -3,3 +3,5 @@
 bleak>=1.0
 # Device provisioning: the CA (X.509, ECDSA P-256)
 cryptography>=43
+# Look and feel: Windows 11 (Sun Valley) ttk theme, light and dark (blehost/ui/theme.py)
+sv-ttk>=2.6

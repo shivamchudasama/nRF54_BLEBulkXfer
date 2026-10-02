@@ -90,13 +90,13 @@ This is the Silicon Labs flow of AN1396 §3 (`create_authority_certificate.py` a
 
 **GUI**, Provisioning tab:
 
-1. **Create CA**, or **Load** an existing folder. The default folder is `~/.blehost/ca`, which holds the CA private key. Keep it private and never commit it.
-2. Connect to the device.
-3. **Get Status**, then **Provision**. The step line and the log show progress. The board logs and stores both certificates. A device that is already provisioned is refused with a message.
+1. In the Certificate Authority card, **Create CA** (under *Create a new CA*, open when no CA is loaded), or **Load** an existing folder. The default folder is `~/.blehost/ca`, which holds the CA private key. Keep it private and never commit it.
+2. Connect to the device from the sidebar.
+3. In the Device card, **Get Status**, then **Provision**. A pill shows the device's state, the step list ticks off each step of the sequence (a failed step is crossed), and the provisioning log shows the details. The board logs and stores both certificates. A device that is already provisioned is refused with a message.
 4. **Save device certificate…** writes the device certificate as PEM or DER.
 5. **Remove provisioning…** (after a confirmation) wipes the device: it gets a new key and CSR and can be provisioned again.
 
-The tab shows whether the PC BulkXfer service is published. Without it the CSR cannot be received.
+A pill at the top of the tab shows whether the PC BulkXfer service is published and whether the device has subscribed. Without it the CSR cannot be received.
 
 **Command line:** `python bulkxfer_client.py provision --name "BLE Bulk Transfer" [--ca DIR] [--out device.pem] [--negative]`, and `python bulkxfer_client.py deprovision --name "BLE Bulk Transfer"` to wipe. `--negative` wipes a device that is not fresh, sends the rejected cases before the good CA and device certificate, and leaves the device provisioned.
 

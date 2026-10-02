@@ -8,6 +8,8 @@ from tkinter import filedialog, messagebox, ttk
 
 from ..protocols import bulkxfer
 from ..protocols.bulkxfer import bx
+from ..ui import theme as th
+from ..ui.widgets import Pill, StatTile, card
 from .base import Feature
 
 
@@ -22,6 +24,26 @@ bulkxfer.register_app_type(bx.APP_TYPE_SEGMENT, "SEGMENT")
 bulkxfer.register_app_type(bx.APP_TYPE_RESULT, "RESULT", _result)
 bulkxfer.register_app_type(bx.APP_TYPE_STORED, "STORED", _result)
 
+# Upload phase -> (pill text, tone)
+PHASE_PILL = {
+    "nofile": ("No file", "idle"), "error": ("Parse error", "err"), "ready": ("Ready", "ok"),
+    "uploading": ("Uploading", "info"), "done": ("Done", "ok"),
+    "failed": ("Failed", "err"), "aborted": ("Aborted", "warn"),
+}
+
+
+def status_tone(text: str) -> str:
+    """Theme tone of a segment's status text."""
+    if text.startswith("stored"):
+        return "ok"
+    if text.startswith("sending"):
+        return "info"
+    if text.startswith("aborted"):
+        return "warn"
+    if text.startswith(("failed", "STORED mismatch")):
+        return "err"
+    return "idle"
+
 
 class HexUploadFeature(Feature):
     title = "Hex Upload"
@@ -35,50 +57,78 @@ class HexUploadFeature(Feature):
 
     # ---- UI ----------------------------------------------------------------
     def build(self, parent):
-        f = ttk.Frame(parent, padding=8)
-        f.columnconfigure(1, weight=1)
-        f.rowconfigure(3, weight=1)
+        theme = th.of(self.ctx)
+        f = ttk.Frame(parent, padding=(12, 12, 12, 10))
 
-        ttk.Label(f, text="Hex file").grid(row=0, column=0, sticky="w")
+        filec, _ = card(f, "Hex file")
+        filec.pack(fill="x")
+        row = ttk.Frame(filec)
+        row.pack(fill="x")
         self.path_var = tk.StringVar()
-        ttk.Entry(f, textvariable=self.path_var, state="readonly").grid(row=0, column=1, sticky="ew", padx=4)
-        self.browse_btn = ttk.Button(f, text="Browse…", command=self._browse)
-        self.browse_btn.grid(row=0, column=2)
-
-        opt = ttk.Frame(f)
-        opt.grid(row=1, column=0, columnspan=3, sticky="ew", pady=(6, 0))
+        ttk.Entry(row, textvariable=self.path_var, state="readonly").pack(side="left", fill="x", expand=True)
+        self.browse_btn = ttk.Button(row, text="Browse…", command=self._browse)
+        self.browse_btn.pack(side="left", padx=(6, 0))
+        opt = ttk.Frame(filec)
+        opt.pack(fill="x", pady=(8, 0))
         ttk.Label(opt, text="Max segment (bytes)").pack(side="left")
         self.seg_max_var = tk.StringVar(value=str(bx.SEG_MAX))
         self.seg_max_entry = ttk.Entry(opt, textvariable=self.seg_max_var, width=8)
-        self.seg_max_entry.pack(side="left", padx=4)
+        self.seg_max_entry.pack(side="left", padx=6)
         self.seg_max_entry.bind("<Return>", lambda e: self._load())
         self.seg_max_entry.bind("<FocusOut>", lambda e: self._load(quiet=True))
         self.summary_var = tk.StringVar(value="No file loaded")
-        ttk.Label(opt, textvariable=self.summary_var).pack(side="left", padx=12)
+        ttk.Label(opt, textvariable=self.summary_var, style="Caption.TLabel").pack(side="left", padx=12)
 
-        btns = ttk.Frame(f)
-        btns.grid(row=2, column=0, columnspan=3, sticky="ew", pady=6)
-        self.start_btn = ttk.Button(btns, text="Start Upload", command=self._start)
-        self.start_btn.pack(side="left")
-        self.abort_btn = ttk.Button(btns, text="Abort", command=self.cancel)
-        self.abort_btn.pack(side="left", padx=4)
-        self.progress = ttk.Progressbar(btns, mode="determinate", length=240)
-        self.progress.pack(side="left", padx=8, fill="x", expand=True)
+        tiles = ttk.Frame(f)
+        tiles.pack(fill="x", pady=10)
+        self.tile_segments = StatTile(tiles, "Segments", "–", "no file")
+        self.tile_size = StatTile(tiles, "Size", "–", "")
+        self.tile_sent = StatTile(tiles, "Sent", "–", "not started")
+        self.tile_rate = StatTile(tiles, "Rate", "–", "")
+        for i, t in enumerate((self.tile_segments, self.tile_size, self.tile_sent, self.tile_rate)):
+            t.grid(row=0, column=i, sticky="ew", padx=(0 if i == 0 else 10, 0))
+            tiles.columnconfigure(i, weight=1, uniform="tile")
+
+        up, head = card(f, "Upload")
+        up.pack(fill="x")
+        self.state_pill = Pill(head, theme, "No file", "idle")
+        self.state_pill.grid(row=0, column=2, sticky="e")
+        prow = ttk.Frame(up)
+        prow.pack(fill="x")
+        self.progress = ttk.Progressbar(prow, mode="determinate", length=240)
+        self.progress.pack(side="left", fill="x", expand=True)
         self.progress_var = tk.StringVar()
-        ttk.Label(btns, textvariable=self.progress_var, width=38).pack(side="left")
+        ttk.Label(prow, textvariable=self.progress_var, width=38, anchor="e",
+                  style="MonoCaption.TLabel").pack(side="left", padx=(10, 0))
+        btns = ttk.Frame(up)
+        btns.pack(fill="x", pady=(10, 0))
+        self.start_btn = ttk.Button(btns, text="Start Upload", style="Accent.TButton", command=self._start)
+        self.start_btn.pack(side="left")
+        self.abort_btn = ttk.Button(btns, text="Abort", style="Danger.TButton", command=self.cancel)
+        self.abort_btn.pack(side="left", padx=6)
 
+        seg, _ = card(f, "Segments")
+        seg.pack(fill="both", expand=True, pady=(10, 0))
+        body = ttk.Frame(seg)
+        body.pack(fill="both", expand=True)
         cols = ("addr", "len", "status")
-        self.tree = ttk.Treeview(f, columns=cols, show="headings", height=6)
-        for c, text, w in (("addr", "Address", 110), ("len", "Length", 90), ("status", "Status", 320)):
+        self.tree = ttk.Treeview(body, columns=cols, show="headings", height=4)
+        for c, text, w in (("addr", "Address", 120), ("len", "Length", 90), ("status", "Status", 320)):
             self.tree.heading(c, text=text, anchor="w")
             self.tree.column(c, width=w, anchor="w", stretch=(c == "status"))
-        self.tree.grid(row=3, column=0, columnspan=3, sticky="nsew")
-        sb = ttk.Scrollbar(f, orient="vertical", command=self.tree.yview)
-        sb.grid(row=3, column=3, sticky="ns")
+        self.tree.pack(side="left", fill="both", expand=True)
+        sb = ttk.Scrollbar(body, orient="vertical", command=self.tree.yview)
+        sb.pack(side="right", fill="y")
         self.tree.configure(yscrollcommand=sb.set)
 
+        self._phase = "nofile"
+        theme.on_change(self._recolour)
         self._update_buttons()
         return f
+
+    def _recolour(self, p):
+        for tone in th.TONES:
+            self.tree.tag_configure(tone, foreground=p[tone][0])
 
     def _update_buttons(self):
         busy = self.busy
@@ -87,6 +137,24 @@ class HexUploadFeature(Feature):
         self.abort_btn.state(["!disabled"] if busy else ["disabled"])
         for w in (self.browse_btn, self.seg_max_entry):
             w.state(["disabled"] if busy else ["!disabled"])
+        self._show_phase()
+
+    # ---- display (tiles, pill) ----------------------------------------------
+    def _show_phase(self, phase: str = None):
+        if phase:
+            self._phase = phase
+        ph = self._phase
+        if ph == "ready" and not self.ctx.link.connected:
+            self.state_pill.set("Waiting for link", "warn")
+        else:
+            self.state_pill.set(*PHASE_PILL[ph])
+
+    def _show_loaded(self, path, total):
+        n = len(self.segments)
+        self.tile_segments.set(str(n), "ready")
+        self.tile_size.set(f"{total:,} B", os.path.basename(path))
+        self.tile_sent.set("–", "not started")
+        self.tile_rate.set("–", "")
 
     # ---- file --------------------------------------------------------------
     def _browse(self):
@@ -119,6 +187,8 @@ class HexUploadFeature(Feature):
             self.segments, self._parsed = [], None
             self.summary_var.set("Parse error")
             self.tree.delete(*self.tree.get_children())
+            self.tile_segments.set("–", "parse error")
+            self._phase = "error"
             self._update_buttons()
             if not quiet:
                 messagebox.showerror("Hex file", str(e))
@@ -129,9 +199,12 @@ class HexUploadFeature(Feature):
         self.summary_var.set(f"{len(self.segments)} segment(s), {total} bytes")
         self.tree.delete(*self.tree.get_children())
         for i, (addr, data) in enumerate(self.segments):
-            self.tree.insert("", "end", iid=str(i), values=(f"0x{addr:08X}", len(data), "pending"))
+            self.tree.insert("", "end", iid=str(i), values=(f"0x{addr:08X}", len(data), "pending"),
+                             tags=("idle",))
         self.progress.configure(maximum=max(total, 1), value=0)
         self.progress_var.set("")
+        self._show_loaded(path, total)
+        self._phase = "ready"
         self.ctx.log(f"hex: {os.path.basename(path)}: {len(self.segments)} segment(s), {total} bytes")
         self._update_buttons()
         return True
@@ -139,6 +212,7 @@ class HexUploadFeature(Feature):
     def _set_status(self, i: int, text: str):
         if self.tree.exists(str(i)):
             self.tree.set(str(i), "status", text)
+            self.tree.item(str(i), tags=(status_tone(text),))
             self.tree.see(str(i))
 
     # ---- upload ------------------------------------------------------------
@@ -149,6 +223,7 @@ class HexUploadFeature(Feature):
             self._set_status(i, "pending")
         self.progress.configure(value=0)
         self._t_start = time.perf_counter()
+        self._phase = "uploading"
         self._future = self.ctx.run(self._upload(list(self.segments)),
                                     on_done=self._finished, on_error=self._failed,
                                     on_cancel=self._aborted)
@@ -196,11 +271,19 @@ class HexUploadFeature(Feature):
         self.progress.configure(maximum=max(total, 1), value=done)
         r = f", {rate * 8 / 1000:.0f} kbit/s" if rate else ""
         self.progress_var.set(f"segment {i + 1}/{len(self.segments)}  {done}/{total} B{r}")
+        self.tile_segments.set(str(len(self.segments)), f"segment {i + 1} of {len(self.segments)}")
+        self.tile_sent.set(f"{done:,} B", f"{100 * done // max(total, 1)} %")
+        if rate:
+            self.tile_rate.set(f"{rate * 8 / 1000:.0f} kbit/s", "current segment")
 
     def _finished(self, n):
         self._future = None
         dt = time.perf_counter() - self._t_start
         self.progress_var.set(f"done: {n} segment(s) in {dt:.1f} s")
+        total = sum(len(d) for _, d in self.segments)
+        self.tile_segments.set(str(n), "all stored")
+        self.tile_rate.set(f"{total * 8 / max(dt, 1e-3) / 1000:.0f} kbit/s", f"average, {dt:.1f} s")
+        self._phase = "done"
         self.ctx.log(f"hex: upload complete, {n} segment(s) in {dt:.1f} s")
         self._update_buttons()
 
@@ -210,6 +293,7 @@ class HexUploadFeature(Feature):
             self._set_status(self._current, f"failed: {exc}")
         self._current = None
         self.progress_var.set("failed")
+        self._phase = "failed"
         self.ctx.log(f"hex: upload failed: {exc}", "error")
         self._update_buttons()
 
@@ -219,6 +303,7 @@ class HexUploadFeature(Feature):
             self._set_status(self._current, "aborted")
         self._current = None
         self.progress_var.set("aborted")
+        self._phase = "aborted"
         self.ctx.log("hex: upload aborted", "warn")
         self._update_buttons()
 

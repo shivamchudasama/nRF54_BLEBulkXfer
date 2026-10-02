@@ -18,7 +18,38 @@ from cryptography.hazmat.primitives import serialization
 from ..core.gatt_server import PcGattServer
 from ..pki.authority import DEFAULT_FOLDER, CaError, CertificateAuthority
 from ..protocols import bulkxfer, provisioning as prov
+from ..ui import theme as th
+from ..ui.widgets import Disclosure, Pill, Stepper, card
 from .base import Feature
+
+# The steps ProvisioningSession.provision() reports, and their labels in the list
+STEP_TEXTS = ("reading device status", "requesting the CSR", "signing the CSR",
+              "sending the CA certificate", "sending the device certificate", "provisioned")
+STEPS = ("Read device status", "Request the CSR", "Sign the CSR",
+         "Send the CA certificate", "Send the device certificate", "Provisioned")
+
+# Device state (DeviceStatus.state_name) -> pill tone
+STATE_TONE = {"PROVISIONED": "ok", "KEY_READY": "info", "CA_OK": "info", "NO_KEY": "warn"}
+
+
+def step_position(text: str, current: int = 0):
+    """(index, state) of the step list for the tab's step text."""
+    if not text:
+        return 0, "idle"
+    if text in STEP_TEXTS:
+        i = STEP_TEXTS.index(text)
+        return i, "done" if i == len(STEP_TEXTS) - 1 else "running"
+    if text in ("failed", "aborted"):
+        return current, text
+    return current, "running"
+
+
+def device_pill(text: str):
+    """(pill text, tone) for the tab's "Device: ..." line."""
+    state = text.removeprefix("Device:").strip().split(",")[0].strip()
+    if not state or state == "-":
+        return "Unknown", "idle"
+    return state, STATE_TONE.get(state, "idle")
 
 
 class ProvisioningFeature(Feature):
@@ -32,74 +63,137 @@ class ProvisioningFeature(Feature):
 
     # ---- UI ----------------------------------------------------------------
     def build(self, parent):
-        f = ttk.Frame(parent, padding=8)
-        f.columnconfigure(1, weight=1)
-        f.rowconfigure(6, weight=1)
+        theme = th.of(self.ctx)
+        f = ttk.Frame(parent, padding=(12, 12, 12, 10))
+
+        # PC service (the device sends the CSR to it)
+        pcc, _ = card(f, None, padding=(14, 8))
+        pcc.pack(fill="x")
+        ttk.Label(pcc, text="PC BulkXfer service", style="Strong.TLabel").pack(side="left")
+        self.pc_pill = Pill(pcc, theme, "starting", "idle")
+        self.pc_pill.pack(side="left", padx=10)
+        self.pc_var = tk.StringVar()
+        self._pc_note = tk.StringVar()
+        ttk.Label(pcc, textvariable=self._pc_note, style="Caption.TLabel").pack(side="left")
+
+        cols = ttk.Frame(f)
+        cols.pack(fill="both", expand=True, pady=(10, 0))
+        cols.columnconfigure((0, 1), weight=1, uniform="col")
+        cols.rowconfigure(0, weight=1)
 
         # Certificate Authority
-        ca = ttk.LabelFrame(f, text="Certificate Authority (this PC)", padding=6)
-        ca.grid(row=0, column=0, columnspan=3, sticky="ew")
-        ca.columnconfigure(1, weight=1)
-        ttk.Label(ca, text="Folder").grid(row=0, column=0, sticky="w")
+        ca, head = card(cols, "Certificate Authority (this PC)")
+        ca.grid(row=0, column=0, sticky="nsew", padx=(0, 5))
+        self.ca_pill = Pill(head, theme, "No CA", "warn")
+        self.ca_pill.grid(row=0, column=2, sticky="e")
+        self.ca_var = tk.StringVar(value="No CA loaded")
+        self._ca_label = ttk.Label(ca, textvariable=self.ca_var, wraplength=360, justify="left")
+        self._ca_label.pack(anchor="w", fill="x")
+        ca.bind("<Configure>", lambda e: self._ca_label.configure(wraplength=max(200, e.width - 40)))
+        ttk.Label(ca, text="Folder", style="Caption.TLabel").pack(anchor="w", pady=(10, 2))
+        row = ttk.Frame(ca)
+        row.pack(fill="x")
         self.folder_var = tk.StringVar(value=DEFAULT_FOLDER)
-        ttk.Entry(ca, textvariable=self.folder_var).grid(row=0, column=1, sticky="ew", padx=4)
-        ttk.Button(ca, text="Browse…", command=self._browse).grid(row=0, column=2)
-        ttk.Button(ca, text="Load", command=self._load_ca).grid(row=0, column=3, padx=(4, 0))
+        ttk.Entry(row, textvariable=self.folder_var).pack(side="left", fill="x", expand=True)
+        ttk.Button(row, text="Browse…", command=self._browse).pack(side="left", padx=(6, 0))
+        ttk.Button(row, text="Load", command=self._load_ca).pack(side="left", padx=(6, 0))
 
-        new = ttk.Frame(ca)
-        new.grid(row=1, column=0, columnspan=4, sticky="ew", pady=(6, 0))
+        self._new_ca = Disclosure(ca, "Create a new CA")
+        self._new_ca.pack(fill="x", pady=(10, 0))
+        new = self._new_ca.body
+        new.columnconfigure(1, weight=1)
         self.cn_var = tk.StringVar(value="BLE Host Provisioning CA")
         self.o_var = tk.StringVar(value="Bajaj Auto Technology Limited")
         self.c_var = tk.StringVar(value="IN")
         self.ca_days_var = tk.StringVar(value="3650")
-        for label, var, width in (("CN", self.cn_var, 26), ("O", self.o_var, 26), ("C", self.c_var, 4),
-                                  ("Valid (days)", self.ca_days_var, 6)):
-            ttk.Label(new, text=label).pack(side="left", padx=(0, 2))
-            ttk.Entry(new, textvariable=var, width=width).pack(side="left", padx=(0, 8))
-        ttk.Button(new, text="Create CA", command=self._create_ca).pack(side="left")
-
-        self.ca_var = tk.StringVar(value="No CA loaded")
-        ttk.Label(ca, textvariable=self.ca_var, wraplength=700, justify="left").grid(
-            row=2, column=0, columnspan=4, sticky="w", pady=(6, 0))
-
-        # PC service (the device sends the CSR to it)
-        self.pc_var = tk.StringVar()
-        ttk.Label(f, textvariable=self.pc_var).grid(row=1, column=0, columnspan=3, sticky="w", pady=(6, 0))
+        for i, (label, var, width) in enumerate((("CN", self.cn_var, 26), ("O", self.o_var, 26),
+                                                 ("C", self.c_var, 4), ("Valid (days)", self.ca_days_var, 6))):
+            ttk.Label(new, text=label).grid(row=i, column=0, sticky="w", pady=2)
+            ttk.Entry(new, textvariable=var, width=width).grid(row=i, column=1, sticky="w" if width < 10 else "ew",
+                                                               padx=(8, 0), pady=2)
+        ttk.Button(new, text="Create CA", command=self._create_ca).grid(row=4, column=1, sticky="w",
+                                                                        padx=(8, 0), pady=(6, 0))
 
         # Device
-        btns = ttk.Frame(f)
-        btns.grid(row=2, column=0, columnspan=3, sticky="ew", pady=6)
+        dev, head = card(cols, "Device")
+        dev.grid(row=0, column=1, sticky="nsew", padx=(5, 0))
+        self.dev_pill = Pill(head, theme, "Unknown", "idle")
+        self.dev_pill.grid(row=0, column=2, sticky="e")
+        self.dev_var = tk.StringVar(value="Device: -")
+        self._dev_label = ttk.Label(dev, textvariable=self.dev_var, style="Caption.TLabel",
+                                    wraplength=360, justify="left")
+        self._dev_label.pack(anchor="w", fill="x")
+        dev.bind("<Configure>", lambda e: self._dev_label.configure(wraplength=max(200, e.width - 40)))
+        self.stepper = Stepper(dev, theme, STEPS)
+        self.stepper.pack(anchor="w", fill="x", pady=(10, 4))
+        self.step_var = tk.StringVar()
+        ttk.Label(dev, textvariable=self.step_var, style="Caption.TLabel").pack(anchor="w")
+
+        days = ttk.Frame(dev)
+        days.pack(fill="x", pady=(10, 0))
+        ttk.Label(days, text="Device certificate valid (days)").pack(side="left")
+        self.dev_days_var = tk.StringVar(value="365")
+        ttk.Entry(days, textvariable=self.dev_days_var, width=6).pack(side="left", padx=(8, 0))
+        btns = ttk.Frame(dev)
+        btns.pack(fill="x", pady=(8, 0))
+        self.prov_btn = ttk.Button(btns, text="Provision", style="Accent.TButton", command=self._provision)
+        self.prov_btn.pack(side="left")
         self.status_btn = ttk.Button(btns, text="Get Status", command=self._get_status)
-        self.status_btn.pack(side="left")
-        self.prov_btn = ttk.Button(btns, text="Provision", command=self._provision)
-        self.prov_btn.pack(side="left", padx=4)
+        self.status_btn.pack(side="left", padx=6)
         self.abort_btn = ttk.Button(btns, text="Abort", command=self.cancel)
         self.abort_btn.pack(side="left")
-        self.deprov_btn = ttk.Button(btns, text="Remove provisioning…", command=self._deprovision)
-        self.deprov_btn.pack(side="left", padx=4)
-        ttk.Label(btns, text="Device cert valid (days)").pack(side="left", padx=(12, 2))
-        self.dev_days_var = tk.StringVar(value="365")
-        ttk.Entry(btns, textvariable=self.dev_days_var, width=6).pack(side="left")
-        self.save_btn = ttk.Button(btns, text="Save device certificate…", command=self._save_cert)
-        self.save_btn.pack(side="right")
+        btns2 = ttk.Frame(dev)
+        btns2.pack(fill="x", pady=(8, 0))
+        btns2.columnconfigure((0, 1), weight=1, uniform="b")
+        self.save_btn = ttk.Button(btns2, text="Save device certificate…", command=self._save_cert)
+        self.save_btn.grid(row=0, column=0, sticky="ew", padx=(0, 3))
+        self.deprov_btn = ttk.Button(btns2, text="Remove provisioning…", style="Danger.TButton",
+                                     command=self._deprovision)
+        self.deprov_btn.grid(row=0, column=1, sticky="ew", padx=(3, 0))
 
-        self.dev_var = tk.StringVar(value="Device: -")
-        ttk.Label(f, textvariable=self.dev_var).grid(row=3, column=0, columnspan=3, sticky="w")
-        self.step_var = tk.StringVar()
-        ttk.Label(f, textvariable=self.step_var).grid(row=4, column=0, columnspan=3, sticky="w")
-
-        ttk.Label(f, text="Log").grid(row=5, column=0, sticky="w", pady=(6, 0))
-        self.log_text = tk.Text(f, height=10, wrap="word", state="disabled")
-        self.log_text.grid(row=6, column=0, columnspan=3, sticky="nsew")
-        sb = ttk.Scrollbar(f, orient="vertical", command=self.log_text.yview)
-        sb.grid(row=6, column=3, sticky="ns")
+        # Log
+        logc, _ = card(f, "Provisioning log", padding=(12, 8))
+        logc.pack(fill="both", expand=True, pady=(10, 0))
+        body = ttk.Frame(logc)
+        body.pack(fill="both", expand=True)
+        self.log_text = tk.Text(body, height=5, wrap="word", state="disabled", font=theme.fonts["mono"],
+                                padx=8, pady=6)
+        self.log_text.pack(side="left", fill="both", expand=True)
+        sb = ttk.Scrollbar(body, orient="vertical", command=self.log_text.yview)
+        sb.pack(side="right", fill="y")
         self.log_text.configure(yscrollcommand=sb.set)
+        theme.on_change(lambda p: th.style_text(self.log_text, p))
+
+        # The pills and the step list follow the text the logic writes
+        self.pc_var.trace_add("write", lambda *a: self._show_pc_pill())
+        self.ca_var.trace_add("write", lambda *a: self._show_ca_pill())
+        self.dev_var.trace_add("write", lambda *a: self.dev_pill.set(*device_pill(self.dev_var.get())))
+        self.step_var.trace_add("write", lambda *a: self.stepper.show(
+            *step_position(self.step_var.get(), self.stepper.current)))
 
         if CertificateAuthority.exists(self.folder_var.get()):
             self._load_ca(quiet=True)
+        self._show_ca_pill()
         self._update()
         f.after(1000, self._tick)
         return f
+
+    # ---- display (pills, step list) -----------------------------------------
+    def _show_pc_pill(self):
+        text = self.pc_var.get()
+        if text.startswith("PC BulkXfer service: published"):
+            sub = "subscribed" in text
+            self.pc_pill.set("device subscribed" if sub else "published", "ok")
+            self._pc_note.set("The device sends its CSR to this service.")
+        else:
+            self.pc_pill.set("not available", "warn")
+            self._pc_note.set(text.replace("PC BulkXfer service: not available ", ""))
+
+    def _show_ca_pill(self):
+        loaded = self.ca is not None
+        self.ca_pill.set("Loaded" if loaded else "No CA", "ok" if loaded else "warn")
+        if not loaded and not self._new_ca.is_open:
+            self._new_ca.set_open(True)
 
     def _update(self):
         busy = self.busy

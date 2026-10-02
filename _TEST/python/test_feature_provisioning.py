@@ -5,7 +5,8 @@ The tab's logic (CA create/load, which buttons are enabled, status, provision,
 deprovision, abort, save) runs against stand-in Tk variables and buttons, a
 fake AppContext whose run() executes the coroutine at once, and a fake
 ProvisioningSession (the protocol itself is test_provisioning.py). One test
-builds the real Tk tab; it is skipped where Tk has no display (headless CI).
+builds the real Tk tab on conftest's shared Tk root; it is skipped where Tk has
+no display (headless CI).
 """
 
 import asyncio
@@ -388,21 +389,14 @@ def test_connect_and_disconnect(tab):
 
 
 # ---- the real tab ------------------------------------------------------------------------
-def test_build_real_tab(monkeypatch, tmp_path, ca):
-    tk = pytest.importorskip("tkinter")
-    try:
-        root = tk.Tk()
-    except tk.TclError as e:
-        pytest.skip(f"no display for Tk ({e})")
-    try:
-        monkeypatch.setattr(fp.CertificateAuthority, "exists", staticmethod(lambda folder: True))
-        monkeypatch.setattr(fp, "DEFAULT_FOLDER", ca.folder)
-        f = fp.ProvisioningFeature(Ctx())
-        f.ctx.link.connected = False
-        frame = f.build(root)
-        assert frame.winfo_children()
-        assert f.ca is not None, "an existing CA folder is loaded at start-up"
-        assert f.folder_var.get() == ca.folder
-        assert "disabled" in f.prov_btn.state()
-    finally:
-        root.destroy()
+def test_build_real_tab(monkeypatch, tmp_path, ca, tk_root):
+    root = tk_root
+    monkeypatch.setattr(fp.CertificateAuthority, "exists", staticmethod(lambda folder: True))
+    monkeypatch.setattr(fp, "DEFAULT_FOLDER", ca.folder)
+    f = fp.ProvisioningFeature(Ctx())
+    f.ctx.link.connected = False
+    frame = f.build(root)
+    assert frame.winfo_children()
+    assert f.ca is not None, "an existing CA folder is loaded at start-up"
+    assert f.folder_var.get() == ca.folder
+    assert "disabled" in f.prov_btn.state()

@@ -27,7 +27,7 @@ The output goes to `build_test/report/`:
 | Tier | Local | CI job | What it tests |
 |---|---|---|---|
 | C unit tests (CTest + [Unity](https://github.com/ThrowTheSwitch/Unity)) | yes | `host-tests`, with ASan + UBSan | `_LIB/BulkXfer`, `_LIB/GATT_CB`, `_ASW/_DATA_STORE`, `_ASW/_BLK_SVC` (router), `_ASW/_PROV` (flow and wipe button), `_ASW/_DEVICE_CERT` (storage, and X.509 verification on the real Mbed TLS), `_ASW/_CSR` (key and CSR life cycle, DER encoder), `_ASW/_GENERIX`, header hygiene |
-| Python tests (pytest) | yes | `python-tests`, under `xvfb-run` | `bulkxfer_client.py` (protocol and command line), `bulkxfer_receiver.py`, `blehost/protocols`, `blehost/pki`, `blehost/core/gatt_server.py` (fake backend, and the WinRT backend against fake `winrt` modules), `blehost/core/decoders.py`, `blehost/features/provisioning.py` (the tab's logic, and building the real Tk tab) |
+| Python tests (pytest) | yes | `python-tests`, under `xvfb-run` | `bulkxfer_client.py` (protocol and command line), `bulkxfer_receiver.py`, `blehost/protocols`, `blehost/pki`, `blehost/core/gatt_server.py` (fake backend, and the WinRT backend against fake `winrt` modules), `blehost/core/decoders.py`, `blehost/features/provisioning.py` (the tab's logic, and building the real Tk tab), `blehost/ui` (light/dark theme and its fallback, the display widgets, the status mappings the tabs colour by, building the main window) |
 | Firmware build | no (VS Code) | `firmware-build`, in `ghcr.io/nrfconnect/sdk-nrf-toolchain` | The whole app for `nrf54l15dk/nrf54l15/cpuapp`. The ROM/RAM use goes in the job summary |
 | Hardware in the loop | no | `hil-tests` (placeholder, manual) | Flash, upload `AA00000100.hex` over BLE, provision the board with `--negative` (the device's certificate verification), check the certificate with `openssl verify`, check that a second provisioning is refused, `deprovision` and provision again |
 
@@ -73,7 +73,7 @@ unit/CSR/              test_der.c: the CSR DER encoder against the real-signatur
                        repair, failures, wipe); its init failures run as four more CTest
                        entries (--init=...), since the init result is kept per process
 unit/Helpers/          test_helpers.c
-python/                pytest suite; conftest.py has a fake GATT link + scripted server
+python/                pytest suite; conftest.py has a fake GATT link + scripted server and a shared Tk root
 vectors/wire.json      golden wire vectors, checked by BOTH the C and the Python tests
 known_header_issues.txt  headers with a known, reported problem (see below)
 tools/                 gen_vectors.py, run_unity.py (Unity -> JUnit), check_headers.py, report.py,
@@ -108,6 +108,6 @@ The report lists all of them under *Known bugs*.
   2. Register it in `CMakeLists.txt` with `add_unit_test(<name> SOURCES … INCLUDES …)`. Code that calls PSA Crypto adds `${PSA_STUB_DIR}` to `INCLUDES` and defines the PSA functions it reaches; code whose correctness *is* the cryptography links `mbedx509` instead, as `devicecert_verify` does.
   3. If the code needs Zephyr or NCS APIs that the shim lacks, add them to `shim/zephyr_shim.h` (plus a forwarding header under `shim/zephyr/`) or as a declarations-only header in `shim/`, keeping the real names and contracts.
   4. Add the module's public headers to `CHECKED_HEADERS`.
-- **Python:** add `python/test_<topic>.py`. A GUI feature is tested like `test_feature_provisioning.py`: its logic against stand-in Tk variables and a fake context, plus one test that builds the real tab (CI gives it a display through `xvfb-run`). The fixtures `server`, `client`, `vectors`, `repo` and `fast_timeouts` come from `conftest.py`. Python dependencies go in `requirements-test.txt`; `run_tests.ps1` installs it on every run, so a new one reaches an existing venv.
+- **Python:** add `python/test_<topic>.py`. A GUI feature is tested like `test_feature_provisioning.py`: its logic against stand-in Tk variables and a fake context, plus one test that builds the real tab (CI gives it a display through `xvfb-run`). A test that creates widgets takes the `tk_root` fixture, one Tk root shared by the whole run (on Windows, creating several Tk interpreters in one process now and then fails to find `tk.tcl`); it skips without a display and destroys the test's widgets afterwards. The fixtures `server`, `client`, `vectors`, `repo`, `fast_timeouts` and `tk_root` come from `conftest.py`. Python dependencies go in `requirements-test.txt`; `run_tests.ps1` installs it on every run, so a new one reaches an existing venv.
 - **A wire-format change:** update `vectors/wire.json` first. Both suites then show where the C and Python sides are wrong.
 - **A change to `_ASW/_CSR/DER.c`:** `csr_der` fails until the CSR vector is regenerated. After a test build (`run_tests.ps1`), run `python _TEST/tools/gen_csr_vector.py build_test` with cmake on PATH (or `CMAKE=<path>`): it makes a new key, rebuilds `csr_der`, signs the TBS it prints, and writes key, SKI, TBS, signature, CSR and the STATUS key hashes into `wire.json`.
