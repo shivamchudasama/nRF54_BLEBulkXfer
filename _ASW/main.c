@@ -14,6 +14,9 @@
 /******************************************************************************/
 #include "ConnectionHandling.h"
 #include "DataStore.h"
+#include "Prov.h"
+#include "ProvButton.h"
+#include "BulkRouter.h"
 
 /******************************************************************************/
 /*                                                                            */
@@ -40,14 +43,24 @@
 /******************************************************************************/
 /**
  * @public        main
- * @brief         Initializes the BulkXfer data store, the BLE stack and starts advertising.
+ * @brief         Initializes the BulkXfer users (hex upload, provisioning), the BulkXfer
+ *                Server, the BLE stack and starts advertising.
  * @return        0 upon successful execution.
  */
 int main(void)
 {
-   // Init the BulkXfer Server before advertising, so it is ready for the first
-   // connection. It needs no Bluetooth stack yet.
+   // Register the BulkXfer appType ranges: hex upload, then provisioning. The
+   // provisioning init also restores the stored certificates, or generates (first
+   // boot) or loads the device key and CSR.
    (void)gi_DataStore_Init();
+   (void)gi_Prov_Init();
+
+   // Holding DK Button 0 wipes the provisioning credentials
+   (void)gi_ProvButton_Init();
+
+   // Start the BulkXfer Server before advertising, so it is ready for the first
+   // connection. It needs no Bluetooth stack yet.
+   (void)gi_BulkRouter_Start();
 
    // Init and start BLE advertising
    gv_BLEInitStartAdv();

@@ -40,7 +40,11 @@ Protocol v1 sent device → central data as notifications. Version 2 does not, f
 
 The cost is that the sender must be able to act as a GATT client: it needs
 `CONFIG_BT_GATT_CLIENT` and discovers the service once per connection. A PC tool built on
-`bleak` can send to a device but cannot receive from one, because bleak has no GATT server.
+`bleak` is a GATT client only, so to receive from a device the PC hosts a BulkXfer service
+of its own and the device sends to it with its Client role, over the same connection. The
+PC GUI does this for device provisioning: [`gatt_server.py`](../../_TOOLS/BleHostGUI/blehost/core/gatt_server.py)
+(WinRT) with the receiver in [`bulkxfer_receiver.py`](../../_TOOLS/BleHostGUI/bulkxfer_receiver.py),
+see [../Provisioning/README.md](../Provisioning/README.md).
 
 ## MTU: why 244?
 
@@ -164,6 +168,12 @@ select what is compiled. A receive-only device sets
 `zephyr_compile_definitions(BLK_ENABLE_CLIENT=0)`, and a send-only device sets
 `BLK_ENABLE_SERVER=0` and does not need `GATT_CB`.
 
+This project's firmware builds both roles (`_LIB/CMakeLists.txt`): the Server receives hex
+segments and certificates, the Client sends the CSR. It keeps its RX-priority
+`CONFIG_BT_ATT_TX_COUNT=6` and lowers `BLK_CLI_WRITE_INFLIGHT_MAX` to 3 instead (2 + 3 < 6);
+the CSR is under 1 KiB, so the smaller Client window costs nothing. The Server's single
+callback set is shared by appType range through `_ASW/_BLK_SVC/BulkRouter.c`.
+
 ### Threading model
 
 | Context | Work |
@@ -200,7 +210,8 @@ A throughput baseline for NCS 3.4.1:
 
 | Path | What |
 |---|---|
-| [`_TOOLS/BleHostGUI/bulkxfer_client.py`](../../_TOOLS/BleHostGUI/bulkxfer_client.py) | PC GATT client (`bleak`): `hex`, `caps`, and `send <bytes>` / `ping` for a server that accepts any appType. Also importable (`parse_ihex`, `BulkXferClient`) |
+| [`_TOOLS/BleHostGUI/bulkxfer_client.py`](../../_TOOLS/BleHostGUI/bulkxfer_client.py) | PC GATT client (`bleak`): `hex`, `caps`, `provision`, and `send <bytes>` / `ping` for a server that accepts any appType. Also importable (`parse_ihex`, `BulkXferClient`) |
+| [`_TOOLS/BleHostGUI/bulkxfer_receiver.py`](../../_TOOLS/BleHostGUI/bulkxfer_receiver.py) | PC receiver role (§7 of the protocol), transport independent; behind the PC's GATT service in `blehost/core/gatt_server.py` |
 | [`_TEST/unit/BulkXfer/test_frame.c`](../../_TEST/unit/BulkXfer/test_frame.c) | Host unit tests of the frame codec, plus the golden wire vectors shared with the PC client (`_TEST/vectors/wire.json`) |
 | [`_TEST/unit/BulkXfer/test_engine.c`](../../_TEST/unit/BulkXfer/test_engine.c) | Host tests of the **real engine** (both roles) against the simulated link and scripted peer in `sim_link.h` |
 

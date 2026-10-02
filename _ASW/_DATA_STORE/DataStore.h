@@ -1,7 +1,8 @@
 /**
  * @file          DataStore.h
- * @brief         Header file containing the receive-side data store: binds the BulkXfer
- *                Server to a RAM buffer that holds one hex segment and logs it on the
+ * @brief         Header file containing the receive-side data store: registers the hex
+ *                segment appType with the BulkXfer router (BulkRouter.h) and
+ *                receives into a RAM buffer that holds one hex segment and logs it on the
  *                serial terminal once it has been received and CRC-verified (every
  *                byte with CONFIG_DS_HEX_DUMP, otherwise one summary line).
  * @date          25/09/2026

@@ -54,14 +54,16 @@ if (-not $SysPython) { throw 'python not found on PATH' }
 
 if ($Clean -and (Test-Path $Build)) { Remove-Item -Recurse -Force $Build }
 
-# Python venv with the test dependencies (kept in build_test/, git-ignored)
+# Python venv with the test dependencies (kept in build_test/, git-ignored).
+# pip runs every time, so a dependency added to requirements-test.txt reaches an
+# existing venv too (it is quick when everything is already installed).
 $Venv = Join-Path $Build 'venv'
 $Py = Join-Path $Venv 'Scripts\python.exe'
 if (-not (Test-Path $Py)) {
    & $SysPython -m venv $Venv
-   & $Py -m pip install --quiet --disable-pip-version-check -r (Join-Path $PSScriptRoot 'requirements-test.txt')
-   if ($LASTEXITCODE -ne 0) { throw 'pip install failed' }
 }
+& $Py -m pip install --quiet --disable-pip-version-check -r (Join-Path $PSScriptRoot 'requirements-test.txt')
+if ($LASTEXITCODE -ne 0) { throw 'pip install failed' }
 
 # Old reports must not leak into the new summary
 if (Test-Path $Report) { Remove-Item -Recurse -Force $Report }

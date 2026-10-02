@@ -1,1 +1,5 @@
-bleak>=0.22
+# bleak >= 1 brings the winrt 3.x packages the PC-side GATT server
+# (blehost/core/gatt_server.py) was verified with on Windows 11
+bleak>=1.0
+# Device provisioning: the CA (X.509, ECDSA P-256)
+cryptography>=43

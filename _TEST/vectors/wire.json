@@ -78,5 +78,170 @@
     "segments": [ { "address": 0, "length": 6560 } ],
     "start_frame": "start_from_log",
     "seg_line": "SEG addr=0x00000000 len=6560 crc=0xe2e72827"
+  },
+
+  "provisioning": {
+    "_comment": [
+      "Device provisioning (_DOC/Provisioning/PROTOCOL.md). 'shorts' are short frames",
+      "[len][type][payload]. 'csr' is the CSR the sample DER encoder (_ASW/_CSR/DER.c)",
+      "builds for 'subject' and 'public_key' when SHA-1 returns 'ski_sha1' and the",
+      "signer returns 'signature_raw' (r||s); that signature is a real ECDSA-SHA256",
+      "signature over 'tbs' by the matching private key, so the Python tests can check",
+      "that the device's CSR parses and verifies with the CA's library. Regenerate with",
+      "_TEST/tools/gen_csr_vector.py (see _TEST/README.md) whenever DER.c changes."
+    ],
+    "app_types": {
+      "GET_STATUS": 32,
+      "STATUS": 33,
+      "CSR_REQ": 34,
+      "CSR": 35,
+      "CA_CERT": 36,
+      "DEV_CERT": 37,
+      "RESULT": 38,
+      "DEPROVISION": 39
+    },
+    "states": {
+      "NO_KEY": 0,
+      "KEY_READY": 1,
+      "CA_OK": 2,
+      "PROVISIONED": 3
+    },
+    "status": {
+      "OK": 0,
+      "BAD_STATE": 1,
+      "TOO_LARGE": 2,
+      "PARSE": 3,
+      "NOT_CA": 4,
+      "BAD_SIG": 5,
+      "KEY_MISMATCH": 6,
+      "SUBJECT_MISMATCH": 7,
+      "BAD_PROFILE": 8,
+      "NO_PEER_SVC": 9,
+      "INTERNAL": 10,
+      "TRANSFER": 11
+    },
+    "flags": {
+      "CSR_TX_BUSY": 1
+    },
+    "max_cert_len": 1024,
+    "shorts": [
+      {
+        "name": "get_status",
+        "app_type": 32,
+        "hex": "0020"
+      },
+      {
+        "name": "csr_req",
+        "app_type": 34,
+        "hex": "0022"
+      },
+      {
+        "name": "status_key_ready",
+        "app_type": 33,
+        "state": 1,
+        "flags": 0,
+        "csr_len": 420,
+        "pubkey_sha256": "b9f7f84357ae785c452d041e7d12b031e98946f1481e1bc97c2d2012a9875f00",
+        "hex": "24210100a401b9f7f84357ae785c452d041e7d12b031e98946f1481e1bc97c2d2012a9875f00"
+      },
+      {
+        "name": "status_csr_busy",
+        "app_type": 33,
+        "state": 2,
+        "flags": 1,
+        "csr_len": 420,
+        "pubkey_sha256": "b9f7f84357ae785c452d041e7d12b031e98946f1481e1bc97c2d2012a9875f00",
+        "hex": "24210201a401b9f7f84357ae785c452d041e7d12b031e98946f1481e1bc97c2d2012a9875f00"
+      },
+      {
+        "name": "status_provisioned",
+        "app_type": 33,
+        "state": 3,
+        "flags": 0,
+        "csr_len": 0,
+        "pubkey_sha256": "b9f7f84357ae785c452d041e7d12b031e98946f1481e1bc97c2d2012a9875f00",
+        "hex": "242103000000b9f7f84357ae785c452d041e7d12b031e98946f1481e1bc97c2d2012a9875f00"
+      },
+      {
+        "name": "deprovision",
+        "app_type": 39,
+        "hex": "0027"
+      },
+      {
+        "name": "result_ca_ok",
+        "app_type": 38,
+        "ref": 36,
+        "status": 0,
+        "hex": "02262400"
+      },
+      {
+        "name": "result_dev_bad_sig",
+        "app_type": 38,
+        "ref": 37,
+        "status": 5,
+        "hex": "02262505"
+      },
+      {
+        "name": "result_csr_no_peer",
+        "app_type": 38,
+        "ref": 34,
+        "status": 9,
+        "hex": "02262209"
+      },
+      {
+        "name": "result_csr_delivered",
+        "app_type": 38,
+        "ref": 35,
+        "status": 0,
+        "hex": "02262300"
+      },
+      {
+        "name": "result_csr_req_bad_state",
+        "app_type": 38,
+        "ref": 34,
+        "status": 1,
+        "hex": "02262201"
+      },
+      {
+        "name": "result_deprovision_ok",
+        "app_type": 38,
+        "ref": 39,
+        "status": 0,
+        "hex": "02262700"
+      }
+    ],
+    "csr": {
+      "subject": [
+        [
+          "C",
+          "IN"
+        ],
+        [
+          "ST",
+          "Maharashtra"
+        ],
+        [
+          "L",
+          "Pune"
+        ],
+        [
+          "O",
+          "Bajaj Auto Technology Limited"
+        ],
+        [
+          "OU",
+          "IS Team"
+        ],
+        [
+          "CN",
+          "6f1c0d3a-5b2e-5c4d-8e9f-0a1b2c3d4e5f"
+        ]
+      ],
+      "public_key": "04f9dd44ae84340777c3b97d994c685f0babd0b0a19e1f7256331a294f52ebdc422d381a7a87f7691c434ffbf53851c9eb3d17c842656efe57066dc14eacf28c5d",
+      "ski_sha1": "dc4624bd16493959e4799a6c9eba272a89b25877",
+      "tbs": "3082014602010030819b310b300906035504060c02494e3114301206035504080c0b4d61686172617368747261310d300b06035504070c0450756e6531263024060355040a0c1d42616a616a204175746f20546563686e6f6c6f6779204c696d697465643110300e060355040b0c074953205465616d312d302b06035504030c2436663163306433612d356232652d356334642d386539662d3061316232633364346535663059301306072a8648ce3d020106082a8648ce3d03010703420004f9dd44ae84340777c3b97d994c685f0babd0b0a19e1f7256331a294f52ebdc422d381a7a87f7691c434ffbf53851c9eb3d17c842656efe57066dc14eacf28c5da048304606092a864886f70d01090e3139303730090603551d1304023000300b0603551d0f040403020308301d0603551d0e04160414dc4624bd16493959e4799a6c9eba272a89b25877",
+      "signature_raw": "9f99d987e90bd870f25a6f43c0a34ccae04a9f2962527078770fe4a5cdfef1fbb95db3a17f3e5fe2cbc24acd02c54026e7aef5e068f4769b6137f53c95256ab6",
+      "der": "308201a13082014602010030819b310b300906035504060c02494e3114301206035504080c0b4d61686172617368747261310d300b06035504070c0450756e6531263024060355040a0c1d42616a616a204175746f20546563686e6f6c6f6779204c696d697465643110300e060355040b0c074953205465616d312d302b06035504030c2436663163306433612d356232652d356334642d386539662d3061316232633364346535663059301306072a8648ce3d020106082a8648ce3d03010703420004f9dd44ae84340777c3b97d994c685f0babd0b0a19e1f7256331a294f52ebdc422d381a7a87f7691c434ffbf53851c9eb3d17c842656efe57066dc14eacf28c5da048304606092a864886f70d01090e3139303730090603551d1304023000300b0603551d0f040403020308301d0603551d0e04160414dc4624bd16493959e4799a6c9eba272a89b25877300a06082a8648ce3d04030203490030460221009f99d987e90bd870f25a6f43c0a34ccae04a9f2962527078770fe4a5cdfef1fb022100b95db3a17f3e5fe2cbc24acd02c54026e7aef5e068f4769b6137f53c95256ab6"
+    }
   }
 }

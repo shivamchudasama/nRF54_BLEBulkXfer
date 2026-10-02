@@ -1,0 +1,35 @@
+<?xml version="1.0" ?>
+<FSMConfiguration generated_on="2025-09-17T12:50:57.210629Z">
+  <FSM name="DeviceProvisioningFSM">
+    <ContextName>DeviceProvisioningFSMContext_T</ContextName>
+    <States>
+      <State id="0">
+        <Name>WaitForCertGeneration</Name>
+        <Flags>0</Flags>
+        <Handler>WaitForCertGeneration_DeviceProvisioningFSM_Handler</Handler>
+        <IsEntry>1</IsEntry>
+        <AllowedEvents/>
+      </State>
+      <State id="1">
+        <Name>WaitForCertLength</Name>
+        <Flags>0</Flags>
+        <Handler>WaitForCertLength_DeviceProvisioningFSM_Handler</Handler>
+        <IsEntry>0</IsEntry>
+        <AllowedEvents/>
+      </State>
+      <State id="2">
+        <Name>WaitForCert</Name>
+        <Flags>0</Flags>
+        <Handler>WaitForCert_DeviceProvisioningFSM_Handler</Handler>
+        <IsEntry>0</IsEntry>
+        <AllowedEvents/>
+      </State>
+    </States>
+    <Events>
+      <Event id="0">
+        <Name>ALL_EVENTS</Name>
+      </Event>
+    </Events>
+    <UnhandledHandler/>
+  </FSM>
+</FSMConfiguration>

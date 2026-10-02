@@ -28,7 +28,7 @@
 #include <zephyr/sys/crc.h>
 #include <zephyr/logging/log_ctrl.h>
 #include "BulkXfer.h"
-#include "BulkSvc.h"
+#include "BulkRouter.h"
 #include "AppLog.h"
 
 /******************************************************************************/
@@ -102,7 +102,6 @@ static int si_OnRxStart(uint8_t u8_appType, uint32_t u32_totalLen);
 static int si_OnRxData(uint8_t u8_appType, uint32_t u32_offset,
    const uint8_t *u8pt_data, uint16_t u16_len);
 static void sv_OnRxDone(uint8_t u8_appType, BlkStatus_E e_status, uint32_t u32_totalLen);
-static void sv_OnRxShort(uint8_t u8_appType, const uint8_t *u8pt_data, uint8_t u8_len);
 static void sv_SendReport(uint8_t u8_appType, uint8_t u8_status, uint32_t u32_addr,
    uint32_t u32_len);
 static void sv_DumpSegment(void);
@@ -301,22 +300,6 @@ static void sv_OnRxDone(uint8_t u8_appType, BlkStatus_E e_status, uint32_t u32_t
 }
 
 /**
- * @private       sv_OnRxShort
- * @brief         BlkRxShort_F: no client -> server short messages are defined yet;
- *                log and ignore.
- * @param[in]     u8_appType Application type.
- * @param[in]     u8pt_data Payload (unused).
- * @param[in]     u8_len Payload length.
- * @return        None.
- */
-static void sv_OnRxShort(uint8_t u8_appType, const uint8_t *u8pt_data, uint8_t u8_len)
-{
-   ARG_UNUSED(u8pt_data);
-
-   APP_LOG_INF("short message type 0x%02x, %u bytes ignored", u8_appType, u8_len);
-}
-
-/**
  * @private       sv_SendReport
  * @brief         Send a [u8 status][u32 LE address][u32 LE length] short message on CTRL.
  * @param[in]     u8_appType DS_APP_TYPE_RESULT or DS_APP_TYPE_STORED.
@@ -440,34 +423,33 @@ static void sv_DumpThread(void *vpt_p1, void *vpt_p2, void *vpt_p3)
 /******************************************************************************/
 /**
  * @public        gi_DataStore_Init
- * @brief         Initialise the BulkXfer Server with the data store callbacks. Call once,
- *                before advertising starts, so no connection arrives before the Server
- *                is ready.
- * @return        0 on success, otherwise the error from gi_BLKS_Init().
+ * @brief         Register the data store's appType (DS_APP_TYPE_SEGMENT) and its
+ *                receive callbacks with the BulkXfer router. Call once, before
+ *                gi_BulkRouter_Start(). Short messages from the client are left to
+ *                the router, which logs and ignores them.
+ * @return        0 on success, otherwise the error from gi_BulkRouter_Register().
  */
 int gi_DataStore_Init(void)
 {
-   BlkSrvCfg_T st_cfg = { 0 };
+   BulkRoute_T st_route = { 0 };
    int i_ret = 0;
 
-   st_cfg.stpt_ctrlAttr = gstpt_BulkSvc_Init();
-   st_cfg.fpt_onRxStart = si_OnRxStart;
-   st_cfg.fpt_onRxData = si_OnRxData;
-   st_cfg.fpt_onRxDone = sv_OnRxDone;
-   st_cfg.fpt_onRxShort = sv_OnRxShort;
-   // ConnectionHandling.c already negotiates PHY, data length and MTU
-   st_cfg.b_autoTuneLink = false;
+   st_route.u8_firstAppType = DS_APP_TYPE_SEGMENT;
+   st_route.u8_lastAppType = DS_APP_TYPE_SEGMENT;
+   st_route.fpt_onRxStart = si_OnRxStart;
+   st_route.fpt_onRxData = si_OnRxData;
+   st_route.fpt_onRxDone = sv_OnRxDone;
 
-   i_ret = gi_BLKS_Init(&st_cfg);
+   i_ret = gi_BulkRouter_Register(&st_route);
 
-   // Check if the BulkXfer Server started
+   // Check if the route was registered
    if (i_ret != 0)
    {
-      APP_LOG_ERR("gi_BLKS_Init failed (%d)", i_ret);
+      APP_LOG_ERR("gi_BulkRouter_Register failed (%d)", i_ret);
    }
    else
    {
-      APP_LOG_INF("BulkXfer server ready, segment buffer %u bytes", DS_BUF_SIZE);
+      APP_LOG_INF("hex upload ready, segment buffer %u bytes", DS_BUF_SIZE);
    }
 
    return i_ret;

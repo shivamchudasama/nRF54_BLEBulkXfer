@@ -50,6 +50,12 @@
 #ifndef EALREADY
 #define EALREADY              120
 #endif // EALREADY
+#ifndef ENOMSG
+#define ENOMSG                42
+#endif // ENOMSG
+#ifndef ENOTSUP
+#define ENOTSUP               134
+#endif // ENOTSUP
 
 /* ---- Toolchain / util ---------------------------------------------------- */
 #define ARG_UNUSED(x)         (void)(x)
@@ -196,6 +202,41 @@ static inline void *k_fifo_get(struct k_fifo *f, k_timeout_t t)
    return item;
 }
 
+/* ---- Message queue (k_msgq: copies fixed-size messages, FIFO order) -------
+        A put on a full queue fails with -ENOMSG (any timeout: nothing would
+        drain it). A get on an empty queue fails with -ENOMSG for K_NO_WAIT,
+        -EAGAIN for a finite timeout, and inside gv_SimRunThread() a K_FOREVER
+        get ends the thread body, like k_sem_take(). ------------------------- */
+struct k_msgq { size_t msg_size; uint32_t max_msgs; uint8_t *buf; uint32_t head; uint32_t used; };
+#define K_MSGQ_DEFINE(name, size, max, align) \
+   static uint8_t name##_buf[(size) * (max)] __attribute__((aligned(align))); \
+   struct k_msgq name = { (size), (max), name##_buf, 0U, 0U }
+static inline int k_msgq_put(struct k_msgq *q, const void *data, k_timeout_t t)
+{
+   (void)t;
+   if (q->used >= q->max_msgs) { return -ENOMSG; }
+   memcpy(&q->buf[((q->head + q->used) % q->max_msgs) * q->msg_size], data, q->msg_size);
+   q->used++;
+   return 0;
+}
+static inline int k_msgq_get(struct k_msgq *q, void *data, k_timeout_t t)
+{
+   if (q->used == 0U)
+   {
+      if ((t.ms < 0) && (gpt_simThreadJmp != NULL))
+      {
+         longjmp(*gpt_simThreadJmp, 1);
+      }
+      return (t.ms == 0) ? -ENOMSG : -EAGAIN;
+   }
+   memcpy(data, &q->buf[q->head * q->msg_size], q->msg_size);
+   q->head = (q->head + 1U) % q->max_msgs;
+   q->used--;
+   return 0;
+}
+static inline uint32_t k_msgq_num_used_get(struct k_msgq *q) { return q->used; }
+static inline void k_msgq_purge(struct k_msgq *q) { q->head = 0U; q->used = 0U; }
+
 /* ---- Memory slab --------------------------------------------------------- */
 struct k_mem_slab { size_t block; uint32_t num; uint8_t *buf; void *free; bool init; uint32_t used; };
 #define K_MEM_SLAB_DEFINE_STATIC(name, bs, n, al) \
@@ -266,6 +307,12 @@ static inline atomic_val_t atomic_get(const atomic_t *a) { return *a; }
 static inline atomic_val_t atomic_set(atomic_t *a, atomic_val_t v) { atomic_val_t o = *a; *a = v; return o; }
 static inline atomic_val_t atomic_inc(atomic_t *a) { return (*a)++; }
 static inline atomic_val_t atomic_clear(atomic_t *a) { atomic_val_t o = *a; *a = 0; return o; }
+static inline bool atomic_cas(atomic_t *a, atomic_val_t old_v, atomic_val_t new_v)
+{
+   if (*a != old_v) { return false; }
+   *a = new_v;
+   return true;
+}
 static inline void *atomic_ptr_get(const atomic_ptr_t *p) { return *p; }
 static inline void *atomic_ptr_set(atomic_ptr_t *p, void *v) { void *o = *p; *p = v; return o; }
 
@@ -299,6 +346,42 @@ static inline void sys_put_le32(uint32_t val, uint8_t *dst)
    dst[1] = (uint8_t)(val >> 8);
    dst[2] = (uint8_t)(val >> 16);
    dst[3] = (uint8_t)(val >> 24);
+}
+static inline uint16_t sys_get_le16(const uint8_t *src)
+{
+   return (uint16_t)(src[0] | ((uint16_t)src[1] << 8));
+}
+static inline void sys_put_le16(uint16_t val, uint8_t *dst)
+{
+   dst[0] = (uint8_t)val;
+   dst[1] = (uint8_t)(val >> 8);
+}
+
+/* ---- Base64 (zephyr/sys/base64.h), RFC 4648 with padding ----------------- */
+static inline int base64_encode(uint8_t *dst, size_t dlen, size_t *olen,
+   const uint8_t *src, size_t slen)
+{
+   static const char scar_alphabet[] =
+      "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+   size_t need = (((slen + 2U) / 3U) * 4U) + 1U;
+   size_t i;
+   size_t o = 0U;
+   uint32_t v;
+
+   if (dlen < need) { *olen = need; return -ENOMEM; }
+   for (i = 0U; i < slen; i += 3U)
+   {
+      v = (uint32_t)src[i] << 16;
+      if ((i + 1U) < slen) { v |= (uint32_t)src[i + 1U] << 8; }
+      if ((i + 2U) < slen) { v |= src[i + 2U]; }
+      dst[o++] = (uint8_t)scar_alphabet[(v >> 18) & 0x3FU];
+      dst[o++] = (uint8_t)scar_alphabet[(v >> 12) & 0x3FU];
+      dst[o++] = ((i + 1U) < slen) ? (uint8_t)scar_alphabet[(v >> 6) & 0x3FU] : (uint8_t)'=';
+      dst[o++] = ((i + 2U) < slen) ? (uint8_t)scar_alphabet[v & 0x3FU] : (uint8_t)'=';
+   }
+   dst[o] = 0U;
+   *olen = o;
+   return 0;
 }
 
 /* ---- Bluetooth: UUIDs --------------------------------------------------- */

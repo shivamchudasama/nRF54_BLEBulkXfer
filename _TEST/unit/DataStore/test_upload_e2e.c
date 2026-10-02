@@ -18,6 +18,7 @@
 #include "BulkXfer_Client.c"
 #include "sim_link.h"
 #include "DataStore.c"
+#include "BulkRouter.c"
 #include "wire_vectors.h"
 
 /* _BLK_SVC stand-in: the CTRL attribute is the one the simulated link knows */
@@ -185,9 +186,9 @@ int main(int argc, char **argv)
    gb_simVerbose = (argc > 1) && (strcmp(argv[1], "-v") == 0);
 
    // As main() does in the firmware, before any connection
-   if (gi_DataStore_Init() != 0)
+   if ((gi_DataStore_Init() != 0) || (gi_BulkRouter_Start() != 0))
    {
-      printf("gi_DataStore_Init failed\n");
+      printf("gi_DataStore_Init / gi_BulkRouter_Start failed\n");
       return 1;
    }
 

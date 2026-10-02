@@ -41,6 +41,16 @@ Link setup: the server itself requests 2M PHY, data length 251 and MTU 247 about
 
 The START frame's length and CRC-32 cover the whole object, **address header included**.
 
+The device's BulkXfer Server is shared by appType range ([_ASW/_BLK_SVC/BulkRouter.c](../../_ASW/_BLK_SVC/BulkRouter.c)). This is the whole registry:
+
+| appTypes | Owner | Contract |
+|---|---|---|
+| `0x01`, `0x10`, `0x11` | Hex upload (`_DATA_STORE`) | This document |
+| `0x20`–`0x2F` | Device provisioning (`_PROV`) | [../Provisioning/PROTOCOL.md](../Provisioning/PROTOCOL.md) |
+| others up to `0xEF` | Free | A transfer is refused (§5), a short message is logged and ignored |
+
+A new user of the Server registers a free range with `gi_BulkRouter_Register()` before `gi_BulkRouter_Start()` and adds it here.
+
 ## 4. Upload sequence
 
 1. Parse the hex file. Apply record types `02`/`04` (extended address) to data records (`00`), ignore `03`/`05`, and stop at `01`.
@@ -58,7 +68,7 @@ The server rejects a START by answering it with **ABORT** (direction *by receive
 
 | Cause | Fix |
 |---|---|
-| appType is not `0x10` | Use `0x10` |
+| appType is not `0x10` (no other range takes segments; provisioning refuses non-certificates and also answers RESULT `0x26`, see its protocol) | Use `0x10` |
 | Object ≤ 4 bytes (no data) | Send at least one data byte |
 | Object > 4 + 65536 bytes | Split the segment |
 | The previous segment is still being dumped | Wait for STORED |

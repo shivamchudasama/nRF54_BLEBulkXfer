@@ -1,0 +1,35 @@
+<?xml version="1.0" ?>
+<FSMConfiguration generated_on="2025-09-17T10:02:19.775185Z">
+  <FSM name="MainFSM">
+    <ContextName>MainFSMContext_T</ContextName>
+    <States>
+      <State id="0">
+        <Name>IDLE</Name>
+        <Flags>0</Flags>
+        <Handler>IDLE_Handler</Handler>
+        <IsEntry>1</IsEntry>
+        <AllowedEvents/>
+      </State>
+      <State id="1">
+        <Name>CSR_AVAILABLE</Name>
+        <Flags>0</Flags>
+        <Handler>CSR_AVAILABLE_Handler</Handler>
+        <IsEntry>0</IsEntry>
+        <AllowedEvents/>
+      </State>
+      <State id="2">
+        <Name>DEVICE_CERT_VERIFIED</Name>
+        <Flags>0</Flags>
+        <Handler>DEVICE_CERT_VERIFIED_Handler</Handler>
+        <IsEntry>0</IsEntry>
+        <AllowedEvents/>
+      </State>
+    </States>
+    <Events>
+      <Event id="0">
+        <Name>ALL_EVENTS</Name>
+      </Event>
+    </Events>
+    <UnhandledHandler/>
+  </FSM>
+</FSMConfiguration>
