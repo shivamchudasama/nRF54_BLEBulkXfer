@@ -582,7 +582,7 @@ static psa_status_t st_GenerateUUID(uint8_t *const u8pt_UUID)
    t_deviceIdLen = hwinfo_get_device_id(u8ar_deviceId, sizeof(u8ar_deviceId));
    if (t_deviceIdLen < 0)
    {
-      APP_LOG_ERR("Failed to read device identifier: %d", t_deviceIdLen);
+      APP_LOG_ERR("Failed to read device identifier: %d", (int)t_deviceIdLen);
       return PSA_ERROR_HARDWARE_FAILURE;
    }
 
@@ -760,7 +760,6 @@ void gv_GenerateOrLoadCSR(void)
    psa_key_id_t t_signingKeyID = 0;
    uint8_t u8ar_UUID[UUID_LEN] = { 0 };
    size_t t_CSRLenDER = 0;
-   bool b_isCSRAvailableInStorage = false;
    bool b_isSigningKeyAvailableInStorage = false;
 
    // Fill in CN to subject name
@@ -785,7 +784,6 @@ void gv_GenerateOrLoadCSR(void)
          // Check if the stored CSR was loaded successfully
          if (t_status == PSA_SUCCESS)
          {
-            b_isCSRAvailableInStorage = true;
             // Note: At this point, the CSR is successfully loaded from trusted
             // storage and available in gst_CSRData.
 
@@ -886,7 +884,6 @@ void gv_GenerateOrLoadCSR(void)
                      // Check if the generated CSR was stored successfully
                      if (t_status == PSA_SUCCESS)
                      {
-                        b_isCSRAvailableInStorage = true;
                         APP_LOG_INF("Generated CSR is stored in trusted storage for future reuse.");
                         LOG_HEXDUMP_INF(gst_CSRData.u8ar_CSR, gst_CSRData.u16_CSRLen, "Generated CSR: ");
                      }
