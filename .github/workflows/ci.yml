@@ -19,6 +19,8 @@ env:
 
 jobs:
   # ---- Tier 1: C unit tests of _LIB and _ASW on the host ----------------------
+  # CMake also fetches and builds Mbed TLS 4.1.1 (pinned by hash) for
+  # devicecert_verify, under the same sanitizers
   host-tests:
     runs-on: ubuntu-24.04
     steps:
@@ -59,11 +61,15 @@ jobs:
         with:
           python-version: "3.12"
       - name: Install tools
-        run: pip install -r _TEST/requirements-test.txt
+        run: |
+          sudo apt-get update -q && sudo apt-get install -y -q xvfb
+          pip install -r _TEST/requirements-test.txt
+      # xvfb: a virtual display, so the test that builds the real Tk tab runs
+      # here too (it skips itself where Tk has no display)
       - name: Test
         run: |
           mkdir -p report
-          pytest _TEST/python -q -p no:cacheprovider \
+          xvfb-run -a pytest _TEST/python -q -p no:cacheprovider \
             --junitxml=report/junit/python.xml -o junit_suite_name=python_tools \
             --cov=_TOOLS/BleHostGUI --cov-report=html:report/coverage/python \
             --cov-report=term | tee report/coverage-python.txt
@@ -194,8 +200,8 @@ jobs:
       # --negative sends every certificate the device must reject
       # (blehost/pki/negative.py) before the good CA and device certificate (a
       # provisioned device refuses certificates; a non-fresh one is wiped first)
-      # and fails on any wrong RESULT: this is where
-      # _ASW/_DEVICE_CERT/DeviceCert_Verify.c (mbedTLS + PSA) gets tested.
+      # and fails on any wrong RESULT: the set the host test devicecert_verify
+      # runs too, here on the device's own mbedTLS, PSA and CRACEN.
       - name: Provision the device and test its certificate verification
         run: python _TOOLS/BleHostGUI/bulkxfer_client.py provision --negative --name "BLE Bulk Transfer" --ca ${{ runner.temp }}/ca --out ${{ runner.temp }}/device.pem
       - name: Check the issued certificate against the CA

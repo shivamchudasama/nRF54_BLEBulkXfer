@@ -592,8 +592,10 @@ static psa_status_t st_GenerateUUID(uint8_t *const u8pt_UUID)
    t_retVal = gt_CalculateSHA1(u8ar_temp, sizeof(u8ar_temp), u8ar_digest);
 
    memcpy(u8pt_UUID, u8ar_digest, 16);
-   u8pt_UUID[7] &= 0x0F; // Set the four most significant bits (bits 12 through 15) of the time_hi_and_version field
-   u8pt_UUID[7] |= 0x50; // to the 4-bit version number as randomly generated
+   // time_hi_and_version is bytes 6-7, big-endian: its four most significant
+   // bits (bits 12 through 15) are the high nibble of byte 6
+   u8pt_UUID[6] &= 0x0F; // Set the four most significant bits (bits 12 through 15) of the time_hi_and_version field
+   u8pt_UUID[6] |= 0x50; // to the 4-bit version number (5: name-based, SHA-1)
    u8pt_UUID[8] &= 0x3F; // Set the two most significant bits (bits 6 and 7) of the clock_seq_hi_and_reserved field
    u8pt_UUID[8] |= 0x80; // to zero and one, respectively
 

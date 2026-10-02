@@ -6,7 +6,8 @@
  *                exercised on a host PC by the tests in _TEST/unit.
  *
  *                - Time is simulated (gi64_simNowMs); timers fire only when
- *                  the test calls gv_SimFireTimers().
+ *                  the test calls gv_SimFireTimers(), delayable work only
+ *                  when it calls gb_SimRunDelayedWork().
  *                - A k_sem_take() that would block calls gv_SimOnBlock() so the
  *                  simulated link can complete notifications and free credits.
  *                  Inside gv_SimRunThread() a K_FOREVER wait that cannot be
@@ -134,6 +135,11 @@ extern const char *gcpt_SimLogFind(const char *cpt_text);
 #define APP_LOG_WRN(fmt, ...) LOG_WRN("%s: " fmt, __func__, ##__VA_ARGS__)
 #define APP_LOG_INF(fmt, ...) LOG_INF("%s: " fmt, __func__, ##__VA_ARGS__)
 #define APP_LOG_DBG(fmt, ...) LOG_DBG("%s: " fmt, __func__, ##__VA_ARGS__)
+/* A hex dump is captured as one line: the label and the byte count */
+#define LOG_HEXDUMP_ERR(d, l, s) gv_SimLog("ERR", "%s (%u bytes)", (s), (unsigned int)(l))
+#define LOG_HEXDUMP_WRN(d, l, s) gv_SimLog("WRN", "%s (%u bytes)", (s), (unsigned int)(l))
+#define LOG_HEXDUMP_INF(d, l, s) gv_SimLog("INF", "%s (%u bytes)", (s), (unsigned int)(l))
+#define LOG_HEXDUMP_DBG(d, l, s) gv_SimLog("DBG", "%s (%u bytes)", (s), (unsigned int)(l))
 static inline uint32_t log_buffered_cnt(void) { return gu32_simLogBuffered; }
 
 /* ---- Mutex (single-threaded: never blocks, but counts, so a test can check
@@ -279,6 +285,39 @@ static inline void k_timer_stop(struct k_timer *t) { t->running = false; }
 static inline uint32_t k_timer_remaining_get(struct k_timer *t)
 {
    return (t->running && (t->deadline > gi64_simNowMs)) ? (uint32_t)(t->deadline - gi64_simNowMs) : 0U;
+}
+
+/* ---- Delayable work (k_work_delayable) ------------------------------------
+        Zephyr's return values: k_work_schedule() gives 1 when it scheduled the
+        item and 0 when it was already scheduled (the deadline is kept);
+        k_work_cancel_delayable() gives 0 once the item is idle. Nothing runs
+        on its own: the test advances gi64_simNowMs and calls
+        gb_SimRunDelayedWork(), which runs the handler if the item is due. -- */
+struct k_work;
+typedef void (*k_work_handler_t)(struct k_work *work);
+struct k_work { k_work_handler_t handler; };
+struct k_work_delayable { struct k_work work; int64_t deadline; bool pending; };
+#define K_WORK_DELAYABLE_DEFINE(name, h)   struct k_work_delayable name = { { (h) }, 0, false }
+static inline int k_work_schedule(struct k_work_delayable *w, k_timeout_t d)
+{
+   if (w->pending) { return 0; }
+   w->deadline = gi64_simNowMs + d.ms;
+   w->pending = true;
+   return 1;
+}
+static inline int k_work_cancel_delayable(struct k_work_delayable *w)
+{
+   w->pending = false;
+   return 0;
+}
+static inline bool k_work_delayable_is_pending(const struct k_work_delayable *w) { return w->pending; }
+/** Run the item's handler if it is scheduled and due; true if it ran. */
+static inline bool gb_SimRunDelayedWork(struct k_work_delayable *w)
+{
+   if (!w->pending || (w->deadline > gi64_simNowMs)) { return false; }
+   w->pending = false;
+   w->work.handler(&w->work);
+   return true;
 }
 
 /* ---- Thread -------------------------------------------------------------- */

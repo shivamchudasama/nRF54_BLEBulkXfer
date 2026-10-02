@@ -154,7 +154,7 @@ All certificates are X.509 v3 in DER, P-256 keys, signed with ecdsa-with-SHA256.
 
 **CSR** (built by the device, [_ASW/_CSR/DER.c](../../_ASW/_CSR/DER.c)):
 
-- Subject: C, ST, L, O, OU from Kconfig `CONFIG_CSR_SUBJ_*`, all UTF8String. CN is a UUIDv5 of the hardware device ID, for example `6f1c0d3a-5b2e-5c4d-8e9f-0a1b2c3d4e5f`.
+- Subject: C, ST, L, O, OU from Kconfig `CONFIG_CSR_SUBJ_*`, all UTF8String. CN is an RFC 4122 version-5 UUID (SHA-1 of a fixed namespace and the hardware device ID), lowercase, for example `6f1c0d3a-5b2e-5c4d-8e9f-0a1b2c3d4e5f`: the third group starts with `5`. Devices that generated their CSR before this was corrected may still carry a CN with another digit there until their next wipe.
 - Requested extensions, all non-critical: BasicConstraints CA:FALSE; KeyUsage keyAgreement; SubjectKeyIdentifier = SHA-1 over `X ‖ Y` (without the `04` prefix).
 - Signed with the device key, which never leaves the device.
 
