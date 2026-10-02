@@ -1,0 +1,341 @@
+# SPDX-License-Identifier: MIT
+"""The command line of bulkxfer_client.py (main(), find_device, provision,
+deprovision), with a fake `bleak` module: BleakClient is the scripted
+BulkXfer server of conftest.py, so caps / ping / send / hex run their real
+protocol code. For provision and deprovision, the PC service and the
+provisioning session are stand-ins (the protocol itself is
+test_provisioning.py; the device side is hil-tests)."""
+
+import asyncio
+import os
+import struct
+import sys
+import types
+
+import pytest
+from cryptography import x509
+
+import bulkxfer_client as bx
+from blehost.core import gatt_server as gs
+from blehost.protocols import provisioning as prov
+from conftest import FakeServer
+
+STATUS = prov.DeviceStatus(prov.KEY_READY, 0, 371, bytes(range(32)))
+
+
+class CliServer(FakeServer):
+    """FakeServer that also echoes PING, as the device does."""
+
+    def _on_frame(self, f):
+        if f[1] == bx.APP_TYPE_PING:
+            self._notify(bx.frame(bx.APP_TYPE_PING, f[2:]))
+            return
+        super()._on_frame(f)
+
+
+class FakeBleakClient:
+    made = []
+
+    def __init__(self, target, disconnected_callback=None):
+        self.target = target
+        self.disconnected_callback = disconnected_callback
+        self.server = CliServer()
+        self.notify_uuid = None
+        FakeBleakClient.made.append(self)
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *exc):
+        return False
+
+    @property
+    def mtu_size(self):
+        return self.server.mtu_size
+
+    async def write_gatt_char(self, uuid, data, response=False):
+        await self.server.write_gatt_char(uuid, data, response)
+
+    async def read_gatt_char(self, uuid):
+        return await self.server.read_gatt_char(uuid)
+
+    async def start_notify(self, uuid, callback):
+        self.notify_uuid = uuid
+        self.server.client = types.SimpleNamespace(
+            on_notify=callback, data_uuid=bx.char_uuid(1, bx.PROJECT_BASE),
+            caps_uuid=bx.char_uuid(3, bx.PROJECT_BASE))
+
+
+@pytest.fixture
+def bleak(monkeypatch):
+    """A fake bleak: one device called "dev" at AA:BB."""
+    found = {"dev": "AA:BB"}
+
+    async def find_device_by_name(name, timeout=10.0):
+        return found.get(name)
+
+    mod = types.ModuleType("bleak")
+    mod.BleakClient = FakeBleakClient
+    mod.BleakScanner = types.SimpleNamespace(find_device_by_name=find_device_by_name)
+    monkeypatch.setitem(sys.modules, "bleak", mod)
+    FakeBleakClient.made = []
+    return mod
+
+
+def cli(monkeypatch, *argv):
+    monkeypatch.setattr(sys, "argv", ["bulkxfer_client.py", *argv])
+    asyncio.run(bx.main())
+
+
+# ---- find_device ---------------------------------------------------------------------
+def test_find_device(bleak, capsys):
+    assert asyncio.run(bx.find_device("11:22", "anything")) == "11:22"
+    assert asyncio.run(bx.find_device(None, "dev")) == "AA:BB"
+    assert "scanning for 'dev'" in capsys.readouterr().out
+    with pytest.raises(SystemExit, match="device 'gone' not found"):
+        asyncio.run(bx.find_device(None, "gone"))
+
+
+# ---- transfer commands -----------------------------------------------------------------
+def test_caps(bleak, monkeypatch, capsys):
+    cli(monkeypatch, "caps", "--name", "dev")
+    out = capsys.readouterr().out
+    assert "connected, ATT MTU 247 -> 244 B frames, 240 B per DATA frame" in out
+    assert "protocol v2, max frame 244 B, window 16" in out
+    c = FakeBleakClient.made[0]
+    assert c.target == "AA:BB" and c.notify_uuid == bx.char_uuid(2, bx.PROJECT_BASE)
+
+
+def test_ping(bleak, monkeypatch, capsys):
+    cli(monkeypatch, "ping", "--address", "11:22")
+    assert "echo type 0x02 b'ping'" in capsys.readouterr().out
+
+
+def test_send_reports_the_server_result(bleak, monkeypatch, capsys):
+    real_init = CliServer.__init__
+
+    def init(self, *a, **kw):
+        real_init(self, *a, **kw)
+        self.after_end = [(bx.APP_TYPE_RESULT, struct.pack("<BII", 0, 1000, 512))]
+    monkeypatch.setattr(CliServer, "__init__", init)
+    with pytest.raises(SystemExit) as e:
+        cli(monkeypatch, "send", "1000", "--name", "dev")
+    out = capsys.readouterr().out
+    assert e.value.code == 0
+    assert "client -> server: 1000 B, OK" in out and "server reports: OK, 1000 B, 512 kbit/s" in out
+    app_type, data = FakeBleakClient.made[0].server.objects[0]
+    assert app_type == 0x10 and len(data) == 1000
+
+
+def test_send_failure_exits_non_zero(bleak, monkeypatch, capsys):
+    real_init = CliServer.__init__
+
+    def init(self, *a, **kw):
+        real_init(self, *a, **kw)
+        self.reject = 0x04
+    monkeypatch.setattr(CliServer, "__init__", init)
+    with pytest.raises(SystemExit) as e:
+        cli(monkeypatch, "send", "100", "--name", "dev")
+    assert e.value.code == 1
+
+
+def _hex_file(tmp_path):
+    """Two segments: 32 bytes at 0x0000 and 16 bytes at 0x1000."""
+    def rec(addr, data, rtype=0):
+        body = bytes([len(data), addr >> 8, addr & 0xFF, rtype]) + data
+        return ":" + (body + bytes([(-sum(body)) & 0xFF])).hex().upper()
+    lines = [rec(0x0000, bytes(range(16))), rec(0x0010, bytes(range(16, 32))),
+             rec(0x1000, bytes(range(100, 116))), ":00000001FF"]
+    p = tmp_path / "t.hex"
+    p.write_text("\n".join(lines) + "\n")
+    return str(p)
+
+
+def test_hex_upload(bleak, monkeypatch, capsys, tmp_path):
+    real_init = CliServer.__init__
+
+    def init(self, *a, **kw):
+        real_init(self, *a, **kw)
+        self.after_end = [(bx.APP_TYPE_STORED, struct.pack("<BII", 0, 0, 32))]
+    monkeypatch.setattr(CliServer, "__init__", init)
+    cli(monkeypatch, "hex", _hex_file(tmp_path), "--name", "dev")
+    out = capsys.readouterr().out
+    assert "t.hex: 2 segment(s), 48 bytes" in out
+    assert "0x00000000 32 B: OK" in out and "0x00001000 16 B: OK" in out
+    assert "hex upload done" in out
+    objs = FakeBleakClient.made[0].server.objects
+    assert objs[0] == (bx.APP_TYPE_SEGMENT, struct.pack("<I", 0) + bytes(range(32)))
+    assert objs[1] == (bx.APP_TYPE_SEGMENT, struct.pack("<I", 0x1000) + bytes(range(100, 116)))
+
+
+def test_hex_upload_stops_at_a_failed_segment(bleak, monkeypatch, tmp_path):
+    real_init = CliServer.__init__
+
+    def init(self, *a, **kw):
+        real_init(self, *a, **kw)
+        self.corrupt = True
+    monkeypatch.setattr(CliServer, "__init__", init)
+    with pytest.raises(SystemExit) as e:
+        cli(monkeypatch, "hex", _hex_file(tmp_path), "--name", "dev")
+    assert e.value.code == 1 and len(FakeBleakClient.made[0].server.writes) > 0
+
+
+def test_hex_upload_without_stored_times_out(bleak, monkeypatch, tmp_path):
+    async def no_stored(self, addr, data, progress=None):
+        raise TimeoutError(f"0x{addr:08x}: no STORED from the server")
+    monkeypatch.setattr(bx.BulkXferClient, "upload_segment", no_stored)
+    with pytest.raises(SystemExit, match="no STORED"):
+        cli(monkeypatch, "hex", _hex_file(tmp_path), "--name", "dev")
+
+
+@pytest.mark.parametrize("argv, match", [
+    (["hex"], "hex: missing .hex file"),
+    (["hex", "no_such_file.hex"], "no_such_file.hex"),
+])
+def test_hex_argument_errors(bleak, monkeypatch, argv, match):
+    with pytest.raises(SystemExit, match=match):
+        cli(monkeypatch, *argv)
+    assert FakeBleakClient.made == [], "nothing connects on a bad argument"
+
+
+# ---- provision / deprovision --------------------------------------------------------------
+class FakePc:
+    made = []
+    fail = None
+
+    def __init__(self, base, log=print, tap=None, backend_factory=None):
+        self.base = base
+        self.receiver = "pc-receiver"
+        self.started = self.stopped = False
+        self.lost = 0
+        FakePc.made.append(self)
+
+    async def start(self):
+        if FakePc.fail:
+            raise gs.GattServerUnavailable(FakePc.fail)
+        self.started = True
+
+    async def stop(self):
+        self.stopped = True
+
+    def link_lost(self):
+        self.lost += 1
+
+
+class FakeSession:
+    made = []
+    fail = None
+
+    def __init__(self, client, receiver, log=print, step=None):
+        self.client, self.receiver, self.step = client, receiver, step
+        self.calls = []
+        FakeSession.made.append(self)
+
+    async def provision(self, ca, days):
+        self.calls.append(("provision", ca.subject, days))
+        self.step("CSR received")
+        if FakeSession.fail:
+            raise prov.ProvisioningError(FakeSession.fail, 0x05)
+        return FakeSession.outcome(ca)
+
+    async def deprovision(self):
+        self.calls.append("deprovision")
+        if FakeSession.fail:
+            raise prov.ProvisioningError(FakeSession.fail)
+
+    async def get_status(self):
+        self.calls.append("status")
+        return STATUS
+
+
+@pytest.fixture
+def prov_fakes(bleak, monkeypatch):
+    FakePc.made, FakePc.fail = [], None
+    FakeSession.made, FakeSession.fail = [], None
+    FakeSession.outcome = staticmethod(
+        lambda ca: prov.Outcome(STATUS, b"csr", ca.certificate, ca.cert_der, "abc1"))
+    monkeypatch.setattr(gs, "PcGattServer", FakePc)
+    monkeypatch.setattr(prov, "ProvisioningSession", FakeSession)
+
+
+def test_provision_creates_a_ca_then_reuses_it(prov_fakes, monkeypatch, capsys, tmp_path):
+    folder, out = str(tmp_path / "ca"), str(tmp_path / "device.pem")
+    cli(monkeypatch, "provision", "--name", "dev", "--ca", folder, "--validity", "90", "--out", out)
+    text = capsys.readouterr().out
+    assert os.path.exists(os.path.join(folder, "ca_key.pem")), "no CA yet: one is created"
+    assert "- CSR received" in text and "provisioned: serial abc1" in text
+    assert FakeSession.made[0].calls == [("provision", "CN=BLE Host Provisioning CA", 90)]
+    assert FakeSession.made[0].receiver == "pc-receiver"
+    pc = FakePc.made[0]
+    assert pc.started and pc.stopped and pc.base == bx.PROJECT_BASE
+    with open(out, "rb") as fh:
+        assert x509.load_pem_x509_certificate(fh.read()).subject.rfc4514_string() == \
+            "CN=BLE Host Provisioning CA"
+
+    # A link loss reaches the PC service (its running transfer fails)
+    FakeBleakClient.made[0].disconnected_callback(None)
+    assert pc.lost == 1
+
+    with open(os.path.join(folder, "ca_cert.pem"), "rb") as fh:
+        first = fh.read()
+    cli(monkeypatch, "provision", "--name", "dev", "--ca", folder)
+    with open(os.path.join(folder, "ca_cert.pem"), "rb") as fh:
+        assert fh.read() == first, "an existing CA is loaded, not replaced"
+    assert FakeSession.made[1].calls[0][2] == 365
+
+
+def test_provision_with_a_broken_ca_folder(prov_fakes, monkeypatch, tmp_path):
+    folder = tmp_path / "ca"
+    folder.mkdir()
+    (folder / "ca_cert.pem").write_text("not a certificate")
+    with pytest.raises(SystemExit, match="CA: no CA in"):
+        cli(monkeypatch, "provision", "--name", "dev", "--ca", str(folder))
+    assert FakePc.made == []
+
+
+def test_provision_needs_the_pc_service(prov_fakes, monkeypatch, tmp_path):
+    FakePc.fail = "hosting a GATT service needs Windows (WinRT)"
+    with pytest.raises(SystemExit, match="PC BulkXfer service not available: hosting"):
+        cli(monkeypatch, "provision", "--name", "dev", "--ca", str(tmp_path / "ca"))
+    assert FakeBleakClient.made == [], "no connection without the PC service"
+
+
+def test_provision_failure_stops_the_pc_service(prov_fakes, monkeypatch, tmp_path):
+    FakeSession.fail = "device answered BAD_SIG"
+    with pytest.raises(SystemExit, match="provisioning failed: device answered BAD_SIG"):
+        cli(monkeypatch, "provision", "--name", "dev", "--ca", str(tmp_path / "ca"))
+    assert FakePc.made[0].stopped
+
+
+@pytest.mark.parametrize("failures", [0, 2])
+def test_provision_negative(prov_fakes, monkeypatch, capsys, tmp_path, failures):
+    seen = []
+
+    async def rejections(session, ca, days):
+        seen.append((session, days))
+        return failures, FakeSession.outcome(ca)
+    monkeypatch.setattr(bx, "provision_with_rejections", rejections)
+    argv = ["provision", "--negative", "--name", "dev", "--ca", str(tmp_path / "ca")]
+    if failures:
+        with pytest.raises(SystemExit, match="device verification: 2 case"):
+            cli(monkeypatch, *argv)
+    else:
+        cli(monkeypatch, *argv)
+        assert "provisioned: serial abc1" in capsys.readouterr().out
+    assert seen[0][0] is FakeSession.made[0] and seen[0][1] == 365
+    assert FakeSession.made[0].calls == [], "the negative run replaces the plain one"
+    assert FakePc.made[0].stopped
+
+
+def test_deprovision(prov_fakes, monkeypatch, capsys):
+    cli(monkeypatch, "deprovision", "--name", "dev")
+    out = capsys.readouterr().out
+    assert FakeSession.made[0].calls == ["deprovision", "status"]
+    assert FakeSession.made[0].receiver is None, "a wipe needs no PC service"
+    assert f"deprovisioned: device KEY_READY, new CSR 371 B, key SHA-256 {bytes(range(8)).hex()}" in out
+
+
+def test_deprovision_failure(prov_fakes, monkeypatch):
+    FakeSession.fail = "refused"
+    with pytest.raises(SystemExit, match="deprovisioning failed: refused"):
+        cli(monkeypatch, "deprovision", "--name", "dev")

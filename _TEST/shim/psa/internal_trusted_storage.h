@@ -1,6 +1,7 @@
 /**
  * @file          internal_trusted_storage.h
- * @brief         Host-test stand-in for the PSA Internal Trusted Storage API:
+ * @brief         Host-test stand-in for the PSA Internal Trusted Storage API,
+ *                with Zephyr secure storage's signatures (size_t lengths):
  *                the types CSR_Generator.h and DeviceCert.h name. The functions
  *                are declared only; a test that reaches them defines them.
  * @date          01/10/2026

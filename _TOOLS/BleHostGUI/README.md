@@ -46,7 +46,7 @@ blehost/
     provisioning.py      provisioning appTypes, STATUS/RESULT codecs, ProvisioningSession (incl. deprovision)
   pki/
     authority.py         the CA: create/load, check a CSR, issue a device certificate
-    negative.py          certificates the device must reject (hardware tests)
+    negative.py          certificates the device must reject (host test devicecert_verify, provision --negative)
   features/
     base.py              Feature base class (one tab each)
     hex_upload.py        Hex Upload tab
@@ -67,7 +67,7 @@ Tk runs on the main thread. BLE work runs on an asyncio loop in a worker thread.
 2. Talk to the device only through `ctx.link` (`gatt.write_gatt_char`, `gatt.read_gatt_char`, `start_notify`) or a service in `ctx.services`. Traffic then shows in the monitor automatically.
 3. If the feature has its own wire format, put the codec in `blehost/protocols/` and register its characteristics with `ctx.decoders.register(uuid, name, decoder)`. BulkXfer appTypes are named with `bulkxfer.register_app_type()`.
 4. Add the class to `FEATURES` in `ble_host_gui.py`.
-5. Test the codec and protocol logic, but not the Tk code, in `_TEST/python/`. The `conftest.py` there provides a fake GATT link and a scripted BulkXfer server, so no adapter is needed (see [_TEST/README.md](../../_TEST/README.md)).
+5. Add its tests to `_TEST/python/` with the feature: the codec and protocol logic, and the tab itself. The `conftest.py` there provides a fake GATT link and a scripted BulkXfer server, so no adapter is needed. Test the tab's logic against stand-in Tk variables and a fake context, plus one test that builds the real tab, as `test_feature_provisioning.py` does (see [_TEST/README.md](../../_TEST/README.md)).
 
 A connection-wide service, such as a shared protocol endpoint, registers `link.add_connect_hook()` / `add_disconnect_hook()` and goes in `ctx.services` (see `BulkXferService`, and `PcGattServer` for a service the PC hosts: `ctx.services["pc_server"].receiver` receives what the device sends).
 
