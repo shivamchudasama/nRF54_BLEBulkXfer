@@ -187,8 +187,10 @@ static void sv_AssertPeerGetsResult(uint8_t u8_ref, uint8_t u8_status)
    sv_AssertPeerGets(u8ar_wire, sizeof(u8ar_wire), "RESULT");
 }
 
-/** The provisioner sends a certificate and waits for its RESULT. */
-static uint8_t su8ar_cert[VEC_PROV_MAX_CERT_LEN];
+/** The provisioner sends a certificate and waits for its RESULT. One byte
+    over the maximum, for the "too large" case: the peer computes the CRC over
+    the whole object before the device refuses it at START. */
+static uint8_t su8ar_cert[VEC_PROV_MAX_CERT_LEN + 1U];
 
 static void sv_SendCert(uint8_t u8_type, uint32_t u32_len)
 {
