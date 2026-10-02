@@ -11,6 +11,8 @@ powershell -ExecutionPolicy Bypass -File _TEST\run_tests.ps1 -Coverage  # + C an
 
 This needs a host `gcc` on PATH (MinGW-w64 or Strawberry Perl; gcc 4.4 and newer work) and Python 3.8+. CMake, CTest and Ninja are taken from PATH, or else from `C:\ncs\toolchains`. Python dependencies go into a venv in `build_test/venv`. The first configure downloads Unity and Mbed TLS 4.1.1 (both pinned by hash) and builds Mbed TLS once.
 
+A local pass is not the whole check. gcc 4.4 has no sanitizers and is 32-bit, so out-of-bounds reads and printf formats that are wrong only on 64-bit hosts (`size_t`, `ssize_t`) show up only in CI's `host-tests` job (GCC 13, ASan + UBSan, `-Werror`). When it fails there, the sanitizer report is in the job log and in the `report-c` artifact (`junit/<test>.xml`, as the failing test's output).
+
 The output goes to `build_test/report/`:
 
 | File | Content |
