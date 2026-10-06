@@ -56,11 +56,12 @@ shim/                  single-threaded stand-in for the Zephyr kernel, logging a
                          (user config), tfpsa_host_platform.c (in-memory ITS, test RNG,
                          zeroize), include/psa/ (the ITS headers its key storage expects)
 unit/BulkXfer/         test_frame.c, test_engine.c (built 3x: both / server / client roles)
-  sim_link.h             simulated BLE link + scripted peer (other side of both roles)
+  sim_link.h             simulated BLE link + scripted peer (other side of both roles),
+                         plus a second live link (sst_conn2) for moving roles between links
 unit/GATT_CB/          test_gatt_cb.c, against _DOC/GATT_CB/API_REFERENCE.md
 unit/DataStore/        test_datastore.c (built with and without CONFIG_DS_HEX_DUMP),
                        test_upload_e2e.c: real Server engine + router + DataStore + simulated client
-unit/BlkSvc/           test_router.c: appType router registration and dispatch
+unit/BlkSvc/           test_router.c: appType router registration, dispatch and filter
 unit/Prov/             test_prov.c: provisioning flow, storage order, boot restore and the wipe,
                        everything around it stubbed (storage/key calls recorded in order);
                        test_prov_e2e.c: real BulkXfer (both roles) + router + Prov.c, peer = provisioner;

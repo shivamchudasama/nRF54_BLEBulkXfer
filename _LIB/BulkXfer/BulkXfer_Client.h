@@ -18,7 +18,8 @@
  *                // bt_conn_cb.disconnected -> gv_BLK_OnDisconnected(conn)
  * @endcode
  *
- *                One connection at a time.
+ *                One connection at a time; gi_BLKC_Detach() releases it while
+ *                the link stays up, so the Client can attach to another.
  *
  * @date          24/09/2026
  * @author        Shivam Chudasama
@@ -116,6 +117,7 @@ typedef struct
 extern int gi_BLKC_Init(const BlkCliCfg_T *stpt_cfg);
 extern int gi_BLKC_Attach(struct bt_conn *stpt_conn);
 extern void gv_BLKC_OnDisconnected(struct bt_conn *stpt_conn);
+extern int gi_BLKC_Detach(void);
 
 /* ---- Sending ------------------------------------------------------------- */
 extern int gi_BLKC_Send(uint8_t u8_appType, const BlkSource_T *stpt_source,

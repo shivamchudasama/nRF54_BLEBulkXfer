@@ -18,6 +18,7 @@
 /*                                                                            */
 /******************************************************************************/
 #include "BulkRouter.h"
+#include <zephyr/sys/atomic.h>
 #include <errno.h>
 #include <stdbool.h>
 #include <stddef.h>
@@ -29,6 +30,12 @@
 /*                                  DEFINES                                   */
 /*                                                                            */
 /******************************************************************************/
+/**
+ * @def           ROUTER_FILTER_ON
+ * @brief         Set in st_filter while a filter applies; bits 15..8 hold the
+ *                first allowed appType, bits 7..0 the last.
+ */
+#define ROUTER_FILTER_ON                     (0x10000)
 
 /******************************************************************************/
 /*                                                                            */
@@ -54,6 +61,7 @@
 /*                                                                            */
 /******************************************************************************/
 static const BulkRoute_T *sstpt_FindRoute(uint8_t u8_appType);
+static bool sb_IsAllowed(uint8_t u8_appType);
 static int si_RouteRxStart(uint8_t u8_appType, uint32_t u32_totalLen);
 static int si_RouteRxData(uint8_t u8_appType, uint32_t u32_offset,
    const uint8_t *u8pt_data, uint16_t u16_len);
@@ -88,6 +96,14 @@ static uint8_t su8_routeCnt = 0U;
  * @brief         Set once the BulkXfer Server runs with the router callbacks.
  */
 static bool sb_isStarted = false;
+
+/**
+ * @var           st_filter
+ * @brief         appType filter for new transfers and short messages
+ *                (ROUTER_FILTER_ON | first << 8 | last), 0 when none applies.
+ *                Written by an application thread, read on the engine thread.
+ */
+static atomic_t st_filter = ATOMIC_INIT(0);
 
 /******************************************************************************/
 /*                                                                            */
@@ -124,16 +140,43 @@ static const BulkRoute_T *sstpt_FindRoute(uint8_t u8_appType)
 }
 
 /**
+ * @private       sb_IsAllowed
+ * @brief         Whether the current filter lets an appType through.
+ * @param[in]     u8_appType Application type.
+ * @return        true if no filter applies or the type is inside it.
+ */
+static bool sb_IsAllowed(uint8_t u8_appType)
+{
+   atomic_val_t t_filter = atomic_get(&st_filter);
+
+   // Check if a filter applies
+   if ((t_filter & ROUTER_FILTER_ON) == 0)
+   {
+      return true;
+   }
+
+   return (u8_appType >= (uint8_t)((t_filter >> 8) & 0xFF)) &&
+      (u8_appType <= (uint8_t)(t_filter & 0xFF));
+}
+
+/**
  * @private       si_RouteRxStart
  * @brief         BlkRxStart_F: forward to the owning range, reject unrouted types.
  * @param[in]     u8_appType Application type announced by the client.
  * @param[in]     u32_totalLen Object size.
- * @return        The owner's answer, or -ENOTSUP when no range accepts transfers
- *                of this type.
+ * @return        The owner's answer, or -ENOTSUP when the filter excludes the
+ *                type or no range accepts transfers of this type.
  */
 static int si_RouteRxStart(uint8_t u8_appType, uint32_t u32_totalLen)
 {
    const BulkRoute_T *stpt_route = sstpt_FindRoute(u8_appType);
+
+   // Check if the filter lets this type through on the current link
+   if (!sb_IsAllowed(u8_appType))
+   {
+      APP_LOG_WRN("rejected: type 0x%02x filtered", u8_appType);
+      return -ENOTSUP;
+   }
 
    // Check if a module receives transfers of this type
    if ((stpt_route == NULL) || (stpt_route->fpt_onRxData == NULL))
@@ -196,7 +239,8 @@ static void sv_RouteRxDone(uint8_t u8_appType, BlkStatus_E e_status, uint32_t u3
 
 /**
  * @private       sv_RouteRxShort
- * @brief         BlkRxShort_F: forward to the owning range, log and drop others.
+ * @brief         BlkRxShort_F: forward to the owning range, log and drop others
+ *                (filtered types included).
  * @param[in]     u8_appType Application type.
  * @param[in]     u8pt_data Payload, valid only during the call.
  * @param[in]     u8_len Payload length.
@@ -206,8 +250,13 @@ static void sv_RouteRxShort(uint8_t u8_appType, const uint8_t *u8pt_data, uint8_
 {
    const BulkRoute_T *stpt_route = sstpt_FindRoute(u8_appType);
 
+   // Check if the filter lets this type through on the current link
+   if (!sb_IsAllowed(u8_appType))
+   {
+      APP_LOG_WRN("short message type 0x%02x filtered", u8_appType);
+   }
    // Check if a module handles short messages of this type
-   if ((stpt_route != NULL) && (stpt_route->fpt_onRxShort != NULL))
+   else if ((stpt_route != NULL) && (stpt_route->fpt_onRxShort != NULL))
    {
       stpt_route->fpt_onRxShort(u8_appType, u8pt_data, u8_len);
    }
@@ -313,6 +362,35 @@ int gi_BulkRouter_Start(void)
    }
 
    return i_ret;
+}
+
+/**
+ * @public        gv_BulkRouter_SetFilter
+ * @brief         Accept only appTypes u8_first..u8_last (inclusive) from now
+ *                on: other transfers are rejected at START (as unknown
+ *                types) and other short messages are dropped. A transfer
+ *                already accepted runs to its end. For a link whose peer may
+ *                reach only one module, e.g. a peer device that may only
+ *                pair. Any thread; replaces the previous filter.
+ * @param[in]     u8_first First allowed appType.
+ * @param[in]     u8_last Last allowed appType (inclusive).
+ * @return        None.
+ */
+void gv_BulkRouter_SetFilter(uint8_t u8_first, uint8_t u8_last)
+{
+   (void)atomic_set(&st_filter,
+      ROUTER_FILTER_ON | ((atomic_val_t)u8_first << 8) | (atomic_val_t)u8_last);
+}
+
+/**
+ * @public        gv_BulkRouter_ClearFilter
+ * @brief         Remove the filter: every registered range is reachable
+ *                again. Any thread.
+ * @return        None.
+ */
+void gv_BulkRouter_ClearFilter(void)
+{
+   (void)atomic_set(&st_filter, 0);
 }
 
 /**

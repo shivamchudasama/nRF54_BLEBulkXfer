@@ -74,6 +74,10 @@ static LinkPdu_T sstar_linkQ[LINK_HOST_BUFS];
 static uint32_t su32_linkHead = 0U;
 static uint32_t su32_linkCount = 0U;
 static struct bt_conn sst_conn = { 1 };
+/* A second live link with no peer model behind it (a host link while the
+   device also talks to the peer on sst_conn). GATT client operations on it
+   fail with -ENOTCONN; it exists so the roles can be moved between links. */
+TEST_HELPER struct bt_conn sst_conn2 = { 2 };
 static struct bt_gatt_attr sst_ctrlAttr = { NULL, NULL, 0U };
 TEST_HELPER struct bt_gatt_attr sst_dataAttr = { NULL, NULL, 0U };
 static bool sb_connected = false;
@@ -90,6 +94,7 @@ static struct bt_gatt_subscribe_params *sstpt_pendSubscribe = NULL;
 static struct bt_gatt_exchange_params *sstpt_pendMtu = NULL;
 static struct bt_gatt_subscribe_params *sstpt_devSub = NULL;   /* active subscription */
 TEST_HELPER int si_mtuExchanges = 0;
+TEST_HELPER int si_unsubscribes = 0;
 
 static void sv_PeerOnFrame(PduKind_E e_kind, const uint8_t *u8pt_buf, uint16_t u16_len);
 
@@ -297,6 +302,17 @@ int bt_gatt_subscribe(struct bt_conn *conn, struct bt_gatt_subscribe_params *par
    TEST_ASSERT_TRUE_MESSAGE((params->flags[0] & (1L << BT_GATT_SUBSCRIBE_FLAG_VOLATILE)) != 0,
       "subscription must be volatile");
    sstpt_pendSubscribe = params;
+   return 0;
+}
+
+/** Unsubscribe on a live link: the peer stops notifying at once (the CCC
+    write and its NULL-data notification are not modelled). */
+int bt_gatt_unsubscribe(struct bt_conn *conn, struct bt_gatt_subscribe_params *params)
+{
+   if (!sb_connected || (conn != &sst_conn)) { return -ENOTCONN; }
+   TEST_ASSERT_EQUAL_PTR_MESSAGE(sstpt_devSub, params, "unsubscribe of an unknown subscription");
+   si_unsubscribes++;
+   sstpt_devSub = NULL;
    return 0;
 }
 

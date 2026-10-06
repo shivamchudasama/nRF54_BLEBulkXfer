@@ -81,6 +81,8 @@ typedef struct
 /******************************************************************************/
 extern int gi_BulkRouter_Register(const BulkRoute_T *stpt_route);
 extern int gi_BulkRouter_Start(void);
+extern void gv_BulkRouter_SetFilter(uint8_t u8_first, uint8_t u8_last);
+extern void gv_BulkRouter_ClearFilter(void);
 
 #endif //!_BULK_ROUTER_H
 

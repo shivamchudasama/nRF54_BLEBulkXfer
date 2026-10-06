@@ -80,6 +80,7 @@ void setUp(void)
 {
    su8_routeCnt = 0U;
    sb_isStarted = false;
+   gv_BulkRouter_ClearFilter();
    si_initRet = 0;
    su32_initCalls = 0U;
    (void)memset(&sst_cfg, 0, sizeof(sst_cfg));
@@ -295,6 +296,63 @@ static void test_ShortMessagesAreRoutedOrLogged(void)
    TEST_ASSERT_EQUAL_UINT32(1U, sst_b.u32_short);
 }
 
+/******************************************************************************/
+/*  Filter                                                                    */
+/******************************************************************************/
+static void test_FilterRejectsOtherTransfersAtStart(void)
+{
+   sv_StartTwoModules();
+   gv_BulkRouter_SetFilter(0x20U, 0x2FU);
+
+   // Outside: rejected before the owner is asked
+   TEST_ASSERT_EQUAL_INT(-ENOTSUP, sst_cfg.fpt_onRxStart(0x10U, 5U));
+   TEST_ASSERT_EQUAL_UINT32(0U, sst_a.u32_start);
+   TEST_ASSERT_NOT_NULL(gcpt_SimLogFind("rejected: type 0x10 filtered"));
+
+   // Inside, boundaries included: the owner decides as before
+   TEST_ASSERT_EQUAL_INT(0, sst_cfg.fpt_onRxStart(0x20U, 5U));
+   TEST_ASSERT_EQUAL_INT(0, sst_cfg.fpt_onRxStart(0x2FU, 5U));
+   TEST_ASSERT_EQUAL_UINT32(2U, sst_b.u32_start);
+
+   // Cleared: every range reachable again
+   gv_BulkRouter_ClearFilter();
+   TEST_ASSERT_EQUAL_INT(0, sst_cfg.fpt_onRxStart(0x10U, 5U));
+   TEST_ASSERT_EQUAL_UINT32(1U, sst_a.u32_start);
+}
+
+static void test_FilterDropsOtherShortMessages(void)
+{
+   uint8_t u8ar_p[2] = { 9, 9 };
+
+   sv_StartTwoModules();
+   gv_BulkRouter_SetFilter(0x10U, 0x10U);
+   sst_cfg.fpt_onRxShort(0x27U, u8ar_p, 2U);
+   TEST_ASSERT_EQUAL_UINT32(0U, sst_b.u32_short);
+   TEST_ASSERT_NOT_NULL(gcpt_SimLogFind("short message type 0x27 filtered"));
+   sst_cfg.fpt_onRxShort(0x10U, u8ar_p, 2U);
+   TEST_ASSERT_EQUAL_UINT32(1U, sst_a.u32_short);
+
+   // A new filter replaces the previous one
+   gv_BulkRouter_SetFilter(0x20U, 0x2FU);
+   sst_cfg.fpt_onRxShort(0x27U, u8ar_p, 2U);
+   TEST_ASSERT_EQUAL_UINT32(1U, sst_b.u32_short);
+   sst_cfg.fpt_onRxShort(0x10U, u8ar_p, 2U);
+   TEST_ASSERT_EQUAL_UINT32(1U, sst_a.u32_short);
+}
+
+static void test_FilterLetsAnAcceptedTransferFinish(void)
+{
+   uint8_t u8_d = 0U;
+
+   sv_StartTwoModules();
+   TEST_ASSERT_EQUAL_INT(0, sst_cfg.fpt_onRxStart(0x10U, 1U));
+   gv_BulkRouter_SetFilter(0x20U, 0x2FU);
+   TEST_ASSERT_EQUAL_INT(0, sst_cfg.fpt_onRxData(0x10U, 0U, &u8_d, 1U));
+   sst_cfg.fpt_onRxDone(0x10U, eBS_OK, 1U);
+   TEST_ASSERT_EQUAL_UINT32(1U, sst_a.u32_data);
+   TEST_ASSERT_EQUAL_UINT32(1U, sst_a.u32_done);
+}
+
 int main(void)
 {
    (void)setvbuf(stdout, NULL, _IONBF, 0);
@@ -312,5 +370,8 @@ int main(void)
    RUN_TEST(test_RangeWithoutReceiverRejectsTransfers);
    RUN_TEST(test_RangeWithoutStartAcceptsEverything);
    RUN_TEST(test_ShortMessagesAreRoutedOrLogged);
+   RUN_TEST(test_FilterRejectsOtherTransfersAtStart);
+   RUN_TEST(test_FilterDropsOtherShortMessages);
+   RUN_TEST(test_FilterLetsAnAcceptedTransferFinish);
    return UNITY_END();
 }

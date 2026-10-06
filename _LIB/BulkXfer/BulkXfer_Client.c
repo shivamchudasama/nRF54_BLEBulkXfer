@@ -319,11 +319,22 @@ static uint16_t su16_BLKC_ctrlEnd = 0U;
 static struct bt_gatt_discover_params sst_BLKC_discoverParams;
 
 /**
- * @var           sst_BLKC_subscribeParams
- * @brief         CTRL subscription; the stack keeps the pointer while
- *                subscribed.
+ * @var           sstar_BLKC_subscribeParams
+ * @brief         CTRL subscriptions; the stack keeps the pointer while
+ *                subscribed, and until the CCC write of an unsubscribe has
+ *                completed. Two sets, used in turn: gi_BLKC_Detach()
+ *                unsubscribes one on a link that stays up, and the next
+ *                attach uses the other while that CCC write may still be in
+ *                flight.
  */
-static struct bt_gatt_subscribe_params sst_BLKC_subscribeParams;
+static struct bt_gatt_subscribe_params sstar_BLKC_subscribeParams[2];
+
+/**
+ * @var           su8_BLKC_subIdx
+ * @brief         Index of the set the current or next attach uses. Guarded by
+ *                gst_BLK_lock.
+ */
+static uint8_t su8_BLKC_subIdx = 0U;
 
 /**
  * @var           sst_BLKC_mtuParams
@@ -591,6 +602,7 @@ static uint8_t su8_CliDiscoverCb(struct bt_conn *stpt_conn, const struct bt_gatt
 {
    const struct bt_gatt_service_val *stpt_svc = NULL;
    const struct bt_gatt_chrc *stpt_chrc = NULL;
+   struct bt_gatt_subscribe_params *stpt_sub = NULL;
    int i_ret = 0;
 
    // Check if the attach this belongs to is still current
@@ -664,17 +676,18 @@ static uint8_t su8_CliDiscoverCb(struct bt_conn *stpt_conn, const struct bt_gatt
             return BT_GATT_ITER_STOP;
          }
 
-         (void)memset(&sst_BLKC_subscribeParams, 0, sizeof(sst_BLKC_subscribeParams));
-         sst_BLKC_subscribeParams.notify = su8_CliCtrlNotify;
-         sst_BLKC_subscribeParams.subscribe = sv_CliSubscribed;
-         sst_BLKC_subscribeParams.value_handle = su16_BLKC_ctrlHandle;
-         sst_BLKC_subscribeParams.ccc_handle = stpt_attr->handle;
-         sst_BLKC_subscribeParams.value = BT_GATT_CCC_NOTIFY;
+         stpt_sub = &sstar_BLKC_subscribeParams[su8_BLKC_subIdx];
+         (void)memset(stpt_sub, 0, sizeof(*stpt_sub));
+         stpt_sub->notify = su8_CliCtrlNotify;
+         stpt_sub->subscribe = sv_CliSubscribed;
+         stpt_sub->value_handle = su16_BLKC_ctrlHandle;
+         stpt_sub->ccc_handle = stpt_attr->handle;
+         stpt_sub->value = BT_GATT_CCC_NOTIFY;
          // Volatile: dropped at disconnect even when bonded, so the next
          // attach can reuse these parameters
-         atomic_set_bit(sst_BLKC_subscribeParams.flags, BT_GATT_SUBSCRIBE_FLAG_VOLATILE);
+         atomic_set_bit(stpt_sub->flags, BT_GATT_SUBSCRIBE_FLAG_VOLATILE);
 
-         i_ret = bt_gatt_subscribe(stpt_conn, &sst_BLKC_subscribeParams);
+         i_ret = bt_gatt_subscribe(stpt_conn, stpt_sub);
 
          // -EALREADY: already subscribed, and sv_CliSubscribed() will not run
          if ((i_ret != 0) && (i_ret != -EALREADY))
@@ -1388,7 +1401,8 @@ int gi_BLKC_Init(const BlkCliCfg_T *stpt_cfg)
  *                sequence. Asynchronous. Thread context only; not ISR-safe.
  *                Works in either link role (central or peripheral).
  *
- *                - One connection at a time. Takes its own reference on
+ *                - One connection at a time (gi_BLKC_Detach() releases it
+ *                  while the link stays up). Takes its own reference on
  *                  stpt_conn, released at disconnect or when the attach
  *                  fails.
  *                - Increments st_BLKC_connGen, then publishes the connection
@@ -1564,6 +1578,81 @@ void gv_BLKC_OnDisconnected(struct bt_conn *stpt_conn)
    k_mutex_unlock(&gst_BLK_lock);
 
    gv_BLK_Kick();
+}
+
+/**
+ * @public        gi_BLKC_Detach
+ * @brief         Release the Client's connection while the link stays up, so
+ *                that it can attach to another one. Thread context only; not
+ *                ISR-safe.
+ *
+ *                - Refused while an attach or a transfer is in progress
+ *                  (wait for fpt_onReady / fpt_onTxDone, or abort the
+ *                  transfer first).
+ *                - Unbinds as a disconnect does (gv_BLKC_OnDisconnected()),
+ *                  but no callback is owed: nothing was in progress.
+ *                - If the CTRL subscription was made, unsubscribes it on the
+ *                  old link (a CCC write; its result is not reported). The
+ *                  next attach uses the other subscription set, so it does
+ *                  not wait for that write. A detach that follows the next
+ *                  attach within one CCC round trip could reuse a set still
+ *                  in flight; one attach per link change is the intended use.
+ *                - Drops the connection reference.
+ * @return        0 on success.
+ *                -EPERM if gi_BLKC_Init() has not run.
+ *                -ENOTCONN if no connection is bound.
+ *                -EBUSY if an attach or a transfer is in progress.
+ */
+int gi_BLKC_Detach(void)
+{
+   struct bt_conn *stpt_conn = NULL;
+   struct bt_gatt_subscribe_params *stpt_sub = NULL;
+
+   // Check if the Client is running
+   if (!sb_BLKC_initialized)
+   {
+      return -EPERM;
+   }
+
+   (void)k_mutex_lock(&gst_BLK_lock, K_FOREVER);
+
+   // Check if a connection is bound
+   if (sstpt_BLKC_conn == NULL)
+   {
+      k_mutex_unlock(&gst_BLK_lock);
+      return -ENOTCONN;
+   }
+
+   // Check if something is in progress on it
+   if ((se_BLKC_state == eBCS_ATTACHING) || (sst_BLKC_session.e_state != eBTS_IDLE))
+   {
+      k_mutex_unlock(&gst_BLK_lock);
+      return -EBUSY;
+   }
+
+   // Check if the subscription was made: it is removed below, and the next
+   // attach uses the other set
+   if (se_BLKC_state == eBCS_READY)
+   {
+      stpt_sub = &sstar_BLKC_subscribeParams[su8_BLKC_subIdx];
+      su8_BLKC_subIdx ^= 1U;
+   }
+
+   stpt_conn = sstpt_BLKC_conn;
+   sv_CliRelease();
+   k_mutex_unlock(&gst_BLK_lock);
+
+   // Stack call may block: made without the lock, holding the reference
+   if (stpt_sub != NULL)
+   {
+      (void)bt_gatt_unsubscribe(stpt_conn, stpt_sub);
+   }
+
+   bt_conn_unref(stpt_conn);
+
+   gv_BLK_Kick();
+
+   return 0;
 }
 
 /**

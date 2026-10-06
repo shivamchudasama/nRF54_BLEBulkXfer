@@ -16,7 +16,8 @@
  *                  printed only with gb_simVerbose.
  *                - __ASSERT failures can be trapped with SIM_EXPECT_ASSERT().
  *                - bt_gatt_notify_cb, bt_gatt_write_without_response_cb,
- *                  bt_gatt_discover, bt_gatt_subscribe, bt_gatt_exchange_mtu,
+ *                  bt_gatt_discover, bt_gatt_subscribe, bt_gatt_unsubscribe,
+ *                  bt_gatt_exchange_mtu,
  *                  bt_gatt_is_subscribed and bt_gatt_get_mtu are implemented
  *                  by the test that needs them (simulated link and peer).
  *
@@ -541,6 +542,7 @@ extern int bt_gatt_write_without_response_cb(struct bt_conn *conn, uint16_t hand
    const void *data, uint16_t length, bool sign, bt_gatt_complete_func_t func, void *user_data);
 extern int bt_gatt_discover(struct bt_conn *conn, struct bt_gatt_discover_params *params);
 extern int bt_gatt_subscribe(struct bt_conn *conn, struct bt_gatt_subscribe_params *params);
+extern int bt_gatt_unsubscribe(struct bt_conn *conn, struct bt_gatt_subscribe_params *params);
 extern int bt_gatt_exchange_mtu(struct bt_conn *conn, struct bt_gatt_exchange_params *params);
 
 #endif // _ZEPHYR_SHIM_H

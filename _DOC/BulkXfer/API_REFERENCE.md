@@ -10,7 +10,9 @@ The **sender is always the GATT client** and the **receiver always hosts the GAT
 | **Server** (RX) | [BulkXfer_Server.h](../../_LIB/BulkXfer/BulkXfer_Server.h) | peer → this device | Hosts DATA + CTRL. Receives frames through the DATA write hook and answers on CTRL |
 
 A device that needs both directions runs both roles. Each role binds **one connection
-at a time**, and the two roles may use the same link or different links.
+at a time**, and the two roles may use the same link or different links. A device that keeps
+several links up moves a role between them explicitly: `gi_BLKS_Rebind()` for the Server,
+`gi_BLKC_Detach()` then `gi_BLKC_Attach()` for the Client.
 
 For design rationale and throughput tuning, see [README.md](README.md). The wire protocol
 (frames, sequences, timing, error handling) is specified independently of this code in
@@ -168,6 +170,21 @@ running transfer with `eBS_DISCONNECTED`. The failure is reported asynchronously
 `fpt_onRxDone` on the engine thread. Calls for other connections are ignored.
 `gv_BLK_OnDisconnected()` calls it.
 
+#### `int gi_BLKS_Rebind(struct bt_conn *stpt_conn)`
+Moves the Server to another connection, or releases it (`NULL`), while both links stay up.
+`gv_BLKS_OnConnected()` binds only the first connection; a device that serves a host link and
+then a peer link moves the binding with this call. The bound connection is released as by
+`gv_BLKS_OnDisconnected()` (queued frames discarded, reference dropped; its later writes to
+DATA are dropped silently, and its CTRL subscription is left to its client), then
+`stpt_conn` is bound as by `gv_BLKS_OnConnected()`, link tuning included. Rebinding the bound
+connection is a no-op. Thread context only.
+
+| Return | Meaning |
+|---|---|
+| `0` | Moved, released, or already bound to `stpt_conn` |
+| `-EPERM` | Not initialised |
+| `-EBUSY` | An incoming transfer is in progress (it is never cut) |
+
 ### Server → client
 
 #### `int gi_BLKS_SendShort(uint8_t u8_appType, const void *vpt_data, uint8_t u8_len, k_timeout_t t_timeout)`
@@ -274,6 +291,22 @@ Releases the bound connection, stops the Client timers and restores its credits.
 transfer fails with `eBS_DISCONNECTED` through `fpt_onTxDone`. An attach in progress reports
 `fpt_onReady(conn, -ENOTCONN)`. Both are reported asynchronously on the engine thread. Calls
 for other connections are ignored. `gv_BLK_OnDisconnected()` calls it.
+
+#### `int gi_BLKC_Detach(void)`
+Releases the Client's connection while the link stays up, so that `gi_BLKC_Attach()` can bind
+another one. Unbinds as a disconnect does, but owes no callback (nothing is in progress). If the
+CTRL subscription was made, it is unsubscribed on the old link with a CCC write whose result is
+not reported. The Client keeps two subscription parameter sets and the next attach uses the
+other one, so it does not wait for that write. A second detach within one CCC round trip of the
+following attach could reuse a set still in flight; detach once per link change. Thread context
+only.
+
+| Return | Meaning |
+|---|---|
+| `0` | Released |
+| `-EPERM` | Not initialised |
+| `-ENOTCONN` | No connection is bound |
+| `-EBUSY` | An attach or a transfer is in progress (wait for its callback, or abort the transfer) |
 
 ### Sending
 
@@ -569,3 +602,4 @@ Every macro is `#ifndef`-guarded. Override it from the application's CMake, e.g.
 8. The server answers only a client that is subscribed to CTRL.
 9. Call `gv_BLK_OnDisconnected()` (or the per-role variants) from `bt_conn_cb.disconnected` for every link a role may be bound to.
 10. Never call the API from ISR context except `gv_BLKS_AbortRx()` / `gv_BLKC_AbortTx()` (atomic bit + wake). The other functions take a mutex.
+11. With several links up, a role stays on its link until moved: `gi_BLKS_Rebind()` and `gi_BLKC_Detach()` refuse to move it in the middle of a transfer.

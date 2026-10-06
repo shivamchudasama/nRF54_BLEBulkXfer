@@ -47,9 +47,12 @@ The device's BulkXfer Server is shared by appType range ([_ASW/_BLK_SVC/BulkRout
 |---|---|---|
 | `0x01`, `0x10`, `0x11` | Hex upload (`_DATA_STORE`) | This document |
 | `0x20`–`0x2F` | Device provisioning (`_PROV`) | [../Provisioning/PROTOCOL.md](../Provisioning/PROTOCOL.md) |
+| `0x30`–`0x3F` | Device pairing (`_PAIR`), between two devices | [../Pairing/PROTOCOL.md](../Pairing/PROTOCOL.md) |
 | others up to `0xEF` | Free | A transfer is refused (§5), a short message is logged and ignored |
 
 A new user of the Server registers a free range with `gi_BulkRouter_Register()` before `gi_BulkRouter_Start()` and adds it here.
+
+While the Server is bound to a peer device for pairing, the router's filter (`gv_BulkRouter_SetFilter()`) admits only `0x30`–`0x3F`: any other transfer is refused at START as an unknown type and any other short message is dropped, so a peer device cannot upload hex or reach provisioning.
 
 ## 4. Upload sequence
 
