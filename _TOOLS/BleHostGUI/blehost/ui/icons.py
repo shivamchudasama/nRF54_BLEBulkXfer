@@ -37,7 +37,7 @@ GLYPHS = {
     "upload": "\uE898", "stop": "\uE733", "folder": "\uE838",
     "certificate": "\uEB95", "shield": "\uEA18", "save": "\uE74E", "delete": "\uE74D",
     "clear": "\uE75C", "traffic": "\uE9D9", "add": "\uE710", "pause": "\uE769",
-    "device": "\uE772", "log": "\uE7C3", "more": "\uE712",
+    "device": "\uE772", "log": "\uE7C3", "more": "\uE712", "pair": "\uE72E",
 }
 
 _FONT_DIR = os.path.join(os.environ.get("WINDIR", r"C:\Windows"), "Fonts")

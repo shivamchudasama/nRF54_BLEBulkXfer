@@ -1,6 +1,6 @@
 # BLE Host GUI
 
-PC-side GUI (Tkinter + [bleak](https://github.com/hbldh/bleak), a flat light / dark ttk theme of its own, icons drawn with [Pillow](https://python-pillow.org)) for the nRF54 BLE Bulk Transfer firmware. The PC is the BLE central and the BulkXfer **Client**; the board is the GATT server and BulkXfer Server. For device provisioning the PC also hosts a BulkXfer service of its own, so the board can send its CSR to it.
+PC-side GUI (Tkinter + [bleak](https://github.com/hbldh/bleak), a flat light / dark ttk theme of its own, icons drawn with [Pillow](https://python-pillow.org)) for the nRF54 BLE Bulk Transfer firmware. The PC is the BLE central and the BulkXfer **Client**; the board is the GATT server and BulkXfer Server. For device provisioning the PC also hosts a BulkXfer service of its own, so the board can send its CSR to it. For device pairing the PC orchestrates two boards at once, over one link to each, and never pairs with them itself.
 
 The window shows one page at a time. A navigation rail on the left switches between **Device** (`Ctrl+1`), one page per feature (`Ctrl+2`, `Ctrl+3`, …), and, at the bottom of the rail, **Log** (`Ctrl+L`) and **Traffic** (`Ctrl+T`). The header names the page and always shows the link: the device, its ATT MTU and a state pill (click it for the Device page). The status line at the bottom shows the latest log line, coloured by level; **Log ›** opens the log. An error logged while another page is shown puts a red dot on the Log button until the log is opened. The sun / moon button at the foot of the rail, or `Ctrl+Shift+L`, switches between light and dark; it starts in Windows' app mode.
 
@@ -9,7 +9,8 @@ It covers:
 - **Device**: scan, connect, disconnect, and read the BulkXfer CAPS characteristic; the link's ATT MTU and CAPS are under *Link details*, which opens after **Read Caps**. The base UUID is under *Advanced*. Connecting from this page opens the first feature page. On Windows 11, connecting also asks Windows for its throughput-optimized connection parameters (15 ms interval) for as long as the link is up. Otherwise Windows settles on about 45 ms after service discovery, which caps an upload at about 10 KB/s. The result goes to the log, and each interval change shows in the traffic monitor as `CONN`.
 - **Hex Upload**: browse for an Intel HEX file, split it into contiguous segments, and send each segment as one transfer (`appType 0x10`, `[u32 LE address][data]`). The server must answer with STORED before the next segment is sent. Start and Abort buttons control the upload. Tiles show segments, size, bytes sent and the rate, and a pill shows the upload's state. The segment list, with each segment's status coloured, is under *Segments (n)*, closed by default. The contract is in [_DOC/HexUpload/PROTOCOL.md](../../_DOC/HexUpload/PROTOCOL.md).
 - **Provisioning**: the PC is the Certificate Authority. Create or load a CA folder, read the device's STATUS, then **Provision**: the device sends its CSR, the PC checks it and issues a device certificate, and sends it with the CA certificate; the device verifies both, stores both, deletes its CSR and logs them as PEM. The page shows the device and the CA side by side, with pills for the PC service, the device's state and the CA, and a step list that follows the sequence. The CA's folder and *Create CA* are under *CA settings*, open while no CA is loaded. The session's lines go to the application log, prefixed `provisioning:`. Provisioning is one-time: a provisioned device is refused. **More ▾** holds the less used commands: **Save certificate…** writes the device certificate, and **Remove provisioning…** (after a confirmation) sends DEPROVISION, which wipes the device's key, CSR and certificates; the device makes a new key and CSR and can be provisioned again. The contract is in [_DOC/Provisioning/PROTOCOL.md](../../_DOC/Provisioning/PROTOCOL.md), the design in [_DOC/Provisioning/README.md](../../_DOC/Provisioning/README.md).
-- **BLE traffic monitor**: every write, read, notification and link event, shown as hex and decoded BulkXfer frames (provisioning's STATUS and RESULT decoded too). Traffic of the PC's own service is marked `PC service`. The **Capture** switch on the Traffic page turns it on or off (`Ctrl+T` opens the page with capture on). It captures nothing while it is off, and keeps capturing while other pages are shown; a blue dot on the Traffic button says it is on. It stays a dark terminal in both themes; TX, RX, Events and the hide / full-payload filters are toggle buttons.
+- **Pairing**: certificate-based OOB pairing of two provisioned boards. **Scan** finds the boards that advertise the Pairing service (only provisioned boards do), **Check** reads each one's pairing status (provisioned, paired and with whom, the last run's error), then choose which board is the **Central** and which the **Peripheral** (**Swap** exchanges them) and **Pair**. The page connects to both boards, sends each its role and the other's address, and follows both live in a step list per board: reach the peer, connected, certificates exchanged, peer certificate verified, signed OOB data exchanged, pairing, paired. It ends when both are PAIRED or one has FAILED, with the reason (for example *the peer's certificate was rejected (BAD_SIG)*), and disconnects from both: the boards keep their encrypted, bonded link, and the peripheral lights LED 1. **Cancel** sends CANCEL to both. **More ▾** unpairs the central or the peripheral board (deletes its bond and drops its link to its peer). The page makes its own links, so the Device page must be disconnected. Its lines go to the application log, prefixed `pairing:`. The contract is in [_DOC/Pairing/PROTOCOL.md](../../_DOC/Pairing/PROTOCOL.md), the design in [_DOC/Pairing/README.md](../../_DOC/Pairing/README.md).
+- **BLE traffic monitor**: every write, read, notification and link event, shown as hex and decoded BulkXfer frames (provisioning's STATUS and RESULT, and pairing's CONTROL and STATUS, decoded too). Traffic of the PC's own service is marked `PC service`; traffic of the Pairing page's links is tagged `central` / `peripheral`. The **Capture** switch on the Traffic page turns it on or off (`Ctrl+T` opens the page with capture on). It captures nothing while it is off, and keeps capturing while other pages are shown; a blue dot on the Traffic button says it is on. It stays a dark terminal in both themes; TX, RX, Events and the hide / full-payload filters are toggle buttons.
 
 ## Run
 
@@ -24,6 +25,8 @@ Typical session: on the Device page **Scan**, select `BLE Bulk Transfer`, **Conn
 
 Provisioning session: on the Provisioning page **Create CA** once (or **Load** a folder; the default `~/.blehost/ca` holds the CA private key, keep it private), connect, **Get Status**, **Provision**. Headless: `python bulkxfer_client.py provision --name "BLE Bulk Transfer" [--ca DIR] [--out device.pem] [--negative]` (`--negative` wipes a device that is not fresh, sends the certificates it must reject and checks each answer, then provisions it) and `python bulkxfer_client.py deprovision --name "BLE Bulk Transfer"` (wipe).
 
+Pairing session: provision both boards first (with the same CA). On the Pairing page **Scan**, **Check**, choose the central and the peripheral, **Pair**. Headless: `python bulkxfer_client.py pair --central ADDRESS --peripheral ADDRESS` (exit code 0 only when both end PAIRED), `pairstatus --address ADDRESS` and `unpair --address ADDRESS`.
+
 The PC's own BulkXfer service is published at start-up through WinRT's `GattServiceProvider` (Windows 10/11, adapter with the peripheral role; the Provisioning page's *PC service* pill says whether it is up). `bless` is not used: it cannot be installed next to bleak ≥ 1 on Python 3.12.
 
 **Base UUID** must match the firmware's `BaseUUIDs.h`. The default is the project base, `16a1-4812-af35-f3f29a92f6ca`. **Max segment** must not exceed the server's `DS_BUF_SIZE` (65536).
@@ -32,20 +35,22 @@ The PC's own BulkXfer service is published at start-up through WinRT's `GattServ
 
 ```
 ble_host_gui.py          entry point; FEATURES lists the feature pages; starts the PC GATT service
-bulkxfer_client.py       BulkXfer reference client (protocol + command line, incl. provision/deprovision); imported by protocols/bulkxfer.py
+bulkxfer_client.py       BulkXfer reference client (protocol + command line, incl. provision/deprovision, pair/pairstatus/unpair); imported by protocols/bulkxfer.py
 bulkxfer_receiver.py     BulkXfer receiver role (protocol §7), transport independent
 blehost/
   context.py             AppContext: settings, event bus, asyncio runner, link, services
   core/
     async_runner.py      asyncio loop on a worker thread (all bleak calls run here)
     event_bus.py         thread-safe worker -> Tk messaging (LINK_STATE, LOG, TRAFFIC)
-    ble_link.py          BleLink: the only bleak user; scan/connect/GATT, traffic capture
+    ble_link.py          BleLink: the only bleak user; scan/connect/GATT, traffic capture; ctx.link is the main
+                         one, a feature's own links are BleLink(label=..., primary=False)
     gatt_server.py       PcGattServer: the PC's BulkXfer service (WinRT) + receiver; the only WinRT GATT-server user
     traffic.py           TrafficEvent + TrafficTap
     decoders.py          characteristic names and payload decoders for the monitor
   protocols/
     bulkxfer.py          imports the reference client, frame decoder, BulkXferService
     provisioning.py      provisioning appTypes, STATUS/RESULT codecs, ProvisioningSession (incl. deprovision)
+    pairing.py           Pairing service UUIDs, CONTROL/STATUS codecs, PairingOrchestrator (probe, pair, unpair)
   pki/
     authority.py         the CA: create/load, check a CSR, issue a device certificate
     negative.py          certificates the device must reject (host test devicecert_verify, provision --negative)
@@ -53,6 +58,7 @@ blehost/
     base.py              Feature base class (one page each: title, rail icon, build())
     hex_upload.py        Hex Upload page
     provisioning.py      Provisioning page
+    pairing.py           Pairing page
   ui/
     main_window.py       window: navigation rail, pages (built on first show), header, status line, Log page; show()
     connection_panel.py  the Device page: scan / connect / caps
@@ -87,7 +93,7 @@ The display widgets (pills, tiles, the step list) only show state: they follow t
 ## Adding a feature
 
 1. Create `blehost/features/<name>.py` with a `Feature` subclass. Set `title` (the page's name, under its rail button) and `icon` (a name in `ui/icons.GLYPHS`), build the page in `build(parent)` from `ui/widgets.card()` sections and the shared styles (see *Look and feel*), and react to `on_connected` / `on_disconnected`. The page is built the first time it is shown, and those two are called only once it is built, so `build()` must show the link as it is then. Put what is seldom needed behind a `Disclosure` or a `MoreMenu`, and send the feature's messages to `ctx.log()` (the Log page and the status line) rather than a log of its own. Report `busy` and implement `cancel()` if the feature runs long operations.
-2. Talk to the device only through `ctx.link` (`gatt.write_gatt_char`, `gatt.read_gatt_char`, `start_notify`) or a service in `ctx.services`. Traffic then shows in the monitor automatically.
+2. Talk to the device only through `ctx.link` (`gatt.write_gatt_char`, `gatt.read_gatt_char`, `start_notify`) or a service in `ctx.services`. Traffic then shows in the monitor automatically. A feature that needs several devices at once makes its own links, `BleLink(ctx.bus, ctx.tap, label=..., primary=False)`: they post no `LINK_STATE` (the window keeps following `ctx.link`), and their traffic is tagged with the label (see `features/pairing.py`).
 3. If the feature has its own wire format, put the codec in `blehost/protocols/` and register its characteristics with `ctx.decoders.register(uuid, name, decoder)`. BulkXfer appTypes are named with `bulkxfer.register_app_type()`.
 4. Add the class to `FEATURES` in `ble_host_gui.py`; it gets the next rail button and `Ctrl+<n>`.
 5. Add its tests to `_TEST/python/` with the feature: the codec and protocol logic, and the page itself. The `conftest.py` there provides a fake GATT link and a scripted BulkXfer server, so no adapter is needed. Test the page's logic against stand-in Tk variables and a fake context, plus one test that builds the real page, as `test_feature_provisioning.py` does (see [_TEST/README.md](../../_TEST/README.md)).
@@ -96,4 +102,4 @@ A connection-wide service, such as a shared protocol endpoint, registers `link.a
 
 ## Planned
 
-OOB pairing (phase 2 of certificate-based authentication) and encrypted communication. Known constraint: bleak's `pair()` on Windows supports basic pairing only. OOB will likely need WinRT custom pairing inside `BleLink.pair()`, which is a stub for now.
+Encrypted communication between the paired boards beyond the SECURED proof, and reconnecting a bonded pair after a reset. The PC itself never pairs with a board: device-to-device pairing needs no WinRT pairing on the PC.

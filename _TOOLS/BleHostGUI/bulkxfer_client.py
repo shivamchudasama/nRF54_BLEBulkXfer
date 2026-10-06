@@ -21,6 +21,9 @@ Usage:
     python bulkxfer_client.py provision --name "BLE Bulk Transfer" [--ca DIR] [--out dev.pem]
     python bulkxfer_client.py provision --negative --name "BLE Bulk Transfer"
     python bulkxfer_client.py deprovision --name "BLE Bulk Transfer"
+    python bulkxfer_client.py pair --central AA:BB:CC:DD:EE:01 --peripheral AA:BB:CC:DD:EE:02
+    python bulkxfer_client.py pairstatus --address AA:BB:CC:DD:EE:01
+    python bulkxfer_client.py unpair --address AA:BB:CC:DD:EE:01
 
 hex is the upload the project firmware in _ASW accepts (_DOC/HexUpload/PROTOCOL.md).
 provision runs device provisioning (_DOC/Provisioning/PROTOCOL.md) with the CA
@@ -30,6 +33,10 @@ CSR, see blehost/core/gatt_server.py). Provisioning is one-time: a provisioned
 device refuses it until deprovision wipes its key, CSR and certificates (the
 device then makes a fresh key and CSR). provision --negative wipes the device
 first, sends every certificate it must reject, then provisions it.
+pair orchestrates certificate-based OOB pairing of two provisioned devices
+(_DOC/Pairing/PROTOCOL.md): it connects to both, sends START to each and
+follows both until PAIRED or FAILED; the devices then keep their encrypted
+link. pairstatus reads one device's pairing STATUS; unpair deletes its bond.
 ping and send need a server that echoes shorts and accepts any appType; the
 project firmware rejects every appType except 0x10.
 
@@ -267,6 +274,62 @@ async def find_device(address, name):
     return dev
 
 
+class BleakPairLink:
+    """The link object blehost.protocols.pairing.PairingOrchestrator expects,
+    on a plain BleakClient (the GUI uses its BleLink instead)."""
+
+    def __init__(self, label: str = ""):
+        self.label = label
+        self._client = None
+        self.gatt = None
+
+    async def connect(self, address: str, name: str = ""):
+        from bleak import BleakClient
+        client = BleakClient(await find_device(address, name))
+        await client.connect()
+        self._client = self.gatt = client
+
+    async def disconnect(self):
+        client, self._client, self.gatt = self._client, None, None
+        if client is not None:
+            await client.disconnect()
+
+    async def start_notify(self, uuid: str, callback):
+        await self._client.start_notify(uuid, callback)
+
+
+async def pair(args):
+    """Pair two provisioned devices; exit 1 unless both end PAIRED."""
+    from blehost.protocols.pairing import PairingError, PairingOrchestrator
+
+    if not args.central or not args.peripheral:
+        sys.exit("pair: give --central ADDRESS and --peripheral ADDRESS")
+
+    def on_status(label, st):
+        print(f"  {label}: {st.describe()}")
+
+    orch = PairingOrchestrator(BleakPairLink, log=print, on_status=on_status)
+    try:
+        out = await orch.pair((args.central, ""), (args.peripheral, ""))
+    except PairingError as e:
+        sys.exit(f"pairing not started: {e}")
+    print(f"{'paired' if out.ok else 'pairing failed'}: {out.message()}")
+    if not out.ok:
+        sys.exit(1)
+
+
+async def pair_status(args, unpair_it: bool = False):
+    """Print one device's pairing STATUS (after UNPAIR with unpair_it)."""
+    from blehost.protocols.pairing import PairingOrchestrator
+
+    if not args.address:
+        sys.exit(f"{args.command}: give --address ADDRESS")
+    orch = PairingOrchestrator(BleakPairLink, log=print)
+    st = await (orch.unpair(args.address) if unpair_it else orch.probe(args.address))
+    print(f"{args.address}: {st.describe()} (provisioning state {st.prov_state}, "
+          f"own address {st.own or '?'})")
+
+
 async def provision_with_rejections(session, ca, validity_days):
     """Provision the device and, on the way, send every certificate it must
     reject, comparing each RESULT with the expected status. A provisioned device
@@ -381,7 +444,8 @@ async def main():
     from bleak import BleakClient
 
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("command", choices=["ping", "send", "caps", "hex", "provision", "deprovision"])
+    ap.add_argument("command", choices=["ping", "send", "caps", "hex", "provision", "deprovision",
+                                        "pair", "pairstatus", "unpair"])
     ap.add_argument("arg", nargs="?", help="send: size in bytes (default 20000); hex: .hex file")
     ap.add_argument("--ca", help="provision: CA folder (default: the GUI's)")
     ap.add_argument("--validity", type=int, default=365, help="provision: device certificate days")
@@ -390,6 +454,8 @@ async def main():
                     help="provision: wipe the device if needed, send the certificates it "
                          "must reject (blehost/pki/negative.py) and check each RESULT, "
                          "then provision it")
+    ap.add_argument("--central", help="pair: address of the device to be the central")
+    ap.add_argument("--peripheral", help="pair: address of the device to be the peripheral")
     ap.add_argument("--address")
     ap.add_argument("--name", default="BulkXfer")
     ap.add_argument("--base", default=PROJECT_BASE,
@@ -413,6 +479,12 @@ async def main():
         return
     if args.command == "deprovision":
         await deprovision(args)
+        return
+    if args.command == "pair":
+        await pair(args)
+        return
+    if args.command in ("pairstatus", "unpair"):
+        await pair_status(args, unpair_it=args.command == "unpair")
         return
 
     target = await find_device(args.address, args.name)

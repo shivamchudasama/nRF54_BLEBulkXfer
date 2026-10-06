@@ -1,10 +1,11 @@
 # SPDX-License-Identifier: MIT
 """The command line of bulkxfer_client.py (main(), find_device, provision,
-deprovision), with a fake `bleak` module: BleakClient is the scripted
+deprovision, pair, pairstatus, unpair), with a fake `bleak` module: BleakClient is the scripted
 BulkXfer server of conftest.py, so caps / ping / send / hex run their real
 protocol code. For provision and deprovision, the PC service and the
 provisioning session are stand-ins (the protocol itself is
-test_provisioning.py; the device side is hil-tests)."""
+test_provisioning.py; the device side is hil-tests). For pair, bleak's client
+reaches the simulated pairing devices of test_pairing.py."""
 
 import asyncio
 import os
@@ -339,3 +340,91 @@ def test_deprovision_failure(prov_fakes, monkeypatch):
     FakeSession.fail = "refused"
     with pytest.raises(SystemExit, match="deprovisioning failed: refused"):
         cli(monkeypatch, "deprovision", "--name", "dev")
+
+
+# ---- pair / pairstatus / unpair ---------------------------------------------------------
+import functools  # noqa: E402
+
+from blehost.protocols import pairing as pp  # noqa: E402
+from test_pairing import A, B, SimDevice  # noqa: E402
+
+
+class PairBleakClient:
+    """BleakClient onto the simulated pairing devices of test_pairing.py."""
+    devices = {}
+
+    def __init__(self, target, disconnected_callback=None):
+        self.dev = PairBleakClient.devices.get(str(target).upper())
+        self.connected = False
+
+    async def connect(self):
+        if self.dev is None:
+            raise OSError("device not found")
+        self.connected = True
+
+    async def disconnect(self):
+        self.connected = False
+        self.dev.notify_cb = None
+
+    async def read_gatt_char(self, uuid):
+        return self.dev.status_bytes()
+
+    async def write_gatt_char(self, uuid, data, response=False):
+        await self.dev.control(data)
+
+    async def start_notify(self, uuid, callback):
+        self.dev.notify_cb = callback
+
+
+@pytest.fixture
+def pair_bleak(monkeypatch):
+    c, p = SimDevice(A[0]), SimDevice(B[0])
+    PairBleakClient.devices = {A[0]: c, B[0]: p}
+    mod = types.ModuleType("bleak")
+    mod.BleakClient = PairBleakClient
+    mod.BleakScanner = types.SimpleNamespace()       # addresses are given: never scanned
+    monkeypatch.setitem(sys.modules, "bleak", mod)
+    monkeypatch.setattr(pp, "PairingOrchestrator", functools.partial(
+        pp.PairingOrchestrator, timeout=1.0, fail_grace=0.1, poll=0.02, start_settle=0.0))
+    return c, p
+
+
+def test_pair(pair_bleak, monkeypatch, capsys):
+    c, p = pair_bleak
+    cli(monkeypatch, "pair", "--central", A[0], "--peripheral", B[0])
+    out = capsys.readouterr().out
+    assert "START sent" in out and "central: PAIRED as central" in out
+    assert "paired: both devices paired" in out
+    assert p.controls[0] == pp.encode_start(pp.Role.PERIPHERAL, *A)
+    assert c.controls[0] == pp.encode_start(pp.Role.CENTRAL, *B)
+
+
+def test_pair_failure_exits_non_zero(pair_bleak, monkeypatch, capsys):
+    c, p = pair_bleak
+    c.outcome, p.outcome = ("fail", pp.Error.OOB_SIG, 0), "lost"
+    c.peer_dev, p.peer_dev = p, c
+    with pytest.raises(SystemExit) as e:
+        cli(monkeypatch, "pair", "--central", A[0], "--peripheral", B[0])
+    assert e.value.code == 1
+    assert "pairing failed: central: the peer's OOB signature does not verify" in capsys.readouterr().out
+
+
+def test_pair_not_started_and_arguments(pair_bleak, monkeypatch):
+    pair_bleak[1].prov_state = 1
+    with pytest.raises(SystemExit, match="pairing not started: the peripheral device is not provisioned"):
+        cli(monkeypatch, "pair", "--central", A[0], "--peripheral", B[0])
+    with pytest.raises(SystemExit, match="give --central ADDRESS and --peripheral ADDRESS"):
+        cli(monkeypatch, "pair", "--central", A[0])
+    with pytest.raises(SystemExit, match="give --address"):
+        cli(monkeypatch, "pairstatus")
+
+
+def test_pairstatus_and_unpair(pair_bleak, monkeypatch, capsys):
+    c, _ = pair_bleak
+    c.state, c.peer, c.peer_type, c.role = pp.State.PAIRED, B[0], 1, 1
+    cli(monkeypatch, "pairstatus", "--address", A[0])
+    out = capsys.readouterr().out
+    assert f"{A[0]}: PAIRED as central, peer {B[0]} (provisioning state 3, own address {A[0]})" in out
+    cli(monkeypatch, "unpair", "--address", A[0])
+    assert c.controls == [pp.encode_unpair()]
+    assert f"{A[0]}: IDLE" in capsys.readouterr().out
