@@ -52,7 +52,6 @@
 /*                              EXTERN VARIABLES                              */
 /*                                                                            */
 /******************************************************************************/
-extern struct bt_conn *gstpt_currentConn;
 
 /******************************************************************************/
 /*                                                                            */
@@ -60,6 +59,8 @@ extern struct bt_conn *gstpt_currentConn;
 /*                                                                            */
 /******************************************************************************/
 extern void gv_BLEInitStartAdv(void);
+extern struct bt_conn *gstpt_BLE_GetHostConn(void);
+extern void gv_BLE_RefreshAdv(void);
 
 #endif //!_CONNECTION_HANDLING_H
 

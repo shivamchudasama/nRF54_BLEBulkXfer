@@ -190,15 +190,22 @@ psa_status_t psa_hash_compute(psa_algorithm_t alg, const uint8_t *input, size_t 
 }
 
 /******************************************************************************/
-/*  Stubs: router, BulkXfer Client and Server, connection                     */
+/*  Stubs: router (with its shared Client), BulkXfer, host link, pairing      */
 /******************************************************************************/
 static struct bt_conn sst_conn;
-struct bt_conn *gstpt_currentConn = &sst_conn;
+static bool sb_hostUp;
+static uint32_t su32_refreshCalls;
+static bool sb_pairRunning;
+static uint32_t su32_forgetCalls;
+
+/* The host link; the shim's bt_conn_ref/unref are no-ops */
+struct bt_conn *gstpt_BLE_GetHostConn(void) { return sb_hostUp ? &sst_conn : NULL; }
+void gv_BLE_RefreshAdv(void) { su32_refreshCalls++; }
+bool gb_Pair_IsRunning(void) { return sb_pairRunning; }
+void gv_Pair_ForgetBonds(void) { su32_forgetCalls++; }
 
 static BulkRoute_T sst_route;
 static int si_registerRet;
-static BlkCliCfg_T sst_cliCfg;
-static int si_cliInitRet;
 
 int gi_BulkRouter_Register(const BulkRoute_T *stpt_route)
 {
@@ -206,28 +213,25 @@ int gi_BulkRouter_Register(const BulkRoute_T *stpt_route)
    return si_registerRet;
 }
 
-int gi_BLKC_Init(const BlkCliCfg_T *stpt_cfg)
-{
-   sst_cliCfg = *stpt_cfg;
-   return si_cliInitRet;
-}
-
 static bool sb_cliReady;
 static int si_attachRet;
 static uint32_t su32_attachCalls;
 static struct bt_conn *sstpt_attachConn;
+static uint8_t su8_attachOwner;
 static int si_sendRet;
 static uint32_t su32_sendCalls;
 static uint8_t su8_sendType;
 static const void *svpt_sendData;
 static uint32_t su32_sendLen;
 
-bool gb_BLKC_IsReady(void) { return sb_cliReady; }
-
-int gi_BLKC_Attach(struct bt_conn *stpt_conn)
+/* As the router: -EALREADY when the Client is ready on that link already */
+int gi_BulkRouter_ClientAttach(struct bt_conn *stpt_conn, uint8_t u8_ownerAppType)
 {
    su32_attachCalls++;
    sstpt_attachConn = stpt_conn;
+   su8_attachOwner = u8_ownerAppType;
+   if (stpt_conn == NULL) { return -EINVAL; }
+   if (sb_cliReady) { return -EALREADY; }
    return si_attachRet;
 }
 
@@ -394,11 +398,14 @@ void setUp(void)
    scar_calls[0] = '\0';
    st_exportRet = PSA_SUCCESS;
    si_registerRet = 0;
-   si_cliInitRet = 0;
+   sb_hostUp = true;
+   sb_pairRunning = false;
+   su32_forgetCalls = 0U;
    sb_cliReady = false;
    si_attachRet = 0;
    su32_attachCalls = 0U;
    sstpt_attachConn = NULL;
+   su8_attachOwner = 0U;
    si_sendRet = 0;
    su32_sendCalls = 0U;
    su32_sentCount = 0U;
@@ -408,6 +415,7 @@ void setUp(void)
    sv_Init(true);
    su32_sentCount = 0U;
    su32_caCalls = 0U;
+   su32_refreshCalls = 0U;
    scar_calls[0] = '\0';
 }
 
@@ -424,9 +432,9 @@ static void test_InitRegistersTheProvisioningRange(void)
    TEST_ASSERT_NOT_NULL(sst_route.fpt_onRxData);
    TEST_ASSERT_NOT_NULL(sst_route.fpt_onRxDone);
    TEST_ASSERT_NOT_NULL(sst_route.fpt_onRxShort);
-   TEST_ASSERT_NOT_NULL(sst_cliCfg.fpt_onReady);
-   TEST_ASSERT_NOT_NULL(sst_cliCfg.fpt_onTxDone);
-   TEST_ASSERT_FALSE_MESSAGE(sst_cliCfg.b_autoTuneLink, "_BLE negotiates the link itself");
+   // The router shares the BulkXfer Client: its results come back by range
+   TEST_ASSERT_NOT_NULL(sst_route.fpt_onCliReady);
+   TEST_ASSERT_NOT_NULL(sst_route.fpt_onTxDone);
    TEST_ASSERT_EQUAL_INT(ePS_KEY_READY, ge_Prov_GetState());
 }
 
@@ -519,10 +527,6 @@ static void test_InitErrorsAreReturned(void)
    si_registerRet = -EEXIST;
    TEST_ASSERT_EQUAL_INT(-EEXIST, gi_Prov_Init());
    TEST_ASSERT_NOT_NULL(gcpt_SimLogFind("gi_BulkRouter_Register failed"));
-   si_registerRet = 0;
-   si_cliInitRet = -EINVAL;
-   TEST_ASSERT_EQUAL_INT(-EINVAL, gi_Prov_Init());
-   TEST_ASSERT_NOT_NULL(gcpt_SimLogFind("gi_BLKC_Init failed"));
 }
 
 /******************************************************************************/
@@ -585,13 +589,17 @@ static void test_CsrSentAtOnceWhenClientAttached(void)
    sb_cliReady = true;
    sst_route.fpt_onRxShort(VEC_PROV_APP_CSR_REQ, NULL, 0U);
    sv_RunProv();
-   TEST_ASSERT_EQUAL_UINT32(0U, su32_attachCalls);
+   // Asked for the host link, as provisioning; ready there already
+   TEST_ASSERT_EQUAL_UINT32(1U, su32_attachCalls);
+   TEST_ASSERT_EQUAL_PTR(&sst_conn, sstpt_attachConn);
+   TEST_ASSERT_TRUE(su8_attachOwner >= VEC_PROV_APP_GET_STATUS);
+   TEST_ASSERT_TRUE(su8_attachOwner <= 0x2FU);
    TEST_ASSERT_EQUAL_UINT32(1U, su32_sendCalls);
    TEST_ASSERT_EQUAL_HEX8(VEC_PROV_APP_CSR, su8_sendType);
    TEST_ASSERT_EQUAL_PTR_MESSAGE(gst_CSRData.u8ar_CSR, svpt_sendData, "sent from the persistent CSR");
    TEST_ASSERT_EQUAL_UINT32(0x01A4U, su32_sendLen);
 
-   sst_cliCfg.fpt_onTxDone(VEC_PROV_APP_CSR, eBS_OK);
+   sst_route.fpt_onTxDone(VEC_PROV_APP_CSR, eBS_OK);
    sv_RunProv();
    sv_AssertLastIs("result_csr_delivered");
 }
@@ -604,21 +612,22 @@ static void test_CsrAttachesThenSends(void)
    TEST_ASSERT_EQUAL_PTR(&sst_conn, sstpt_attachConn);
    TEST_ASSERT_EQUAL_UINT32(0U, su32_sendCalls);
 
-   sst_cliCfg.fpt_onReady(&sst_conn, 0);
+   sst_route.fpt_onCliReady(&sst_conn, 0);
    sv_RunProv();
    TEST_ASSERT_EQUAL_UINT32(1U, su32_sendCalls);
    TEST_ASSERT_EQUAL_UINT32(0U, su32_sentCount);
 }
 
-static void test_CsrAttachAlreadyRunning(void)
+static void test_CsrWithoutHostLink(void)
 {
-   si_attachRet = -EALREADY;
+   // No host link to attach to: as if the provisioner had no service
+   sb_hostUp = false;
    sst_route.fpt_onRxShort(VEC_PROV_APP_CSR_REQ, NULL, 0U);
    sv_RunProv();
-   TEST_ASSERT_EQUAL_UINT32(0U, su32_sentCount);
-   sst_cliCfg.fpt_onReady(&sst_conn, 0);
-   sv_RunProv();
-   TEST_ASSERT_EQUAL_UINT32(1U, su32_sendCalls);
+   TEST_ASSERT_NULL(sstpt_attachConn);
+   sv_AssertLastIs("result_csr_no_peer");
+   TEST_ASSERT_EQUAL_UINT32(0U, su32_sendCalls);
+   TEST_ASSERT_FALSE(sb_csrTxPending);
 }
 
 static void test_CsrNoPeerService(void)
@@ -626,7 +635,7 @@ static void test_CsrNoPeerService(void)
    // Discovery found no BulkXfer service on the provisioner
    sst_route.fpt_onRxShort(VEC_PROV_APP_CSR_REQ, NULL, 0U);
    sv_RunProv();
-   sst_cliCfg.fpt_onReady(&sst_conn, -ENOENT);
+   sst_route.fpt_onCliReady(&sst_conn, -ENOENT);
    sv_RunProv();
    sv_AssertLastIs("result_csr_no_peer");
    TEST_ASSERT_EQUAL_UINT32(0U, su32_sendCalls);
@@ -649,7 +658,7 @@ static void test_CsrSendFailures(void)
    si_sendRet = 0;
    sst_route.fpt_onRxShort(VEC_PROV_APP_CSR_REQ, NULL, 0U);
    sv_RunProv();
-   sst_cliCfg.fpt_onTxDone(VEC_PROV_APP_CSR, eBS_DISCONNECTED);
+   sst_route.fpt_onTxDone(VEC_PROV_APP_CSR, eBS_DISCONNECTED);
    sv_RunProv();
    sv_AssertLastResult(VEC_PROV_APP_CSR, VEC_PROV_ST_TRANSFER);
    TEST_ASSERT_FALSE(sb_csrTxPending);
@@ -673,7 +682,7 @@ static void test_CsrRequestWhileBusyOrWithoutKey(void)
 static void test_LateReadyIgnored(void)
 {
    // An attach result nobody waits for (e.g. after a failed request)
-   sst_cliCfg.fpt_onReady(&sst_conn, 0);
+   sst_route.fpt_onCliReady(&sst_conn, 0);
    sv_RunProv();
    TEST_ASSERT_EQUAL_UINT32(0U, su32_sendCalls);
    TEST_ASSERT_EQUAL_UINT32(0U, su32_sentCount);
@@ -772,6 +781,7 @@ static void test_DeviceCertProvisions(void)
    // Both stored, CA first, then the CSR is deleted
    sv_AssertCalls("storeCA,storeDev,rmCSR");
    TEST_ASSERT_EQUAL_UINT8(0U, gst_CSRData.u8_isCSRGenerated);
+   TEST_ASSERT_EQUAL_UINT32_MESSAGE(1U, su32_refreshCalls, "advertise for pairing from now on");
 
    // STATUS: PROVISIONED, no CSR any more
    sst_route.fpt_onRxShort(VEC_PROV_APP_GET_STATUS, NULL, 0U);
@@ -887,6 +897,37 @@ static void test_DeprovisionWipesAndRegenerates(void)
    sv_ToProvisioned();
 }
 
+static void test_WipeForgetsBondsAndAdvertising(void)
+{
+   sv_ToProvisioned();
+   su32_refreshCalls = 0U;
+   sst_route.fpt_onRxShort(VEC_PROV_APP_DEPROVISION, NULL, 0U);
+   sv_RunProv();
+   sv_AssertLastIs("result_deprovision_ok");
+   TEST_ASSERT_EQUAL_UINT32_MESSAGE(1U, su32_forgetCalls, "bonds belong to the old identity");
+   TEST_ASSERT_EQUAL_UINT32_MESSAGE(1U, su32_refreshCalls, "advertise for provisioning again");
+}
+
+static void test_WipeRefusedWhilePairing(void)
+{
+   sv_ToProvisioned();
+   sb_pairRunning = true;
+   sst_route.fpt_onRxShort(VEC_PROV_APP_DEPROVISION, NULL, 0U);
+   sv_RunProv();
+   sv_AssertLastResult(VEC_PROV_APP_DEPROVISION, VEC_PROV_ST_BAD_STATE);
+   sv_AssertCalls("");
+   TEST_ASSERT_EQUAL_INT(ePS_PROVISIONED, ge_Prov_GetState());
+   TEST_ASSERT_EQUAL_UINT32(0U, su32_forgetCalls);
+   TEST_ASSERT_NOT_NULL(gcpt_SimLogFind("wipe refused: pairing in progress"));
+
+   // The button wipe is refused the same way, without an answer
+   su32_sentCount = 0U;
+   gv_Prov_RequestWipe();
+   sv_RunProv();
+   TEST_ASSERT_EQUAL_UINT32(0U, su32_sentCount);
+   TEST_ASSERT_EQUAL_INT(ePS_PROVISIONED, ge_Prov_GetState());
+}
+
 static void test_DeprovisionFromEveryState(void)
 {
    // CA_OK: the CA held in RAM is dropped
@@ -918,7 +959,7 @@ static void test_DeprovisionRefusedWhileBusy(void)
    sst_route.fpt_onRxShort(VEC_PROV_APP_DEPROVISION, NULL, 0U);
    sv_RunProv();
    sv_AssertLastResult(VEC_PROV_APP_DEPROVISION, VEC_PROV_ST_BAD_STATE);
-   sst_cliCfg.fpt_onTxDone(VEC_PROV_APP_CSR, eBS_OK);
+   sst_route.fpt_onTxDone(VEC_PROV_APP_CSR, eBS_OK);
    sv_RunProv();
 
    // Certificate being received: the staging buffer is in use
@@ -1073,7 +1114,7 @@ int main(void)
    RUN_TEST(test_UnknownShortIgnored);
    RUN_TEST(test_CsrSentAtOnceWhenClientAttached);
    RUN_TEST(test_CsrAttachesThenSends);
-   RUN_TEST(test_CsrAttachAlreadyRunning);
+   RUN_TEST(test_CsrWithoutHostLink);
    RUN_TEST(test_CsrNoPeerService);
    RUN_TEST(test_CsrSendFailures);
    RUN_TEST(test_CsrRequestWhileBusyOrWithoutKey);
@@ -1089,6 +1130,8 @@ int main(void)
    RUN_TEST(test_NewCaReplacesTheCaBeforeDeviceCert);
    RUN_TEST(test_ProvisionedRefusesEverything);
    RUN_TEST(test_DeprovisionWipesAndRegenerates);
+   RUN_TEST(test_WipeForgetsBondsAndAdvertising);
+   RUN_TEST(test_WipeRefusedWhilePairing);
    RUN_TEST(test_DeprovisionFromEveryState);
    RUN_TEST(test_DeprovisionRefusedWhileBusy);
    RUN_TEST(test_DeprovisionFailures);

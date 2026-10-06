@@ -67,6 +67,10 @@ static int si_RouteRxData(uint8_t u8_appType, uint32_t u32_offset,
    const uint8_t *u8pt_data, uint16_t u16_len);
 static void sv_RouteRxDone(uint8_t u8_appType, BlkStatus_E e_status, uint32_t u32_totalLen);
 static void sv_RouteRxShort(uint8_t u8_appType, const uint8_t *u8pt_data, uint8_t u8_len);
+#if BLK_ENABLE_CLIENT
+static void sv_RouteTxDone(uint8_t u8_appType, BlkStatus_E e_status);
+static void sv_RouteCliReady(struct bt_conn *stpt_conn, int i_status);
+#endif // BLK_ENABLE_CLIENT
 
 /******************************************************************************/
 /*                                                                            */
@@ -104,6 +108,22 @@ static bool sb_isStarted = false;
  *                Written by an application thread, read on the engine thread.
  */
 static atomic_t st_filter = ATOMIC_INIT(0);
+
+#if BLK_ENABLE_CLIENT
+/**
+ * @var           st_cliOwner
+ * @brief         appType (inside its range) of the module whose Client attach
+ *                is pending or done: it gets fpt_onCliReady.
+ */
+static atomic_t st_cliOwner = ATOMIC_INIT(0);
+
+/**
+ * @var           st_cliConn
+ * @brief         Connection the Client was last asked to attach to (only
+ *                compared, never dereferenced).
+ */
+static atomic_ptr_t st_cliConn = ATOMIC_PTR_INIT(NULL);
+#endif // BLK_ENABLE_CLIENT
 
 /******************************************************************************/
 /*                                                                            */
@@ -266,6 +286,50 @@ static void sv_RouteRxShort(uint8_t u8_appType, const uint8_t *u8pt_data, uint8_
    }
 }
 
+#if BLK_ENABLE_CLIENT
+/**
+ * @private       sv_RouteTxDone
+ * @brief         BlkTxDone_F: hand a Client transfer's result to the range that
+ *                owns its appType.
+ * @param[in]     u8_appType Application type of the transfer.
+ * @param[in]     e_status Result of the transfer.
+ * @return        None.
+ */
+static void sv_RouteTxDone(uint8_t u8_appType, BlkStatus_E e_status)
+{
+   const BulkRoute_T *stpt_route = sstpt_FindRoute(u8_appType);
+
+   // Check if the owner wants the result
+   if ((stpt_route != NULL) && (stpt_route->fpt_onTxDone != NULL))
+   {
+      stpt_route->fpt_onTxDone(u8_appType, e_status);
+   }
+   else
+   {
+      APP_LOG_WRN("transfer 0x%02x ended (%d), no owner", u8_appType, (int)e_status);
+   }
+}
+
+/**
+ * @private       sv_RouteCliReady
+ * @brief         BlkCliReady_F: hand the attach result to the module that asked
+ *                for the attach.
+ * @param[in]     stpt_conn Connection the Client attached to.
+ * @param[in]     i_status 0 when ready, negative errno otherwise.
+ * @return        None.
+ */
+static void sv_RouteCliReady(struct bt_conn *stpt_conn, int i_status)
+{
+   const BulkRoute_T *stpt_route = sstpt_FindRoute((uint8_t)atomic_get(&st_cliOwner));
+
+   // Check if the owner wants the result
+   if ((stpt_route != NULL) && (stpt_route->fpt_onCliReady != NULL))
+   {
+      stpt_route->fpt_onCliReady(stpt_conn, i_status);
+   }
+}
+#endif // BLK_ENABLE_CLIENT
+
 /******************************************************************************/
 /*                                                                            */
 /*                        PUBLIC FUNCTION DEFINITIONS                         */
@@ -323,15 +387,20 @@ int gi_BulkRouter_Register(const BulkRoute_T *stpt_route)
 
 /**
  * @public        gi_BulkRouter_Start
- * @brief         Initialise the BulkXfer GATT service and the BulkXfer Server with
- *                the router callbacks. Call once, after every module has
- *                registered and before advertising starts.
+ * @brief         Initialise the BulkXfer GATT service, the BulkXfer Server and
+ *                (when BLK_ENABLE_CLIENT) the BulkXfer Client with the router
+ *                callbacks. Call once, after
+ *                every module has registered and before advertising starts. A
+ *                failed start can be retried.
  * @return        0 on success, -EALREADY if already started, otherwise the error
- *                from gi_BLKS_Init().
+ *                from gi_BLKS_Init() or gi_BLKC_Init().
  */
 int gi_BulkRouter_Start(void)
 {
    BlkSrvCfg_T st_cfg = { 0 };
+#if BLK_ENABLE_CLIENT
+   BlkCliCfg_T st_cliCfg = { 0 };
+#endif // BLK_ENABLE_CLIENT
    int i_ret = 0;
 
    // Check if the Server already runs
@@ -350,19 +419,114 @@ int gi_BulkRouter_Start(void)
 
    i_ret = gi_BLKS_Init(&st_cfg);
 
-   // Check if the BulkXfer Server started
-   if (i_ret != 0)
+   // Check if the BulkXfer Server started (-EALREADY: a retried start)
+   if ((i_ret != 0) && (i_ret != -EALREADY))
    {
       APP_LOG_ERR("gi_BLKS_Init failed (%d)", i_ret);
+      return i_ret;
    }
-   else
+
+#if BLK_ENABLE_CLIENT
+   st_cliCfg.fpt_onReady = sv_RouteCliReady;
+   st_cliCfg.fpt_onTxDone = sv_RouteTxDone;
+   // ConnectionHandling.c already negotiates PHY, data length and MTU
+   st_cliCfg.b_autoTuneLink = false;
+
+   i_ret = gi_BLKC_Init(&st_cliCfg);
+
+   // Check if the BulkXfer Client started
+   if ((i_ret != 0) && (i_ret != -EALREADY))
    {
-      sb_isStarted = true;
-      APP_LOG_INF("BulkXfer server ready, %u appType range(s)", su8_routeCnt);
+      APP_LOG_ERR("gi_BLKC_Init failed (%d)", i_ret);
+      return i_ret;
+   }
+#endif // BLK_ENABLE_CLIENT
+
+   sb_isStarted = true;
+   APP_LOG_INF("BulkXfer server and client ready, %u appType range(s)", su8_routeCnt);
+
+   return 0;
+}
+
+#if BLK_ENABLE_CLIENT
+/**
+ * @public        gi_BulkRouter_ClientAttach
+ * @brief         Attach the shared BulkXfer Client to a connection on behalf of
+ *                a module, moving it off another connection if needed. Thread
+ *                context only.
+ *
+ *                - Already attached and ready on stpt_conn: -EALREADY, the
+ *                  module may send at once (no fpt_onCliReady follows).
+ *                - Otherwise the attach starts (or, if it is already running
+ *                  for stpt_conn, continues) and its result goes to the
+ *                  owner's fpt_onCliReady. A Client bound to another
+ *                  connection is detached first (gi_BLKC_Detach()), which is
+ *                  refused while an attach or a transfer runs there.
+ * @param[in]     stpt_conn Connection to attach to.
+ * @param[in]     u8_ownerAppType Any appType of the asking module's range; the
+ *                range must have fpt_onCliReady.
+ * @return        0 if the attach started or is running (fpt_onCliReady
+ *                follows), -EALREADY if ready on this connection already,
+ *                -EPERM if the router has not started, -EINVAL for a NULL
+ *                connection or an owner without fpt_onCliReady, -EBUSY if the
+ *                Client is busy on another connection, otherwise the error of
+ *                gi_BLKC_Attach().
+ */
+int gi_BulkRouter_ClientAttach(struct bt_conn *stpt_conn, uint8_t u8_ownerAppType)
+{
+   const BulkRoute_T *stpt_owner = sstpt_FindRoute(u8_ownerAppType);
+   int i_ret;
+
+   // Check if the Client runs and the request is valid
+   if (!sb_isStarted)
+   {
+      return -EPERM;
+   }
+   if ((stpt_conn == NULL) || (stpt_owner == NULL) || (stpt_owner->fpt_onCliReady == NULL))
+   {
+      return -EINVAL;
+   }
+
+   // The owner is set first: the result may arrive before this call returns
+   (void)atomic_set(&st_cliOwner, u8_ownerAppType);
+
+   // Check if the Client is ready on this connection already
+   if (gb_BLKC_IsReady() && (atomic_ptr_get(&st_cliConn) == stpt_conn))
+   {
+      return -EALREADY;
+   }
+
+   i_ret = gi_BLKC_Attach(stpt_conn);
+
+   // Check if the Client is bound to another connection: move it
+   if (i_ret == -EBUSY)
+   {
+      i_ret = gi_BLKC_Detach();
+
+      // Check if it could be released (-ENOTCONN: released meanwhile)
+      if ((i_ret != 0) && (i_ret != -ENOTCONN))
+      {
+         return -EBUSY;
+      }
+
+      i_ret = gi_BLKC_Attach(stpt_conn);
+   }
+
+   // -EALREADY from gi_BLKC_Attach(): an attach is running for this connection
+   if (i_ret == -EALREADY)
+   {
+      i_ret = 0;
+   }
+
+   // Check if the attach started
+   if (i_ret == 0)
+   {
+      (void)atomic_ptr_set(&st_cliConn, stpt_conn);
    }
 
    return i_ret;
 }
+#endif // BLK_ENABLE_CLIENT
 
 /**
  * @public        gv_BulkRouter_SetFilter

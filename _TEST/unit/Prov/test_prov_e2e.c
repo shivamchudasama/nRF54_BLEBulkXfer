@@ -34,8 +34,13 @@ const struct bt_gatt_attr *gstpt_BulkSvc_Init(void)
    return &sst_ctrlAttr;
 }
 
-/* _BLE/ConnectionHandling.c */
-struct bt_conn *gstpt_currentConn = &sst_conn;
+/* _BLE/ConnectionHandling.c: the simulated link is the host link */
+struct bt_conn *gstpt_BLE_GetHostConn(void) { return sb_connected ? &sst_conn : NULL; }
+void gv_BLE_RefreshAdv(void) {}
+
+/* _PAIR: no pairing runs here */
+bool gb_Pair_IsRunning(void) { return false; }
+void gv_Pair_ForgetBonds(void) {}
 
 /* _CSR: the vector's CSR is this device's CSR; "ITS" is a few flags */
 CSRData_T gst_CSRData;

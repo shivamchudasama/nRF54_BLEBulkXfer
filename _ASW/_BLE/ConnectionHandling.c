@@ -1,6 +1,22 @@
 /**
  * @file          ConnectionHandling.c
  * @brief         Source file containing all the connection handling related functions.
+ *
+ *                The device keeps up to two links at once:
+ *                  - the host link: the PC (GUI or CLI) that uploads, provisions
+ *                    or orchestrates pairing. It is the first connection that
+ *                    the pairing module does not claim; the BulkXfer Server binds
+ *                    to it. A second unclaimed connection is refused.
+ *                  - the peer link: another device during and after pairing,
+ *                    owned by _PAIR (gb_Pair_ClaimConn()).
+ *                Each link negotiates PHY, data length and MTU on its own; the
+ *                peripheral side of a link also asks for a short connection
+ *                interval.
+ *
+ *                Undirected advertising runs only while there is no host link
+ *                and _PAIR is not using the advertiser. It carries the Pairing
+ *                service UUID once the device is provisioned, the BulkXfer
+ *                service UUID before.
  * @date          21/02/2026
  * @author        Shivam Chudasama [SC]
  * @copyright     Bajaj Auto Technology Limited (BATL)
@@ -13,7 +29,11 @@
 /******************************************************************************/
 #include "ConnectionHandling.h"
 #include <errno.h>
+#include <zephyr/settings/settings.h>
 #include "BulkXfer.h"
+#include "Pair.h"
+#include "PairSvc.h"
+#include "Prov.h"
 
 /******************************************************************************/
 /*                                                                            */
@@ -65,6 +85,13 @@
 #define TARGET_CONN_TIMEOUT                  (400)
 
 /**
+ * @def           NEGOTIATION_DELAY_S
+ * @brief         Delay between a connection and the start of its negotiation,
+ *                to let the link settle.
+ */
+#define NEGOTIATION_DELAY_S                  (2)
+
+/**
  * @def           NEGOTIATION_RETRY_DELAY_MS
  * @brief         Delay for retrying a busy negotiation procedure.
  */
@@ -100,6 +127,20 @@ typedef enum
 /*                                 STRUCTURES                                 */
 /*                                                                            */
 /******************************************************************************/
+/**
+ * @struct        LinkCtx_T
+ * @brief         Negotiation state of one link, indexed by bt_conn_index().
+ */
+typedef struct
+{
+   struct bt_conn *stpt_conn;                /**< Link (referenced), NULL if unused   */
+   bool b_isSelfNegotiation;                 /**< Negotiation has started             */
+   bool b_waitingForProcedure;               /**< A local procedure is pending        */
+   ConnNegotiationStep_E e_step;             /**< Current negotiation step            */
+   uint8_t u8_retryCnt;                      /**< Retries of the current step         */
+   struct k_work_delayable st_work;          /**< Negotiation work item               */
+   struct bt_gatt_exchange_params st_mtuParams; /**< MTU exchange parameters          */
+} LinkCtx_T;
 
 /******************************************************************************/
 /*                                                                            */
@@ -112,18 +153,23 @@ typedef enum
 /*                       PRIVATE FUNCTION DECLARATIONS                        */
 /*                                                                            */
 /******************************************************************************/
+static LinkCtx_T *sstpt_FindLink(struct bt_conn *stpt_conn);
+static void sv_OpenLink(struct bt_conn *stpt_conn);
+static void sv_CloseLink(struct bt_conn *stpt_conn);
 static void sv_ConnParamNegotiation(struct k_work *stpt_work);
 static void sv_MTUExchangeCallback(struct bt_conn *stpt_conn, uint8_t u8_err,
    struct bt_gatt_exchange_params *stpt_exchangeParams);
+static void sv_StartAdvIfAllowed(void);
 static void sv_Connected(struct bt_conn *stpt_conn, uint8_t u8_err);
 static void sv_Disconnected(struct bt_conn *stpt_conn, uint8_t reason);
 static void sv_Recycled(void);
+static void sv_SecurityChanged(struct bt_conn *stpt_conn, bt_security_t e_level,
+   enum bt_security_err e_err);
 static void sv_PHYUpdated(struct bt_conn *stpt_conn, struct bt_conn_le_phy_info *stpt_PHYInfo);
 static void sv_DataLengthUpdated(struct bt_conn *stpt_conn,
    struct bt_conn_le_data_len_info *stpt_dataLenInfo);
 static void sv_ConnParamUpdated(struct bt_conn *stpt_conn, uint16_t u16_interval,
    uint16_t u16_latency, uint16_t u16_timeout);
-static void sv_ResetConnNegotiationState(void);
 
 /******************************************************************************/
 /*                                                                            */
@@ -136,17 +182,6 @@ static void sv_ResetConnNegotiationState(void);
 /*                              PUBLIC VARIABLES                              */
 /*                                                                            */
 /******************************************************************************/
-/**
- * @var           gst_connParamNegotiationWork
- * @brief         Initialize a delayable work item for BLE negotiation.
- */
-K_WORK_DELAYABLE_DEFINE(gst_connParamNegotiationWork, sv_ConnParamNegotiation);
-
-/**
- * @var           gstpt_currentConn
- * @brief         Pointer to current connection handle.
- */
-struct bt_conn *gstpt_currentConn;
 
 /******************************************************************************/
 /*                                                                            */
@@ -154,34 +189,55 @@ struct bt_conn *gstpt_currentConn;
 /*                                                                            */
 /******************************************************************************/
 /**
- * @var           sb_isSelfNegotiation
- * @brief         Flag to indicate if self negotiation has been performed.
+ * @var           sstar_links
+ * @brief         Negotiation state per link.
  */
-static bool sb_isSelfNegotiation = false;
+static LinkCtx_T sstar_links[CONFIG_BT_MAX_CONN];
 
 /**
- * @var           sb_waitingForProcedure
- * @brief         Flag to indicate if a local negotiation procedure is pending.
+ * @var           sstpt_hostConn
+ * @brief         Host link (referenced), NULL if none. Guarded by sst_hostLock.
  */
-static bool sb_waitingForProcedure = false;
+static struct bt_conn *sstpt_hostConn = NULL;
 
 /**
- * @var           se_connNegotiationStep
- * @brief         Current negotiation step.
+ * @var           sst_hostLock
+ * @brief         Guards sstpt_hostConn (BT callbacks and other threads).
  */
-static ConnNegotiationStep_E se_connNegotiationStep = eCNS_PHY;
+static struct k_spinlock sst_hostLock;
 
 /**
- * @var           sstar_advData
- * @brief         Create advertising data structure array.
+ * @var           sb_btReady
+ * @brief         Set once the stack is enabled and its settings are loaded.
  */
-static struct bt_data sstar_advData[] =
+static bool sb_btReady = false;
+
+/**
+ * @var           sstar_advDataProv
+ * @brief         Advertising data of a device to provision: flags and the
+ *                BulkXfer service, which lets the PC filter its scans. The name
+ *                stays in the scan response (both don't fit in 31 B).
+ */
+static struct bt_data sstar_advDataProv[] =
 {
    // AD Type: Flags - general discoverable and no BR/EDR support
    BT_DATA_BYTES(BT_DATA_FLAGS, (BT_LE_AD_GENERAL | BT_LE_AD_NO_BREDR)),
-   // AD Type: Complete list of 128-bit service UUIDs - BulkXfer service, lets the
-   // client filter scans. The name stays in the scan response (both don't fit in 31 B).
+   // AD Type: Complete list of 128-bit service UUIDs - BulkXfer service
    BT_DATA_BYTES(BT_DATA_UUID128_ALL, BT_UUID_BLK_SVC_VAL),
+};
+
+/**
+ * @var           sstar_advDataPair
+ * @brief         Advertising data of a provisioned device: flags and the
+ *                Pairing service, which the GUI's pairing page scans for.
+ *                BulkXfer stays available over GATT.
+ */
+static struct bt_data sstar_advDataPair[] =
+{
+   // AD Type: Flags - general discoverable and no BR/EDR support
+   BT_DATA_BYTES(BT_DATA_FLAGS, (BT_LE_AD_GENERAL | BT_LE_AD_NO_BREDR)),
+   // AD Type: Incomplete list of 128-bit service UUIDs - Pairing service
+   BT_DATA_BYTES(BT_DATA_UUID128_SOME, BT_UUID_PAIR_SVC_VAL),
 };
 
 /**
@@ -203,17 +259,12 @@ BT_CONN_CB_DEFINE(sst_connCallbacks) = {
 	.connected = sv_Connected,                // Callback for handling new connections
 	.disconnected = sv_Disconnected,          // Callback for handling disconnections
    .recycled = sv_Recycled,                  // Callback for handling recycled connections
+   .security_changed = sv_SecurityChanged,   // Callback for handling security changes
    .le_phy_updated = sv_PHYUpdated,          // Callback to be called upon PHY updated
    .le_data_len_updated = sv_DataLengthUpdated,
                                              // Callback to be called upon data length updated
    .le_param_updated = sv_ConnParamUpdated,  // Callback to be called upon connection parameters updated
 };
-
-/**
- * @var           sst_exchangeParams
- * @brief         Structure for GATT exchange parameters.
- */
-static struct bt_gatt_exchange_params sst_exchangeParams;
 
 /******************************************************************************/
 /*                                                                            */
@@ -227,28 +278,86 @@ static struct bt_gatt_exchange_params sst_exchangeParams;
 /*                                                                            */
 /******************************************************************************/
 /**
- * @private       sv_ResetConnNegotiationState
- * @brief         Reset negotiation state for a new connection lifecycle.
+ * @private       sstpt_FindLink
+ * @brief         Negotiation state of an open link.
+ * @param[in]     stpt_conn Connection.
+ * @return        Its context, or NULL if the link is not open here.
+ */
+static LinkCtx_T *sstpt_FindLink(struct bt_conn *stpt_conn)
+{
+   LinkCtx_T *stpt_link = &sstar_links[bt_conn_index(stpt_conn)];
+
+   return (stpt_link->stpt_conn == stpt_conn) ? stpt_link : NULL;
+}
+
+/**
+ * @private       sv_OpenLink
+ * @brief         Take a reference on a new link and schedule its negotiation.
+ * @param[in]     stpt_conn Connection.
  * @return        None.
  */
-static void sv_ResetConnNegotiationState(void)
+static void sv_OpenLink(struct bt_conn *stpt_conn)
 {
-   sb_isSelfNegotiation = false;
-   sb_waitingForProcedure = false;
-   se_connNegotiationStep = eCNS_PHY;
+   LinkCtx_T *stpt_link = &sstar_links[bt_conn_index(stpt_conn)];
+   int i_err;
+
+   // Check if a stale context is left (it should be closed at disconnect)
+   if (stpt_link->stpt_conn != NULL)
+   {
+      (void)k_work_cancel_delayable(&stpt_link->st_work);
+      bt_conn_unref(stpt_link->stpt_conn);
+   }
+
+   stpt_link->stpt_conn = bt_conn_ref(stpt_conn);
+   stpt_link->b_isSelfNegotiation = false;
+   stpt_link->b_waitingForProcedure = false;
+   stpt_link->e_step = eCNS_PHY;
+   stpt_link->u8_retryCnt = 0U;
+   k_work_init_delayable(&stpt_link->st_work, sv_ConnParamNegotiation);
+
+   // Negotiate PHY, DLE, MTU and the interval after a short delay, to allow
+   // the connection to stabilize
+   i_err = k_work_schedule(&stpt_link->st_work, K_SECONDS(NEGOTIATION_DELAY_S));
+
+   // Check if scheduling the negotiation work failed
+   if (i_err < 0)
+   {
+      LOG_WRN("Failed to schedule negotiation work (err %x)", i_err);
+   }
+}
+
+/**
+ * @private       sv_CloseLink
+ * @brief         Stop a link's negotiation and drop its reference.
+ * @param[in]     stpt_conn Connection.
+ * @return        None.
+ */
+static void sv_CloseLink(struct bt_conn *stpt_conn)
+{
+   LinkCtx_T *stpt_link = sstpt_FindLink(stpt_conn);
+
+   // Check if the link was open here
+   if (stpt_link != NULL)
+   {
+      (void)k_work_cancel_delayable(&stpt_link->st_work);
+      bt_conn_unref(stpt_link->stpt_conn);
+      stpt_link->stpt_conn = NULL;
+   }
 }
 
 /**
  * @private       sv_ConnParamNegotiation
  * @brief         Negotiation for PHY update, data length update, MTU exchange
- *                and connection parameter update after connection.
- * @param[in]     stpt_work Pointer to the work item for this negotiation process.
+ *                and (as peripheral) connection parameter update, one link at a
+ *                time per work item.
+ * @param[in]     stpt_work Work item of the link.
  * @return        None.
  */
 static void sv_ConnParamNegotiation(struct k_work *stpt_work)
 {
-   ARG_UNUSED(stpt_work);
-
+   struct k_work_delayable *stpt_dwork = k_work_delayable_from_work(stpt_work);
+   LinkCtx_T *stpt_link = CONTAINER_OF(stpt_dwork, LinkCtx_T, st_work);
+   struct bt_conn *stpt_conn = stpt_link->stpt_conn;
    struct bt_conn_le_phy_param st_PHYParam = {
       .options = BT_CONN_LE_PHY_OPT_NONE,
       .pref_tx_phy = TARGET_PHY,
@@ -257,226 +366,231 @@ static void sv_ConnParamNegotiation(struct k_work *stpt_work)
    struct bt_conn_info st_connInfo;
    int i_err;
    uint16_t u16_MTU;
-   static uint8_t slu8_retryCnt = 0;
 
-   // Check if we have a valid connection handle
-   if (!gstpt_currentConn)
+   // Check if the link is still open
+   if (stpt_conn == NULL)
    {
-      LOG_ERR("No valid connection handle for negotiation");
+      return;
    }
-   else
+
+   // Track first entry after the delay to mark start of self negotiation.
+   if (!stpt_link->b_isSelfNegotiation)
    {
-      // Track first entry after the 1-second delay to mark start of self negotiation.
-      if (!sb_isSelfNegotiation)
+      stpt_link->b_isSelfNegotiation = true;
+      LOG_INF("Starting self negotiation after a delay...");
+   }
+
+   // Loop through negotiation steps until complete, handling busy responses with retries
+   while (stpt_link->e_step != eCNS_COMPLETE)
+   {
+      // Get the current connection info for the connection handle
+      i_err = bt_conn_get_info(stpt_conn, &st_connInfo);
+
+      // Check if getting connection info failed
+      if (i_err)
       {
-         sb_isSelfNegotiation = true;
-         LOG_INF("Starting self negotiation after a delay...");
+         LOG_ERR("Failed to get connection info (err %x)", i_err);
+         return;
       }
 
-      // Loop through negotiation steps until complete, handling busy responses with retries
-      while (se_connNegotiationStep != eCNS_COMPLETE)
+      // Switch through negotiation steps and perform necessary actions for each step
+      switch (stpt_link->e_step)
       {
-         // Get the current connection info for the connection handle
-         i_err = bt_conn_get_info(gstpt_currentConn, &st_connInfo);
-
-         // Check if getting connection info failed
-         if (i_err)
+         case eCNS_PHY:
          {
-            LOG_ERR("Failed to get connection info (err %x)", i_err);
-            return;
-         }
-
-         // Switch through negotiation steps and perform necessary actions for each step
-         switch (se_connNegotiationStep)
-         {
-            case eCNS_PHY:
+            // Check if PHY is already at target for both TX and RX
+            if ((st_connInfo.le.phy->tx_phy == TARGET_PHY) &&
+               (st_connInfo.le.phy->rx_phy == TARGET_PHY))
             {
-               // Check if PHY is already at target for both TX and RX
-               if ((st_connInfo.le.phy->tx_phy == TARGET_PHY) &&
-                  (st_connInfo.le.phy->rx_phy == TARGET_PHY))
-               {
-                  LOG_INF("PHY already at target (TX:%d RX:%d), skipping PHY request",
-                     st_connInfo.le.phy->tx_phy, st_connInfo.le.phy->rx_phy);
-                  se_connNegotiationStep = eCNS_DLE;
-                  sb_waitingForProcedure = false;
-                  continue;
-               }
-
-               // Check if we are already waiting for a procedure to complete
-               if (sb_waitingForProcedure)
-               {
-                  return;
-               }
-
-               LOG_INF("Requesting PHY 2M...");
-               i_err = bt_conn_le_phy_update(gstpt_currentConn, &st_PHYParam);
-
-               // Check if there was an error initiating PHY update
-               if (i_err)
-               {
-                  // Check if we haven't exceeded max retry count
-                  if (slu8_retryCnt < MAX_NEGOTIATION_RETRY_CNT)
-                  {
-                     slu8_retryCnt++;
-                     LOG_WRN("PHY update request failed (err %d), retrying...", i_err);
-                     k_work_schedule(&gst_connParamNegotiationWork, K_MSEC(NEGOTIATION_RETRY_DELAY_MS));
-                     return;
-                  }
-                  else
-                  {
-                     LOG_WRN("PHY update request failed, proceeding without it...");
-                     se_connNegotiationStep = eCNS_DLE;
-                     continue;
-                  }
-               }
-
-               sb_waitingForProcedure = true;
-               return;
-            }
-
-            case eCNS_DLE:
-            {
-               // Check if DLE is already at target for both TX and RX
-               if ((st_connInfo.le.data_len->tx_max_len >= TARGET_DLE) &&
-                  (st_connInfo.le.data_len->rx_max_len >= TARGET_DLE))
-               {
-                  LOG_INF("DLE already at target (TX:%d RX:%d), skipping DLE request",
-                     st_connInfo.le.data_len->tx_max_len, st_connInfo.le.data_len->rx_max_len);
-                  se_connNegotiationStep = eCNS_MTU;
-                  sb_waitingForProcedure = false;
-                  continue;
-               }
-
-               // Check if we are already waiting for a procedure to complete
-               if (sb_waitingForProcedure)
-               {
-                  return;
-               }
-
-               LOG_INF("Requesting DLE 251...");
-               i_err = bt_conn_le_data_len_update(gstpt_currentConn, NULL);
-
-               // Check if there was an error initiating PHY update
-               if (i_err)
-               {
-                  // Check if we haven't exceeded max retry count
-                  if (slu8_retryCnt < MAX_NEGOTIATION_RETRY_CNT)
-                  {
-                     slu8_retryCnt++;
-                     LOG_WRN("DLE update request failed (err %d), retrying...", i_err);
-                     k_work_schedule(&gst_connParamNegotiationWork, K_MSEC(NEGOTIATION_RETRY_DELAY_MS));
-                     return;
-                  }
-                  else
-                  {
-                     LOG_WRN("DLE update request failed, proceeding without it...");
-                     se_connNegotiationStep = eCNS_MTU;
-                     continue;
-                  }
-               }
-
-               sb_waitingForProcedure = true;
-               return;
-            }
-
-            case eCNS_MTU:
-            {
-               u16_MTU = bt_gatt_get_mtu(gstpt_currentConn);
-
-               // Check if MTU is already at target
-               if (u16_MTU >= TARGET_MTU)
-               {
-                  LOG_INF("MTU already at target (%d bytes), skipping MTU request", u16_MTU);
-                  se_connNegotiationStep = eCNS_CONN_PARAM;
-                  sb_waitingForProcedure = false;
-                  continue;
-               }
-
-               // Check if we are already waiting for a procedure to complete
-               if (sb_waitingForProcedure)
-               {
-                  return;
-               }
-
-               LOG_INF("Requesting MTU %d...", TARGET_MTU);
-               sst_exchangeParams.func = sv_MTUExchangeCallback;
-               i_err = bt_gatt_exchange_mtu(gstpt_currentConn, &sst_exchangeParams);
-
-               // Check if there was an error initiating PHY update
-               if (i_err)
-               {
-                  // Check if we haven't exceeded max retry count
-                  if (slu8_retryCnt < MAX_NEGOTIATION_RETRY_CNT)
-                  {
-                     slu8_retryCnt++;
-                     LOG_WRN("MTU exchange request failed (err %d), retrying...", i_err);
-                     k_work_schedule(&gst_connParamNegotiationWork, K_MSEC(NEGOTIATION_RETRY_DELAY_MS));
-                     return;
-                  }
-                  else
-                  {
-                     LOG_WRN("MTU exchange request failed, proceeding without it...");
-                     se_connNegotiationStep = eCNS_CONN_PARAM;
-                     continue;
-                  }
-               }
-
-               sb_waitingForProcedure = true;
-               return;
-            }
-
-            case eCNS_CONN_PARAM:
-            {
-               // Check if the connection interval is already at target
-               if (st_connInfo.le.interval_us <= BT_CONN_INTERVAL_TO_US(TARGET_CONN_INTERVAL_MAX))
-               {
-                  LOG_INF("Connection interval already at target (%u us), skipping request",
-                     st_connInfo.le.interval_us);
-                  se_connNegotiationStep = eCNS_COMPLETE;
-                  sb_waitingForProcedure = false;
-                  continue;
-               }
-
-               LOG_INF("Requesting connection interval %u-%u us (current %u us)...",
-                  BT_CONN_INTERVAL_TO_US(TARGET_CONN_INTERVAL_MIN),
-                  BT_CONN_INTERVAL_TO_US(TARGET_CONN_INTERVAL_MAX), st_connInfo.le.interval_us);
-               i_err = bt_conn_le_param_update(gstpt_currentConn,
-                  BT_LE_CONN_PARAM(TARGET_CONN_INTERVAL_MIN, TARGET_CONN_INTERVAL_MAX,
-                     TARGET_CONN_LATENCY, TARGET_CONN_TIMEOUT));
-
-               // Check if there was an error initiating the connection parameter update
-               if (i_err)
-               {
-                  // Check if we haven't exceeded max retry count
-                  if (slu8_retryCnt < MAX_NEGOTIATION_RETRY_CNT)
-                  {
-                     slu8_retryCnt++;
-                     LOG_WRN("Connection parameter update request failed (err %d), retrying...",
-                        i_err);
-                     k_work_schedule(&gst_connParamNegotiationWork, K_MSEC(NEGOTIATION_RETRY_DELAY_MS));
-                     return;
-                  }
-                  else
-                  {
-                     LOG_WRN("Connection parameter update request failed, proceeding without it...");
-                  }
-               }
-
-               // Not waited for: the central may reject the request without any callback.
-               // Zephyr sends it once CONFIG_BT_CONN_PARAM_UPDATE_TIMEOUT has passed since the
-               // connection; the result is logged by sv_ConnParamUpdated().
-               se_connNegotiationStep = eCNS_COMPLETE;
+               LOG_INF("PHY already at target (TX:%d RX:%d), skipping PHY request",
+                  st_connInfo.le.phy->tx_phy, st_connInfo.le.phy->rx_phy);
+               stpt_link->e_step = eCNS_DLE;
+               stpt_link->b_waitingForProcedure = false;
                continue;
             }
 
-            case eCNS_COMPLETE:
-            default:
-               break;
-         }
-      }
+            // Check if we are already waiting for a procedure to complete
+            if (stpt_link->b_waitingForProcedure)
+            {
+               return;
+            }
 
-      LOG_INF("Negotiation complete.");
+            LOG_INF("Requesting PHY 2M...");
+            i_err = bt_conn_le_phy_update(stpt_conn, &st_PHYParam);
+
+            // Check if there was an error initiating PHY update
+            if (i_err)
+            {
+               // Check if we haven't exceeded max retry count
+               if (stpt_link->u8_retryCnt < MAX_NEGOTIATION_RETRY_CNT)
+               {
+                  stpt_link->u8_retryCnt++;
+                  LOG_WRN("PHY update request failed (err %d), retrying...", i_err);
+                  k_work_schedule(&stpt_link->st_work, K_MSEC(NEGOTIATION_RETRY_DELAY_MS));
+                  return;
+               }
+               else
+               {
+                  LOG_WRN("PHY update request failed, proceeding without it...");
+                  stpt_link->e_step = eCNS_DLE;
+                  continue;
+               }
+            }
+
+            stpt_link->b_waitingForProcedure = true;
+            return;
+         }
+
+         case eCNS_DLE:
+         {
+            // Check if DLE is already at target for both TX and RX
+            if ((st_connInfo.le.data_len->tx_max_len >= TARGET_DLE) &&
+               (st_connInfo.le.data_len->rx_max_len >= TARGET_DLE))
+            {
+               LOG_INF("DLE already at target (TX:%d RX:%d), skipping DLE request",
+                  st_connInfo.le.data_len->tx_max_len, st_connInfo.le.data_len->rx_max_len);
+               stpt_link->e_step = eCNS_MTU;
+               stpt_link->b_waitingForProcedure = false;
+               continue;
+            }
+
+            // Check if we are already waiting for a procedure to complete
+            if (stpt_link->b_waitingForProcedure)
+            {
+               return;
+            }
+
+            LOG_INF("Requesting DLE 251...");
+            i_err = bt_conn_le_data_len_update(stpt_conn, NULL);
+
+            // Check if there was an error initiating DLE update
+            if (i_err)
+            {
+               // Check if we haven't exceeded max retry count
+               if (stpt_link->u8_retryCnt < MAX_NEGOTIATION_RETRY_CNT)
+               {
+                  stpt_link->u8_retryCnt++;
+                  LOG_WRN("DLE update request failed (err %d), retrying...", i_err);
+                  k_work_schedule(&stpt_link->st_work, K_MSEC(NEGOTIATION_RETRY_DELAY_MS));
+                  return;
+               }
+               else
+               {
+                  LOG_WRN("DLE update request failed, proceeding without it...");
+                  stpt_link->e_step = eCNS_MTU;
+                  continue;
+               }
+            }
+
+            stpt_link->b_waitingForProcedure = true;
+            return;
+         }
+
+         case eCNS_MTU:
+         {
+            u16_MTU = bt_gatt_get_mtu(stpt_conn);
+
+            // Check if MTU is already at target
+            if (u16_MTU >= TARGET_MTU)
+            {
+               LOG_INF("MTU already at target (%d bytes), skipping MTU request", u16_MTU);
+               stpt_link->e_step = eCNS_CONN_PARAM;
+               stpt_link->b_waitingForProcedure = false;
+               continue;
+            }
+
+            // Check if we are already waiting for a procedure to complete
+            if (stpt_link->b_waitingForProcedure)
+            {
+               return;
+            }
+
+            LOG_INF("Requesting MTU %d...", TARGET_MTU);
+            stpt_link->st_mtuParams.func = sv_MTUExchangeCallback;
+            i_err = bt_gatt_exchange_mtu(stpt_conn, &stpt_link->st_mtuParams);
+
+            // Check if there was an error initiating the MTU exchange
+            if (i_err)
+            {
+               // Check if we haven't exceeded max retry count
+               if (stpt_link->u8_retryCnt < MAX_NEGOTIATION_RETRY_CNT)
+               {
+                  stpt_link->u8_retryCnt++;
+                  LOG_WRN("MTU exchange request failed (err %d), retrying...", i_err);
+                  k_work_schedule(&stpt_link->st_work, K_MSEC(NEGOTIATION_RETRY_DELAY_MS));
+                  return;
+               }
+               else
+               {
+                  LOG_WRN("MTU exchange request failed, proceeding without it...");
+                  stpt_link->e_step = eCNS_CONN_PARAM;
+                  continue;
+               }
+            }
+
+            stpt_link->b_waitingForProcedure = true;
+            return;
+         }
+
+         case eCNS_CONN_PARAM:
+         {
+            // Check if this side is the central: it chose the interval when
+            // it connected
+            if (st_connInfo.role != BT_CONN_ROLE_PERIPHERAL)
+            {
+               stpt_link->e_step = eCNS_COMPLETE;
+               continue;
+            }
+
+            // Check if the connection interval is already at target
+            if (st_connInfo.le.interval_us <= BT_CONN_INTERVAL_TO_US(TARGET_CONN_INTERVAL_MAX))
+            {
+               LOG_INF("Connection interval already at target (%u us), skipping request",
+                  st_connInfo.le.interval_us);
+               stpt_link->e_step = eCNS_COMPLETE;
+               stpt_link->b_waitingForProcedure = false;
+               continue;
+            }
+
+            LOG_INF("Requesting connection interval %u-%u us (current %u us)...",
+               BT_CONN_INTERVAL_TO_US(TARGET_CONN_INTERVAL_MIN),
+               BT_CONN_INTERVAL_TO_US(TARGET_CONN_INTERVAL_MAX), st_connInfo.le.interval_us);
+            i_err = bt_conn_le_param_update(stpt_conn,
+               BT_LE_CONN_PARAM(TARGET_CONN_INTERVAL_MIN, TARGET_CONN_INTERVAL_MAX,
+                  TARGET_CONN_LATENCY, TARGET_CONN_TIMEOUT));
+
+            // Check if there was an error initiating the connection parameter update
+            if (i_err)
+            {
+               // Check if we haven't exceeded max retry count
+               if (stpt_link->u8_retryCnt < MAX_NEGOTIATION_RETRY_CNT)
+               {
+                  stpt_link->u8_retryCnt++;
+                  LOG_WRN("Connection parameter update request failed (err %d), retrying...",
+                     i_err);
+                  k_work_schedule(&stpt_link->st_work, K_MSEC(NEGOTIATION_RETRY_DELAY_MS));
+                  return;
+               }
+               else
+               {
+                  LOG_WRN("Connection parameter update request failed, proceeding without it...");
+               }
+            }
+
+            // Not waited for: the central may reject the request without any callback.
+            // Zephyr sends it once CONFIG_BT_CONN_PARAM_UPDATE_TIMEOUT has passed since the
+            // connection; the result is logged by sv_ConnParamUpdated().
+            stpt_link->e_step = eCNS_COMPLETE;
+            continue;
+         }
+
+         case eCNS_COMPLETE:
+         default:
+            break;
+      }
    }
+
+   LOG_INF("Negotiation complete.");
 }
 
 /**
@@ -490,10 +604,12 @@ static void sv_ConnParamNegotiation(struct k_work *stpt_work)
 static void sv_MTUExchangeCallback(struct bt_conn *stpt_conn, uint8_t u8_err,
    struct bt_gatt_exchange_params *stpt_exchangeParams)
 {
+   LinkCtx_T *stpt_link = sstpt_FindLink(stpt_conn);
+
    ARG_UNUSED(stpt_exchangeParams);
 
-   // Check if the callback is for the current connection
-   if ((gstpt_currentConn == NULL) || (stpt_conn != gstpt_currentConn))
+   // Check if the callback is for an open link
+   if (stpt_link == NULL)
    {
       return;
    }
@@ -508,125 +624,182 @@ static void sv_MTUExchangeCallback(struct bt_conn *stpt_conn, uint8_t u8_err,
       LOG_INF("New MTU payload: %d bytes", u16_payloadMTU);
    }
 
-   if ((sb_isSelfNegotiation) && (se_connNegotiationStep == eCNS_MTU))
+   if ((stpt_link->b_isSelfNegotiation) && (stpt_link->e_step == eCNS_MTU))
    {
-      sb_waitingForProcedure = false;
-      se_connNegotiationStep = eCNS_CONN_PARAM;
-      k_work_schedule(&gst_connParamNegotiationWork, K_NO_WAIT);
+      stpt_link->b_waitingForProcedure = false;
+      stpt_link->e_step = eCNS_CONN_PARAM;
+      k_work_schedule(&stpt_link->st_work, K_NO_WAIT);
    }
 }
 
 /**
- * @private       sv_Connected
- * @brief         Callback for handling new connections. This function is called when a
- *                new connection is established.
- * @param[in]     stpt_conn Connection handle.
- * @param[in]     u8_err Error code of the connection attempt.
- * @return        Number of bytes written.
+ * @private       sv_StartAdvIfAllowed
+ * @brief         Start connectable undirected advertising if nothing stops it:
+ *                the stack is ready, no host link is up, and _PAIR does not use
+ *                the advertiser. The data follows the provisioning state.
+ * @return        None.
  */
-static void sv_Connected(struct bt_conn *stpt_conn, uint8_t u8_err)
+static void sv_StartAdvIfAllowed(void)
 {
+   bool b_hasHost;
+   bool b_isProvisioned = (ge_Prov_GetState() == ePS_PROVISIONED);
+   k_spinlock_key_t t_key;
    int i_err;
 
-   // Check if there was an error during connection
-	if (u8_err)
+   t_key = k_spin_lock(&sst_hostLock);
+   b_hasHost = (sstpt_hostConn != NULL);
+   k_spin_unlock(&sst_hostLock, t_key);
+
+   // Check if advertising is wanted now
+   if (!sb_btReady || b_hasHost || gb_Pair_IsAdvertising())
    {
-		LOG_ERR("Connection failed (err %x)", u8_err);
-		return;
-	}
-	LOG_INF("Connected");
-
-   // Note: We should cancel any ongoing negotiation work and reset state here to
-   // ensure a clean slate for the next connection.
-   k_work_cancel_delayable(&gst_connParamNegotiationWork);
-   sv_ResetConnNegotiationState();
-
-   // Note: Ideally we should not have a valid connection handle at this point
-   // since we should have cleared it on disconnection, but we will check and
-   // clear it just in case to avoid any potential issues with stale connection handles.
-
-   // Check if the current connection is not cleared
-   if (gstpt_currentConn)
-   {
-      bt_conn_unref(gstpt_currentConn);
-      gstpt_currentConn = NULL;
+      return;
    }
-
-   // Get the current connection handle and store it for future use
-   gstpt_currentConn = bt_conn_ref(stpt_conn);
-
-   // Bind the BulkXfer Server to this connection
-   gv_BLKS_OnConnected(stpt_conn);
-
-   // Schedule work to negotiate PHY update, MTU exchange, and DLE after a short delay
-   // to allow connection to stabilize
-   i_err = k_work_schedule(&gst_connParamNegotiationWork, K_SECONDS(2));
-
-   // Check if scheduling the negotiation work failed
-   if (i_err < 0)
-   {
-      LOG_WRN("Failed to schedule negotiation work (err %x)", i_err);
-   }
-}
-
-/**
- * @private       sv_Disconnected
- * @brief         Callback for handling disconnections. This function is called when a
- *                connection is disconnected.
- * @param[in]     stpt_conn Connection handle.
- * @param[in]     reason Reason for disconnection.
- * @return        Number of bytes written.
- */
-static void sv_Disconnected(struct bt_conn *stpt_conn, uint8_t reason)
-{
-	LOG_INF("Disconnected (reason 0x%x)", reason);
-
-   // Release BulkXfer's binding; a running transfer ends with eBS_DISCONNECTED
-   gv_BLK_OnDisconnected(stpt_conn);
-
-   // Note: We should cancel any ongoing negotiation work and reset state here to
-   // ensure a clean slate for the next connection.
-   k_work_cancel_delayable(&gst_connParamNegotiationWork);
-   sv_ResetConnNegotiationState();
-
-   // Check if the current connection is not cleared
-   if (gstpt_currentConn)
-   {
-      bt_conn_unref(gstpt_currentConn);
-      gstpt_currentConn = NULL;
-   }
-}
-
-/**
- * @private       sv_Recycled
- * @brief         Callback for handling recycled connections. This function is called when a
- *                connection is recycled.
- * @return        Number of bytes written.
- */
-static void sv_Recycled(void)
-{
-   int i_err;
-
-   LOG_INF("Let's restart advertising after connection recycle");
 
    // Start advertising by setting advertisement data, scan response data,
    // and advertisement parameters.
    i_err = bt_le_adv_start(
       BT_LE_ADV_CONN_FAST_1,                 // Advertising parameters: Connectable undirected advertising
-      sstar_advData,                         // Advertising data
-      ARRAY_SIZE(sstar_advData),             // Length of advertising data
+      b_isProvisioned ? sstar_advDataPair : sstar_advDataProv,
+                                             // Advertising data
+      b_isProvisioned ? ARRAY_SIZE(sstar_advDataPair) : ARRAY_SIZE(sstar_advDataProv),
+                                             // Length of advertising data
       sstar_scanRespData,                    // Scan response data
       ARRAY_SIZE(sstar_scanRespData)         // Length of scan response data
    );
 
-   // Check if advertising start wasn't successful
-	if (i_err)
+   // Check if advertising start wasn't successful (already running is fine)
+   if ((i_err != 0) && (i_err != -EALREADY))
    {
-		LOG_ERR("Advertising failed to start (err %x)", i_err);
-		return;
-	}
+      LOG_ERR("Advertising failed to start (err %d)", i_err);
+      return;
+   }
 
-   LOG_INF("Advertising restarted");
+   LOG_INF("Advertising %s", b_isProvisioned ? "for pairing" : "for provisioning");
+}
+
+/**
+ * @private       sv_Connected
+ * @brief         Callback for handling new connections. The pairing module
+ *                claims its peer link; the first other connection becomes the
+ *                host link; a second host is refused.
+ * @param[in]     stpt_conn Connection handle.
+ * @param[in]     u8_err Error code of the connection attempt.
+ * @return        None.
+ */
+static void sv_Connected(struct bt_conn *stpt_conn, uint8_t u8_err)
+{
+   k_spinlock_key_t t_key;
+   bool b_isHost = false;
+
+   // Check if it is the pairing peer (up, or a failed attempt to reach it)
+   if (gb_Pair_ClaimConn(stpt_conn, u8_err))
+   {
+      // Check if the peer link came up
+      if (u8_err == 0U)
+      {
+         LOG_INF("Peer link connected");
+         sv_OpenLink(stpt_conn);
+      }
+      return;
+   }
+
+   // Check if the connection attempt failed
+   if (u8_err)
+   {
+      LOG_ERR("Connection failed (err %u)", u8_err);
+      return;
+   }
+
+   t_key = k_spin_lock(&sst_hostLock);
+   // Check if there is no host yet: this one is it
+   if (sstpt_hostConn == NULL)
+   {
+      sstpt_hostConn = bt_conn_ref(stpt_conn);
+      b_isHost = true;
+   }
+   k_spin_unlock(&sst_hostLock, t_key);
+
+   // Check if a second host tries to connect
+   if (!b_isHost)
+   {
+      LOG_WRN("Second host connection refused");
+      (void)bt_conn_disconnect(stpt_conn, BT_HCI_ERR_REMOTE_USER_TERM_CONN);
+      return;
+   }
+
+   LOG_INF("Host connected");
+
+   // Bind the BulkXfer Server to the host (unless pairing holds it)
+   gv_BLKS_OnConnected(stpt_conn);
+
+   sv_OpenLink(stpt_conn);
+}
+
+/**
+ * @private       sv_Disconnected
+ * @brief         Callback for handling disconnections.
+ * @param[in]     stpt_conn Connection handle.
+ * @param[in]     reason Reason for disconnection.
+ * @return        None.
+ */
+static void sv_Disconnected(struct bt_conn *stpt_conn, uint8_t reason)
+{
+   struct bt_conn *stpt_oldHost = NULL;
+   k_spinlock_key_t t_key;
+
+	LOG_INF("Disconnected (reason 0x%x)", reason);
+
+   // Release BulkXfer's binding; a running transfer ends with eBS_DISCONNECTED
+   gv_BLK_OnDisconnected(stpt_conn);
+
+   // The pairing module releases its peer link
+   gv_Pair_OnDisconnected(stpt_conn, reason);
+
+   sv_CloseLink(stpt_conn);
+
+   t_key = k_spin_lock(&sst_hostLock);
+   // Check if the host left
+   if (sstpt_hostConn == stpt_conn)
+   {
+      stpt_oldHost = sstpt_hostConn;
+      sstpt_hostConn = NULL;
+   }
+   k_spin_unlock(&sst_hostLock, t_key);
+
+   // Check if a host reference is to be dropped
+   if (stpt_oldHost != NULL)
+   {
+      bt_conn_unref(stpt_oldHost);
+   }
+}
+
+/**
+ * @private       sv_Recycled
+ * @brief         Callback for handling recycled connections: a connection
+ *                object is free again, so advertising may resume.
+ * @return        None.
+ */
+static void sv_Recycled(void)
+{
+   sv_StartAdvIfAllowed();
+}
+
+/**
+ * @private       sv_SecurityChanged
+ * @brief         Callback for handling security level changes (logged; the
+ *                pairing module follows the SMP result callbacks).
+ * @param[in]     stpt_conn Connection handle.
+ * @param[in]     e_level New security level.
+ * @param[in]     e_err Security error.
+ * @return        None.
+ */
+static void sv_SecurityChanged(struct bt_conn *stpt_conn, bt_security_t e_level,
+   enum bt_security_err e_err)
+{
+   ARG_UNUSED(stpt_conn);
+
+   LOG_INF("Security level %d (err %d)", (int)e_level, (int)e_err);
 }
 
 /**
@@ -638,8 +811,10 @@ static void sv_Recycled(void)
  */
 static void sv_PHYUpdated(struct bt_conn *stpt_conn, struct bt_conn_le_phy_info *stpt_PHYInfo)
 {
-   // Check if the callback is for the current connection
-   if ((gstpt_currentConn == NULL) || (stpt_conn != gstpt_currentConn))
+   LinkCtx_T *stpt_link = sstpt_FindLink(stpt_conn);
+
+   // Check if the callback is for an open link
+   if (stpt_link == NULL)
    {
       return;
    }
@@ -647,17 +822,17 @@ static void sv_PHYUpdated(struct bt_conn *stpt_conn, struct bt_conn_le_phy_info 
    LOG_INF("PHY updated TX:%d RX:%d", stpt_PHYInfo->tx_phy, stpt_PHYInfo->rx_phy);
 
    // Check if we have initiated the negotiation
-   if (sb_isSelfNegotiation)
+   if (stpt_link->b_isSelfNegotiation)
    {
       // Check if we were waiting for PHY update to complete
-      if ((se_connNegotiationStep == eCNS_PHY) && (sb_waitingForProcedure))
+      if ((stpt_link->e_step == eCNS_PHY) && (stpt_link->b_waitingForProcedure))
       {
-         sb_waitingForProcedure = false;
-         se_connNegotiationStep = eCNS_DLE;
+         stpt_link->b_waitingForProcedure = false;
+         stpt_link->e_step = eCNS_DLE;
       }
 
       LOG_INF("Running next negotiation step after PHY update...");
-      k_work_schedule(&gst_connParamNegotiationWork, K_NO_WAIT);
+      k_work_schedule(&stpt_link->st_work, K_NO_WAIT);
    }
 }
 
@@ -671,8 +846,10 @@ static void sv_PHYUpdated(struct bt_conn *stpt_conn, struct bt_conn_le_phy_info 
 static void sv_DataLengthUpdated(struct bt_conn *stpt_conn,
    struct bt_conn_le_data_len_info *stpt_dataLenInfo)
 {
-   // Check if the callback is for the current connection
-   if ((gstpt_currentConn == NULL) || (stpt_conn != gstpt_currentConn))
+   LinkCtx_T *stpt_link = sstpt_FindLink(stpt_conn);
+
+   // Check if the callback is for an open link
+   if (stpt_link == NULL)
    {
       return;
    }
@@ -682,17 +859,17 @@ static void sv_DataLengthUpdated(struct bt_conn *stpt_conn,
       stpt_dataLenInfo->tx_max_time, stpt_dataLenInfo->rx_max_time);
 
    // Check if we have initiated the negotiation
-   if (sb_isSelfNegotiation)
+   if (stpt_link->b_isSelfNegotiation)
    {
       // Check if we were waiting for DLE update to complete
-      if ((se_connNegotiationStep == eCNS_DLE) && (sb_waitingForProcedure))
+      if ((stpt_link->e_step == eCNS_DLE) && (stpt_link->b_waitingForProcedure))
       {
-         sb_waitingForProcedure = false;
-         se_connNegotiationStep = eCNS_MTU;
+         stpt_link->b_waitingForProcedure = false;
+         stpt_link->e_step = eCNS_MTU;
       }
 
       LOG_INF("Running next negotiation step after DLE update...");
-      k_work_schedule(&gst_connParamNegotiationWork, K_NO_WAIT);
+      k_work_schedule(&stpt_link->st_work, K_NO_WAIT);
    }
 }
 
@@ -709,8 +886,8 @@ static void sv_DataLengthUpdated(struct bt_conn *stpt_conn,
 static void sv_ConnParamUpdated(struct bt_conn *stpt_conn, uint16_t u16_interval,
    uint16_t u16_latency, uint16_t u16_timeout)
 {
-   // Check if the callback is for the current connection
-   if ((gstpt_currentConn == NULL) || (stpt_conn != gstpt_currentConn))
+   // Check if the callback is for an open link
+   if (sstpt_FindLink(stpt_conn) == NULL)
    {
       return;
    }
@@ -726,7 +903,8 @@ static void sv_ConnParamUpdated(struct bt_conn *stpt_conn, uint16_t u16_interval
 /******************************************************************************/
 /**
  * @public        gv_BLEInitStartAdv
- * @brief         Initialize BLE module and start advertising.
+ * @brief         Initialize BLE module, load the stored bonds and start
+ *                advertising.
  * @return        None.
  */
 void gv_BLEInitStartAdv(void)
@@ -742,33 +920,69 @@ void gv_BLEInitStartAdv(void)
 	if (i_err)
    {
 		LOG_ERR("Bluetooth init failed (err %x)", i_err);
+      return;
 	}
-   else
+
+   LOG_INF("Bluetooth initialized");
+
+   // Load the stack's settings (identity, bonds) after bt_enable(). The
+   // settings subsystem itself was initialised by the provisioning start-up.
+   i_err = settings_load();
+
+   // Check if the settings could not be loaded (bonds are then unavailable)
+   if (i_err)
    {
-      LOG_INF("Bluetooth initialized");
-      LOG_INF("Starting BLE advertising...");
-
-      // Advertise with name and custom service UUID
-      // Start advertising by setting advertisement data, scan response data,
-      // and advertisement parameters.
-      i_err = bt_le_adv_start(
-         BT_LE_ADV_CONN_FAST_1,              // Advertising parameters: Connectable undirected advertising
-         sstar_advData,                      // Advertising data
-         ARRAY_SIZE(sstar_advData),          // Length of advertising data
-         sstar_scanRespData,                 // Scan response data
-         ARRAY_SIZE(sstar_scanRespData)      // Length of scan response data
-      );
-
-      // Check if advertising start wasn't successful
-      if (i_err)
-      {
-         LOG_ERR("Advertising failed to start (err %x)", i_err);
-      }
-      else
-      {
-         LOG_INF("Advertising started");
-      }
+      LOG_ERR("Settings load failed (err %d)", i_err);
    }
+
+   // The pairing module learns this device's address and restores its bond
+   gv_Pair_OnBtReady();
+
+   sb_btReady = true;
+   LOG_INF("Starting BLE advertising...");
+   sv_StartAdvIfAllowed();
+}
+
+/**
+ * @public        gstpt_BLE_GetHostConn
+ * @brief         Host link. Any thread.
+ * @return        A new reference to the host link (the caller drops it with
+ *                bt_conn_unref()), or NULL if no host is connected.
+ */
+struct bt_conn *gstpt_BLE_GetHostConn(void)
+{
+   struct bt_conn *stpt_host = NULL;
+   k_spinlock_key_t t_key;
+
+   t_key = k_spin_lock(&sst_hostLock);
+   // Check if a host is connected
+   if (sstpt_hostConn != NULL)
+   {
+      stpt_host = bt_conn_ref(sstpt_hostConn);
+   }
+   k_spin_unlock(&sst_hostLock, t_key);
+
+   return stpt_host;
+}
+
+/**
+ * @public        gv_BLE_RefreshAdv
+ * @brief         Re-evaluate advertising after a provisioning or pairing
+ *                change: undirected advertising restarts with data for the new
+ *                provisioning state, or stays off (host connected, or _PAIR
+ *                uses the advertiser). Any thread.
+ * @return        None.
+ */
+void gv_BLE_RefreshAdv(void)
+{
+   // Check if the stack runs and the advertiser is not _PAIR's
+   if (!sb_btReady || gb_Pair_IsAdvertising())
+   {
+      return;
+   }
+
+   (void)bt_le_adv_stop();
+   sv_StartAdvIfAllowed();
 }
 
 /**

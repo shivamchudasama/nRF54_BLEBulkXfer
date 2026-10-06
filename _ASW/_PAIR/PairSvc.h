@@ -1,18 +1,17 @@
 /**
- * @file          BulkRouter.h
- * @brief         Header file containing the appType router of the BulkXfer Server.
- *
- *                The BulkXfer Server takes a single set of receive callbacks. The
- *                router owns that set and forwards every callback to the module
- *                that registered the appType range it belongs to, so several
- *                modules (hex upload, provisioning) share one Server.
- * @date          01/10/2026
+ * @file          PairSvc.h
+ * @brief         Header file containing the Pairing GATT service: the host's
+ *                control point (CONTROL), the pairing status (STATUS, read and
+ *                notify) and the characteristic the central writes over the
+ *                secured peer link (SECURED). Wire contract:
+ *                _DOC/Pairing/PROTOCOL.md §2.
+ * @date          06/10/2026
  * @author        Shivam Chudasama [SC]
  * @copyright     Bajaj Auto Technology Limited (BATL)
  */
 
-#ifndef _BULK_ROUTER_H
-#define _BULK_ROUTER_H
+#ifndef _PAIR_SVC_H
+#define _PAIR_SVC_H
 
 /******************************************************************************/
 /*                                                                            */
@@ -20,7 +19,8 @@
 /*                                                                            */
 /******************************************************************************/
 #include <stdint.h>
-#include "BulkXfer.h"
+#include <zephyr/bluetooth/uuid.h>
+#include "BaseUUIDs.h"
 
 /******************************************************************************/
 /*                                                                            */
@@ -28,10 +28,63 @@
 /*                                                                            */
 /******************************************************************************/
 /**
- * @def           BULK_ROUTER_MAX_ROUTES
- * @brief         Maximum number of registered appType ranges.
+ * @def           PART_UUID_DOMAIN_PAIR
+ * @brief         UUID domain of the pairing service (same as BulkXfer's).
  */
-#define BULK_ROUTER_MAX_ROUTES               (4U)
+#define PART_UUID_DOMAIN_PAIR                (0xB1)
+
+/**
+ * @def           PART_UUID_SERVICE_PAIR
+ * @brief         UUID service ID of the pairing service.
+ */
+#define PART_UUID_SERVICE_PAIR               (0xC1)
+
+/**
+ * @def           PAIR_UUID_VAL
+ * @brief         128-bit value of a pairing service UUID with characteristic
+ *                ID u16_char (0 for the service itself).
+ */
+#define PAIR_UUID_VAL(u16_char)              BT_UUID_128_ENCODE( \
+                                                UUID_FIRST_PART_32BIT( \
+                                                   PART_UUID_DOMAIN_PAIR, \
+                                                   PART_UUID_SERVICE_PAIR, \
+                                                   (u16_char)), \
+                                                BASE_UUID_SECOND_PART_16BIT, \
+                                                BASE_UUID_THIRD_PART_16BIT, \
+                                                BASE_UUID_FOURTH_PART_16BIT, \
+                                                BASE_UUID_FIFTH_PART_48BIT)
+
+/**
+ * @def           BT_UUID_PAIR_SVC_VAL
+ * @brief         Pairing service, B1C10000-16A1-4812-AF35-F3F29A92F6CA.
+ *                Advertised by a provisioned device.
+ */
+#define BT_UUID_PAIR_SVC_VAL                 PAIR_UUID_VAL(0x0000)
+
+/**
+ * @def           BT_UUID_PAIR_SVC
+ * @brief         Pairing service UUID (const struct bt_uuid *).
+ */
+#define BT_UUID_PAIR_SVC                     BT_UUID_DECLARE_128(BT_UUID_PAIR_SVC_VAL)
+
+/**
+ * @def           BT_UUID_PAIR_CONTROL
+ * @brief         CONTROL (Write): START / CANCEL / UNPAIR from the host.
+ */
+#define BT_UUID_PAIR_CONTROL                 BT_UUID_DECLARE_128(PAIR_UUID_VAL(0x0001))
+
+/**
+ * @def           BT_UUID_PAIR_STATUS
+ * @brief         STATUS (Read, Notify): PAIR_STATUS_LEN bytes.
+ */
+#define BT_UUID_PAIR_STATUS                  BT_UUID_DECLARE_128(PAIR_UUID_VAL(0x0002))
+
+/**
+ * @def           BT_UUID_PAIR_SECURED
+ * @brief         SECURED (Write, LE Secure Connections encryption required):
+ *                written by the central over the paired link.
+ */
+#define BT_UUID_PAIR_SECURED                 BT_UUID_DECLARE_128(PAIR_UUID_VAL(0x0003))
 
 /******************************************************************************/
 /*                                                                            */
@@ -44,30 +97,6 @@
 /*                                 STRUCTURES                                 */
 /*                                                                            */
 /******************************************************************************/
-/**
- * @struct        BulkRoute_T
- * @brief         One module's appType range and its callbacks. Every callback
- *                is optional: a range without fpt_onRxStart or fpt_onRxData
- *                rejects transfers, one without fpt_onRxShort ignores short
- *                messages. fpt_onTxDone receives the result of the module's own
- *                Client transfers (by appType), fpt_onCliReady the result of a
- *                gi_BulkRouter_ClientAttach() the module asked for. The callbacks
- *                run on the BulkXfer engine thread with the BulkXfer lock held
- *                (see the BulkXfer API reference).
- */
-typedef struct
-{
-   uint8_t u8_firstAppType;                  /**< First appType of the range.            */
-   uint8_t u8_lastAppType;                   /**< Last appType (inclusive).              */
-   BlkRxStart_F fpt_onRxStart;               /**< Accept or reject a transfer.           */
-   BlkRxData_F fpt_onRxData;                 /**< In-order chunk.                        */
-   BlkRxDone_F fpt_onRxDone;                 /**< Transfer result.                       */
-   BlkRxShort_F fpt_onRxShort;               /**< Short message.                         */
-#if BLK_ENABLE_CLIENT
-   BlkTxDone_F fpt_onTxDone;                 /**< Own Client transfer finished.          */
-   BlkCliReady_F fpt_onCliReady;             /**< Client attach finished.                */
-#endif // BLK_ENABLE_CLIENT
-} BulkRoute_T;
 
 /******************************************************************************/
 /*                                                                            */
@@ -86,15 +115,12 @@ typedef struct
 /*                              EXTERN FUNCTIONS                              */
 /*                                                                            */
 /******************************************************************************/
-extern int gi_BulkRouter_Register(const BulkRoute_T *stpt_route);
-extern int gi_BulkRouter_Start(void);
-extern void gv_BulkRouter_SetFilter(uint8_t u8_first, uint8_t u8_last);
-extern void gv_BulkRouter_ClearFilter(void);
-#if BLK_ENABLE_CLIENT
-extern int gi_BulkRouter_ClientAttach(struct bt_conn *stpt_conn, uint8_t u8_ownerAppType);
-#endif // BLK_ENABLE_CLIENT
+struct bt_conn;
 
-#endif //!_BULK_ROUTER_H
+extern int gi_PairSvc_NotifyStatus(struct bt_conn *stpt_conn, const uint8_t *u8pt_status,
+   uint16_t u16_len);
+
+#endif //!_PAIR_SVC_H
 
 /**
  * Copyright(c) Bajaj Auto Technology Limited (BATL) as an unpublished work.

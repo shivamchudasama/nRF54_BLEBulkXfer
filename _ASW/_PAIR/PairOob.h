@@ -1,18 +1,17 @@
 /**
- * @file          BulkRouter.h
- * @brief         Header file containing the appType router of the BulkXfer Server.
- *
- *                The BulkXfer Server takes a single set of receive callbacks. The
- *                router owns that set and forwards every callback to the module
- *                that registered the appType range it belongs to, so several
- *                modules (hex upload, provisioning) share one Server.
- * @date          01/10/2026
+ * @file          PairOob.h
+ * @brief         Header file containing the signed OOB data of certificate-based
+ *                pairing: the LE Secure Connections OOB values (random r and
+ *                confirm c) of one device, signed with its device key so that
+ *                the peer can tie them to the certificate it has verified.
+ *                Wire contract: _DOC/Pairing/PROTOCOL.md §4.
+ * @date          06/10/2026
  * @author        Shivam Chudasama [SC]
  * @copyright     Bajaj Auto Technology Limited (BATL)
  */
 
-#ifndef _BULK_ROUTER_H
-#define _BULK_ROUTER_H
+#ifndef _PAIR_OOB_H
+#define _PAIR_OOB_H
 
 /******************************************************************************/
 /*                                                                            */
@@ -20,7 +19,7 @@
 /*                                                                            */
 /******************************************************************************/
 #include <stdint.h>
-#include "BulkXfer.h"
+#include <psa/crypto.h>
 
 /******************************************************************************/
 /*                                                                            */
@@ -28,10 +27,36 @@
 /*                                                                            */
 /******************************************************************************/
 /**
- * @def           BULK_ROUTER_MAX_ROUTES
- * @brief         Maximum number of registered appType ranges.
+ * @def           PAIR_OOB_VALUE_LEN
+ * @brief         Length of the OOB random value r and of the confirm value c.
  */
-#define BULK_ROUTER_MAX_ROUTES               (4U)
+#define PAIR_OOB_VALUE_LEN                   (16U)
+
+/**
+ * @def           PAIR_ADDR_LEN
+ * @brief         Length of an LE address on the wire: [u8 type][6 B address,
+ *                least significant byte first], as bt_addr_le_t in memory.
+ */
+#define PAIR_ADDR_LEN                        (7U)
+
+/**
+ * @def           PAIR_OOB_SIG_LEN
+ * @brief         Length of an ECDSA P-256 signature, raw r || s.
+ */
+#define PAIR_OOB_SIG_LEN                     (64U)
+
+/**
+ * @def           PAIR_OOB_FRAME_LEN
+ * @brief         Length of the OOB frame sent to the peer: [r][c][signature].
+ */
+#define PAIR_OOB_FRAME_LEN                   ((2U * PAIR_OOB_VALUE_LEN) + PAIR_OOB_SIG_LEN)
+
+/**
+ * @def           PAIR_OOB_SIGNED_LEN
+ * @brief         Length of the signed message:
+ *                r || c || sender address || receiver address.
+ */
+#define PAIR_OOB_SIGNED_LEN                  ((2U * PAIR_OOB_VALUE_LEN) + (2U * PAIR_ADDR_LEN))
 
 /******************************************************************************/
 /*                                                                            */
@@ -44,30 +69,6 @@
 /*                                 STRUCTURES                                 */
 /*                                                                            */
 /******************************************************************************/
-/**
- * @struct        BulkRoute_T
- * @brief         One module's appType range and its callbacks. Every callback
- *                is optional: a range without fpt_onRxStart or fpt_onRxData
- *                rejects transfers, one without fpt_onRxShort ignores short
- *                messages. fpt_onTxDone receives the result of the module's own
- *                Client transfers (by appType), fpt_onCliReady the result of a
- *                gi_BulkRouter_ClientAttach() the module asked for. The callbacks
- *                run on the BulkXfer engine thread with the BulkXfer lock held
- *                (see the BulkXfer API reference).
- */
-typedef struct
-{
-   uint8_t u8_firstAppType;                  /**< First appType of the range.            */
-   uint8_t u8_lastAppType;                   /**< Last appType (inclusive).              */
-   BlkRxStart_F fpt_onRxStart;               /**< Accept or reject a transfer.           */
-   BlkRxData_F fpt_onRxData;                 /**< In-order chunk.                        */
-   BlkRxDone_F fpt_onRxDone;                 /**< Transfer result.                       */
-   BlkRxShort_F fpt_onRxShort;               /**< Short message.                         */
-#if BLK_ENABLE_CLIENT
-   BlkTxDone_F fpt_onTxDone;                 /**< Own Client transfer finished.          */
-   BlkCliReady_F fpt_onCliReady;             /**< Client attach finished.                */
-#endif // BLK_ENABLE_CLIENT
-} BulkRoute_T;
 
 /******************************************************************************/
 /*                                                                            */
@@ -86,15 +87,13 @@ typedef struct
 /*                              EXTERN FUNCTIONS                              */
 /*                                                                            */
 /******************************************************************************/
-extern int gi_BulkRouter_Register(const BulkRoute_T *stpt_route);
-extern int gi_BulkRouter_Start(void);
-extern void gv_BulkRouter_SetFilter(uint8_t u8_first, uint8_t u8_last);
-extern void gv_BulkRouter_ClearFilter(void);
-#if BLK_ENABLE_CLIENT
-extern int gi_BulkRouter_ClientAttach(struct bt_conn *stpt_conn, uint8_t u8_ownerAppType);
-#endif // BLK_ENABLE_CLIENT
+extern psa_status_t gt_PairOob_Sign(psa_key_id_t t_key, const uint8_t *u8pt_rand,
+   const uint8_t *u8pt_confirm, const uint8_t *u8pt_sender, const uint8_t *u8pt_receiver,
+   uint8_t *u8pt_frame);
+extern psa_status_t gt_PairOob_Verify(psa_key_id_t t_peerKey, const uint8_t *u8pt_frame,
+   const uint8_t *u8pt_sender, const uint8_t *u8pt_receiver);
 
-#endif //!_BULK_ROUTER_H
+#endif //!_PAIR_OOB_H
 
 /**
  * Copyright(c) Bajaj Auto Technology Limited (BATL) as an unpublished work.

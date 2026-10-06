@@ -63,7 +63,7 @@ Short messages from the provisioner go to the device's DATA. Short messages from
 | `status` | Name | Meaning |
 |---|---|---|
 | `0x00` | OK | Done: CSR delivered; the certificate is verified and in force (for DEV_CERT: both certificates stored); the device is wiped and has a fresh key and CSR |
-| `0x01` | BAD_STATE | Not allowed now: device certificate before a CA, no key, already provisioned, request already running, DEPROVISION while the CSR or a certificate is in progress, wrong appType |
+| `0x01` | BAD_STATE | Not allowed now: device certificate before a CA, no key, already provisioned, request already running, DEPROVISION while the CSR or a certificate is in progress or a pairing runs, wrong appType |
 | `0x02` | TOO_LARGE | Certificate empty or above 1024 bytes |
 | `0x03` | PARSE | Not a parsable DER X.509 certificate |
 | `0x04` | NOT_CA | CA certificate is not CA:TRUE, not self-issued, or does not allow keyCertSign |
@@ -91,7 +91,7 @@ A provisioner MUST treat an unknown status as a failure.
 | CA_OK | DEV_CERT verified, storing failed | Remove whatever was stored; RESULT INTERNAL | CA_OK |
 | CA_OK | DEV_CERT rejected | RESULT with the reason | CA_OK |
 | PROVISIONED | CSR_REQ, CA_CERT, DEV_CERT | RESULT BAD_STATE (one-time provisioning) | PROVISIONED |
-| any | DEPROVISION or Button 0 held (default 5 s) | Forget the trust anchor; remove both certificates, the key and the CSR; generate a fresh key and CSR. Refused (BAD_STATE) while the CSR is being sent or a certificate is being received or verified | KEY_READY (NO_KEY if no key could be made) |
+| any | DEPROVISION or Button 0 held (default 5 s) | Forget the trust anchor; remove both certificates, the key and the CSR; generate a fresh key and CSR; delete every pairing bond ([../Pairing/PROTOCOL.md §4](../Pairing/PROTOCOL.md#4-states)). Refused (BAD_STATE) while the CSR is being sent, a certificate is being received or verified, or a pairing runs | KEY_READY (NO_KEY if no key could be made) |
 | CA_OK | Reset | The CA was in RAM only | KEY_READY |
 
 A disconnect changes no state: a provisioner can send the CA in one connection and the device certificate in the next. The button wipe sends no RESULT.

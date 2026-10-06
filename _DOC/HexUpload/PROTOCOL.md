@@ -9,8 +9,8 @@ For now the server does not program flash. It buffers each segment in RAM and lo
 | Item | Value |
 |---|---|
 | Device name (scan response) | `BLE Bulk Transfer` (`CONFIG_BT_DEVICE_NAME`) |
-| Advertised service (adv data, 128-bit list) | `B1C00000-16A1-4812-AF35-F3F29A92F6CA` |
-| Connections | One at a time |
+| Advertised service (adv data, 128-bit list) | `B1C00000-16A1-4812-AF35-F3F29A92F6CA` until the device is provisioned; then the Pairing service `B1C10000-…` ([../Pairing/PROTOCOL.md §2](../Pairing/PROTOCOL.md#2-gatt-the-pairing-service)). The BulkXfer service is in the GATT table either way |
+| Connections | One host at a time (a second is refused); while pairing, a peer device on a second link |
 | Security | None (open link) |
 
 ## 2. GATT table

@@ -48,6 +48,7 @@
 #include "CSR_Generator.h"
 #include "DeviceCert.h"
 #include "DeviceCert_Verify.h"
+#include "Pair.h"
 #include "AppLog.h"
 
 /******************************************************************************/
@@ -178,12 +179,6 @@ static void sv_ProvThread(void *vpt_p1, void *vpt_p2, void *vpt_p3);
 /*                              EXTERN VARIABLES                              */
 /*                                                                            */
 /******************************************************************************/
-/**
- * @var           gstpt_currentConn
- * @brief         Current connection, owned by ConnectionHandling.c. The BulkXfer
- *                Client attaches to it when the provisioner asks for the CSR.
- */
-extern struct bt_conn *gstpt_currentConn;
 
 /******************************************************************************/
 /*                                                                            */
@@ -243,6 +238,20 @@ K_THREAD_DEFINE(sst_provThread, PROV_STACK_SIZE, sv_ProvThread, NULL, NULL, NULL
 /*                              EXTERN FUNCTIONS                              */
 /*                                                                            */
 /******************************************************************************/
+/**
+ * @extern        gstpt_BLE_GetHostConn
+ * @brief         Host link (the provisioner's), owned by ConnectionHandling.c:
+ *                a new reference, or NULL. The BulkXfer Client attaches to it
+ *                when the provisioner asks for the CSR.
+ */
+extern struct bt_conn *gstpt_BLE_GetHostConn(void);
+
+/**
+ * @extern        gv_BLE_RefreshAdv
+ * @brief         Restart advertising with data for the new provisioning state
+ *                (ConnectionHandling.c).
+ */
+extern void gv_BLE_RefreshAdv(void);
 
 /******************************************************************************/
 /*                                                                            */
@@ -526,13 +535,15 @@ static void sv_SendCsr(void)
 
 /**
  * @private       sv_HandleCsrReq
- * @brief         Serve CSR_REQ: send the CSR at once if the Client is attached,
- *                otherwise attach it to the provisioner's BulkXfer service first
- *                (the transfer then starts on ePE_CLI_READY).
+ * @brief         Serve CSR_REQ: send the CSR at once if the Client is attached
+ *                to the host link, otherwise attach it to the provisioner's
+ *                BulkXfer service first (the transfer then starts on
+ *                ePE_CLI_READY).
  * @return        None.
  */
 static void sv_HandleCsrReq(void)
 {
+   struct bt_conn *stpt_host = NULL;
    int i_ret;
 
    // Check if there is a CSR to send (none without a key, none once provisioned)
@@ -545,17 +556,26 @@ static void sv_HandleCsrReq(void)
    {
       sv_SendResult(PROV_APP_TYPE_CSR_REQ, ePRS_BAD_STATE);
    }
-   // Check if the Client is already attached
-   else if (gb_BLKC_IsReady())
-   {
-      sv_SendCsr();
-   }
    else
    {
-      i_ret = gi_BLKC_Attach(gstpt_currentConn);
+      // The Client attaches to the provisioner's (host link's) service, moved
+      // off another link if needed
+      stpt_host = gstpt_BLE_GetHostConn();
+      i_ret = gi_BulkRouter_ClientAttach(stpt_host, PROV_APP_TYPE_CSR_REQ);
 
+      // Check if a host reference was taken
+      if (stpt_host != NULL)
+      {
+         bt_conn_unref(stpt_host);
+      }
+
+      // Check if the Client is attached to it already
+      if (i_ret == -EALREADY)
+      {
+         sv_SendCsr();
+      }
       // Check if the attach started (or is already running)
-      if ((i_ret == 0) || (i_ret == -EALREADY))
+      else if (i_ret == 0)
       {
          sb_csrTxPending = true;
          APP_LOG_INF("attaching to the provisioner's BulkXfer service");
@@ -643,6 +663,9 @@ static void sv_HandleCertReceived(uint8_t u8_appType, uint32_t u32_len)
          (void)gt_RemoveStoredCSR();
          atomic_set(&st_state, ePS_PROVISIONED);
          APP_LOG_INF("device provisioned");
+
+         // Provisioned: advertise the pairing service from now on
+         gv_BLE_RefreshAdv();
       }
    }
 
@@ -795,9 +818,11 @@ static bool sb_EraseAndRegenerate(void)
 /**
  * @private       sv_HandleWipe
  * @brief         Serve a wipe request (DEPROVISION or the DK button). Refused
- *                while the CSR is being sent or a certificate is being received
- *                or verified. Holds the staging buffer meanwhile, so no
- *                certificate transfer starts during the wipe.
+ *                while the CSR is being sent, a certificate is being received
+ *                or verified, or a pairing runs. Holds the staging buffer
+ *                meanwhile, so no certificate transfer starts during the wipe.
+ *                A wipe also deletes every pairing bond: they were made with
+ *                the identity it destroys.
  * @param[in]     u8_refAppType PROV_APP_TYPE_DEPROVISION to answer with RESULT,
  *                0 for no answer (button).
  * @return        None.
@@ -806,8 +831,14 @@ static void sv_HandleWipe(uint8_t u8_refAppType)
 {
    ProvStatus_E e_result = ePRS_OK;
 
+   // Check if a pairing runs: it uses the identity the wipe destroys
+   if (gb_Pair_IsRunning())
+   {
+      APP_LOG_WRN("wipe refused: pairing in progress");
+      e_result = ePRS_BAD_STATE;
+   }
    // Check if a CSR request or a certificate is in progress
-   if (sb_csrTxPending || !atomic_cas(&st_certBusy, 0, 1))
+   else if (sb_csrTxPending || !atomic_cas(&st_certBusy, 0, 1))
    {
       APP_LOG_WRN("wipe refused: provisioning in progress");
       e_result = ePRS_BAD_STATE;
@@ -820,7 +851,11 @@ static void sv_HandleWipe(uint8_t u8_refAppType)
          e_result = ePRS_INTERNAL;
       }
 
+      gv_Pair_ForgetBonds();
       atomic_set(&st_certBusy, 0);
+
+      // Unprovisioned: advertise for provisioning, not for pairing
+      gv_BLE_RefreshAdv();
    }
 
    // Check if the request came over BLE
@@ -1024,17 +1059,16 @@ static void sv_ProvThread(void *vpt_p1, void *vpt_p2, void *vpt_p3)
  * @brief         Restore the provisioning state from storage (stored certificates
  *                re-verified, or the device key and CSR generated or loaded), register
  *                the provisioning appType range with the BulkXfer router and
- *                initialise the BulkXfer Client. Call once from main(), before
- *                gi_BulkRouter_Start() and before advertising.
+ *                with its Client callbacks (the router shares the BulkXfer
+ *                Client). Call once from main(), before gi_BulkRouter_Start()
+ *                and before advertising.
  * @return        0 on success (also when no key could be made: the device then
  *                stays in ePS_NO_KEY and refuses provisioning until a wipe),
- *                otherwise the
- *                error from gi_BulkRouter_Register() or gi_BLKC_Init().
+ *                otherwise the error from gi_BulkRouter_Register().
  */
 int gi_Prov_Init(void)
 {
    BulkRoute_T st_route = { 0 };
-   BlkCliCfg_T st_cliCfg = { 0 };
    int i_ret;
 
    sv_RestoreAtBoot();
@@ -1045,6 +1079,8 @@ int gi_Prov_Init(void)
    st_route.fpt_onRxData = si_ProvRxData;
    st_route.fpt_onRxDone = sv_ProvRxDone;
    st_route.fpt_onRxShort = sv_ProvRxShort;
+   st_route.fpt_onTxDone = sv_ProvTxDone;
+   st_route.fpt_onCliReady = sv_ProvCliReady;
 
    i_ret = gi_BulkRouter_Register(&st_route);
 
@@ -1052,20 +1088,6 @@ int gi_Prov_Init(void)
    if (i_ret != 0)
    {
       APP_LOG_ERR("gi_BulkRouter_Register failed (%d)", i_ret);
-      return i_ret;
-   }
-
-   st_cliCfg.fpt_onReady = sv_ProvCliReady;
-   st_cliCfg.fpt_onTxDone = sv_ProvTxDone;
-   // ConnectionHandling.c already negotiates PHY, data length and MTU
-   st_cliCfg.b_autoTuneLink = false;
-
-   i_ret = gi_BLKC_Init(&st_cliCfg);
-
-   // Check if the BulkXfer Client is ready
-   if (i_ret != 0)
-   {
-      APP_LOG_ERR("gi_BLKC_Init failed (%d)", i_ret);
    }
 
    return i_ret;

@@ -1,8 +1,8 @@
 # Device Provisioning
 
-Each device gets an ECC P-256 identity, a device certificate, signed by a Certificate Authority (CA). Phase 2 (certificate-based authentication and pairing, see [`_DOC/CBAP`](../CBAP/)) will use these certificates to pair two devices: they exchange and verify each other's certificates, then sign the OOB data of LE Secure Connections pairing with their keys (AN1396 §4.2).
+Each device gets an ECC P-256 identity, a device certificate, signed by a Certificate Authority (CA). Phase 2 (certificate-based authentication and pairing, see [`_DOC/CBAP`](../CBAP/)) uses these certificates to pair two devices: they exchange and verify each other's certificates, then sign the OOB data of LE Secure Connections pairing with their keys (AN1396 §4.2). Phase 2 is [../Pairing/README.md](../Pairing/README.md).
 
-This phase covers provisioning only. The wire contract is [PROTOCOL.md](PROTOCOL.md).
+This document covers provisioning. The wire contract is [PROTOCOL.md](PROTOCOL.md).
 
 ## How it works
 
@@ -22,13 +22,13 @@ This is the Silicon Labs flow of AN1396 §3 (`create_authority_certificate.py` a
 |---|---|
 | [_CSR/CSR_Generator.c](../../_ASW/_CSR/CSR_Generator.c) | `gt_InitCryptoStorage()` (HUK, settings, PSA init, once); `gv_GenerateOrLoadCSR()`: persistent key `0x0001` (generate or reuse), CN = UUIDv5 of the hardware device ID, CSR saved in and restored from PSA ITS; `gt_RemoveStoredCSR()`, `gt_DestroyDeviceCredentials()` (key + CSR), `gt_ProbeDeviceKey()` |
 | [_CSR/DER.c](../../_ASW/_CSR/DER.c) | `gt_DER_EncodeCSR()`: minimal DER encoder for the CSR, signed with `psa_sign_message()` |
-| [_DEVICE_CERT/DeviceCert_Verify.c](../../_ASW/_DEVICE_CERT/DeviceCert_Verify.c) | `ge_VerifyCACertificate()`, `ge_VerifyOwnDeviceCertificate()` (provisioning, with the CSR subject check), `ge_VerifyStoredDeviceCertificate()` (boot, without it), `ge_VerifyRemoteDeviceCertificate()` (phase 2): mbedTLS X.509 + PSA |
+| [_DEVICE_CERT/DeviceCert_Verify.c](../../_ASW/_DEVICE_CERT/DeviceCert_Verify.c) | `ge_VerifyCACertificate()`, `ge_VerifyOwnDeviceCertificate()` (provisioning, with the CSR subject check), `ge_VerifyStoredDeviceCertificate()` (boot, without it), `ge_VerifyRemoteDeviceCertificate()` (pairing: a peer device's certificate): mbedTLS X.509 + PSA |
 | [_DEVICE_CERT/DeviceCert.c](../../_ASW/_DEVICE_CERT/DeviceCert.c) | Certificate buffers `gst_CACertData`, `gst_deviceCertData`; their ITS storage: `gt_StoreCACert()`, `gt_StoreDeviceCert()`, `gt_LoadStoredCerts()` (the pair, or nothing), `gt_RemoveStoredCerts()`, `gv_ClearCertData()` |
-| [_PROV/Prov.c](../../_ASW/_PROV/Prov.c) | The protocol: state machine, router callbacks, BulkXfer Client for the CSR, STATUS/RESULT, storage order, boot restore, the wipe, PEM logging. Owns no cryptography |
+| [_PROV/Prov.c](../../_ASW/_PROV/Prov.c) | The protocol: state machine, router callbacks, the CSR sent with the router's shared BulkXfer Client to the host link, STATUS/RESULT, storage order, boot restore, the wipe (refused while pairing runs; deletes the pairing bonds), PEM logging. Owns no cryptography |
 | [_PROV/ProvButton.c](../../_ASW/_PROV/ProvButton.c) | DK Button 0 held for `CONFIG_PROV_WIPE_HOLD_MS` → `gv_Prov_RequestWipe()` (NCS DK library) |
-| [_BLK_SVC/BulkRouter.c](../../_ASW/_BLK_SVC/BulkRouter.c) | Shares the one BulkXfer Server between hex upload (`0x10`) and provisioning (`0x20`–`0x2F`) by appType range |
+| [_BLK_SVC/BulkRouter.c](../../_ASW/_BLK_SVC/BulkRouter.c) | Shares the one BulkXfer Server between hex upload (`0x10`), provisioning (`0x20`–`0x2F`) and pairing (`0x30`–`0x3F`) by appType range, and the one BulkXfer Client between provisioning and pairing (`gi_BulkRouter_ClientAttach()`; TX results by appType) |
 
-`_PROV` callbacks run on the BulkXfer engine thread, which has a small stack and holds the BulkXfer lock. They only check, copy into a staging buffer, and post an event. Verification, storage, the wipe, the Client attach and send, replies and logging run on the provisioning thread (priority 10, 8 KiB stack: ITS writes keep an entry-sized buffer on the stack, and a wipe generates a key and builds a CSR). A certificate is copied from the staging buffer into `gst_CACertData`/`gst_deviceCertData` only once it is verified, so a rejected certificate never replaces a good one. The button handler only posts an event, so a wipe never races a transfer: it is refused while the CSR is being sent or a certificate is being received or verified, and holds the staging buffer while it runs.
+`_PROV` callbacks run on the BulkXfer engine thread, which has a small stack and holds the BulkXfer lock. They only check, copy into a staging buffer, and post an event. Verification, storage, the wipe, the Client attach and send, replies and logging run on the provisioning thread (priority 10, 8 KiB stack: ITS writes keep an entry-sized buffer on the stack, and a wipe generates a key and builds a CSR). A certificate is copied from the staging buffer into `gst_CACertData`/`gst_deviceCertData` only once it is verified, so a rejected certificate never replaces a good one. The button handler only posts an event, so a wipe never races a transfer: it is refused while the CSR is being sent, a certificate is being received or verified, or a pairing runs, and holds the staging buffer while it runs. A completed wipe also deletes every pairing bond (`gv_Pair_ForgetBonds()`), and becoming provisioned or wiped re-evaluates advertising (`gv_BLE_RefreshAdv()`): a provisioned device advertises the Pairing service.
 
 ### PC (`_TOOLS/BleHostGUI`)
 
@@ -43,7 +43,7 @@ This is the Silicon Labs flow of AN1396 §3 (`create_authority_certificate.py` a
 
 ## Design decisions
 
-- **The PC hosts a BulkXfer service to receive the CSR.** A BulkXfer sender is always the GATT client, and bleak is a GATT client only. So the device turns on its BulkXfer Client role and sends to a service the PC publishes over the same connection. The wire protocol is unchanged, and phase 2 (device to device) needs the device Client role anyway. The PC service uses WinRT directly: `bless` cannot be installed next to bleak ≥ 1 on Python 3.12 (conflicting `winrt` pins). On a WinRT failure, the fallback is a readable CSR characteristic, as in the reference `Sample Code`.
+- **The PC hosts a BulkXfer service to receive the CSR.** A BulkXfer sender is always the GATT client, and bleak is a GATT client only. So the device turns on its BulkXfer Client role and sends to a service the PC publishes over the same connection (the host link; `gstpt_BLE_GetHostConn()`). The wire protocol is unchanged, and pairing (device to device) uses the device Client role too: the router attaches the Client for whichever module asks, moving it off another link if needed. The PC service uses WinRT directly: `bless` cannot be installed next to bleak ≥ 1 on Python 3.12 (conflicting `winrt` pins). On a WinRT failure, the fallback is a readable CSR characteristic, as in the reference `Sample Code`.
 - **The key is a persistent PSA key** (`CSR_DEVICE_SIGNING_KEY_ID` = `0x0001`, ECDSA-SHA256, not exportable). It is stored in PSA ITS: Zephyr secure storage on settings/ZMS, AES-GCM encrypted with a key derived from the nRF54L15 hardware unique key (`CONFIG_SECURE_STORAGE_ITS_TRANSFORM_AEAD_KEY_PROVIDER_HUK_LIBRARY`).
 - **The CSR persists until the device is provisioned** (ITS UID `"CSR"‖2`), so STATUS and the CSR stay the same across resets. Once both certificates are stored, the CSR is deleted.
 - **Certificate storage.** Each certificate is one ITS entry holding its packed record `[u8 flag][u16 length][DER]`, written up to the DER length (at most 1027 bytes, under the 1100-byte entry limit): the CA under `"DEVCERT"‖3`, the device certificate under `"DEVCERT"‖1`. They are written only after the device certificate has verified against the CA, CA first, then the device certificate, then the CSR is deleted. If either write fails, both entries are removed and the device stays CA_OK. At boot only a complete, well-formed pair counts: none means not provisioned; one, or a malformed record, or an ITS integrity failure, means the pair is invalid and the device wipes. A plain read error wipes nothing (the device reports NO_KEY).
@@ -76,7 +76,7 @@ This is the Silicon Labs flow of AN1396 §3 (`create_authority_certificate.py` a
 
 ## Integration
 
-- `main()` calls, in order: `gi_DataStore_Init()` and `gi_Prov_Init()` (both register with the router; `gi_Prov_Init()` also restores and re-verifies stored certificates, or generates or loads the key and CSR), `gi_ProvButton_Init()`, then `gi_BulkRouter_Start()`, then `gv_BLEInitStartAdv()`.
+- `main()` calls, in order: `gi_DataStore_Init()` and `gi_Prov_Init()` (both register with the router; `gi_Prov_Init()` also restores and re-verifies stored certificates, or generates or loads the key and CSR), `gi_ProvButton_Init()`, `gi_Pair_Init()`, then `gi_BulkRouter_Start()` (Server and Client), then `gv_BLEInitStartAdv()`.
 - `_LIB/CMakeLists.txt` builds BulkXfer with both roles. `BLK_CLI_WRITE_INFLIGHT_MAX=3` keeps Server notifications plus Client writes below `CONFIG_BT_ATT_TX_COUNT=6`.
 - `_DI/prj.conf`, section "Device certificate":
   - PSA on CRACEN (ECDSA P-256, SHA-256, SHA-1);
@@ -105,7 +105,7 @@ The *PC service* pill in the Device card shows whether the PC BulkXfer service i
 ## Testing
 
 - **Host (C):**
-  - `prov`: every state, status and rejection, the storage order and its failures, every boot path (nothing stored, valid pair, corrupt/incomplete/unverifiable pair, unreadable storage), the wipe from BLE and from the button, with verification and storage stubbed;
+  - `prov`: every state, status and rejection, the storage order and its failures, every boot path (nothing stored, valid pair, corrupt/incomplete/unverifiable pair, unreadable storage), the wipe from BLE and from the button (refused while pairing, bonds deleted after), the CSR attach through the router to the host link, with verification and storage stubbed;
   - `prov_e2e`: the real BulkXfer engine in both roles, the router and `Prov.c` over the simulated link, with the peer as the provisioner (the CSR reaches the provisioner's service byte for byte; provisioned, refused, wiped, provisioned again);
   - `prov_button`: the wipe button (a hold of `CONFIG_PROV_WIPE_HOLD_MS` wipes once; an earlier release, other buttons and repeated short presses do not);
   - `devicecert_store`: `DeviceCert.c` against an in-memory ITS (record layout, UIDs, incomplete or malformed pairs, errors);
@@ -127,4 +127,4 @@ The *PC service* pill in the Device card shows whether the PC BulkXfer service i
 
 ## Later stages
 
-- **Phase 2 (pairing).** `ge_VerifyRemoteDeviceCertificate()` verifies a peer's certificate and imports its key for `psa_verify_message()` on the OOB data. Signing uses key `0x0001`.
+- **Phase 2 (pairing)** is implemented: [../Pairing/README.md](../Pairing/README.md). `ge_VerifyRemoteDeviceCertificate()` verifies a peer's certificate and imports its key for the OOB signature check; signing uses key `0x0001`.

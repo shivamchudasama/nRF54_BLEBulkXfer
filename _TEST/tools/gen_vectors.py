@@ -96,6 +96,45 @@ def emit_provisioning(p: dict, o: list) -> None:
         o.append(c_array(name, macro, bytes.fromhex(c[key])))
 
 
+def uuid_le(text: str) -> bytes:
+    """A UUID string as the 16 bytes Zephyr stores (BT_UUID_128_ENCODE: LSB first)."""
+    return bytes.fromhex(text.replace("-", ""))[::-1]
+
+
+def emit_pairing(p: dict, o: list) -> None:
+    """Device pairing: constants, CONTROL and STATUS frames, the signed OOB frame."""
+    o.append("/* ---- Device pairing (_DOC/Pairing/PROTOCOL.md) ---- */")
+    for group, prefix in (("app_types", "VEC_PAIR_APP_"), ("ops", "VEC_PAIR_OP_"),
+                          ("roles", "VEC_PAIR_ROLE_"), ("states", "VEC_PAIR_STATE_"),
+                          ("errors", "VEC_PAIR_ERR_"), ("addr_types", "VEC_PAIR_ADDR_")):
+        for name, val in p[group].items():
+            o.append(f"#define {prefix}{name} ({val}U)")
+    o.append(f"#define VEC_PAIR_APP_FIRST ({p['app_type_range'][0]}U)")
+    o.append(f"#define VEC_PAIR_APP_LAST ({p['app_type_range'][1]}U)")
+    for key in ("start_len", "status_len", "oob_frame_len", "oob_signed_len", "secured_value"):
+        o.append(f"#define VEC_PAIR_{key.upper()} ({p[key]}U)")
+    for name, text in p["uuids"].items():
+        o.append(f"static const uint8_t gu8ar_vecPairUuid{name.capitalize()}[16] = "
+                 f"{{ {c_bytes(uuid_le(text))} }};")
+    o.append("")
+
+    o.append("typedef struct\n{\n   const char *cpt_name;\n   uint8_t u8ar_wire[20];\n"
+             "   uint8_t u8_wireLen;\n} PairVector_T;\n")
+    for group, array in (("controls", "gstar_vecPairControls"), ("statuses", "gstar_vecPairStatuses")):
+        o.append(f"static const PairVector_T {array}[] =\n{{")
+        for c in p[group]:
+            wire = bytes.fromhex(c["hex"])
+            assert len(wire) <= 20, c["name"]
+            o.append(f"   {{ \"{c['name']}\", {{ {c_bytes(wire)} }}, {len(wire)}U }},")
+        o.append("};\n")
+
+    for key, name in (("private_key", "PrivKey"), ("public_key", "PubKey"), ("r", "R"), ("c", "C"),
+                      ("sender", "Sender"), ("receiver", "Receiver"), ("message", "Message"),
+                      ("signature_raw", "Sig"), ("frame", "Frame")):
+        o.append(c_array(f"gu8ar_vecPairOob{name}", f"VEC_PAIR_VEC_{name.upper()}_LEN",
+                         bytes.fromhex(p["oob"][key])))
+
+
 def main(json_path: str, root: str, out_path: str) -> None:
     with open(json_path) as f:
         v = json.load(f)
@@ -152,6 +191,7 @@ def main(json_path: str, root: str, out_path: str) -> None:
     o.append(f"static const uint8_t gu8ar_vecHexSeg[VEC_HEX_SEG_LEN] =\n{{\n   {c_bytes(data, '   ')}\n}};\n")
 
     emit_provisioning(v["provisioning"], o)
+    emit_pairing(v["pairing"], o)
     o.append("#endif /* WIRE_VECTORS_H */\n")
 
     os.makedirs(os.path.dirname(os.path.abspath(out_path)), exist_ok=True)

@@ -243,5 +243,182 @@
       "signature_raw": "5f77b6307c7cad263924355127858f3283dcc0e8bb4121b888a7478ad0a501e6cc752277ce6b480f7e450f21821cf699655aa8efe049e368c4d6e56c4544fce8",
       "der": "308201a03082014602010030819b310b300906035504060c02494e3114301206035504080c0b4d61686172617368747261310d300b06035504070c0450756e6531263024060355040a0c1d42616a616a204175746f20546563686e6f6c6f6779204c696d697465643110300e060355040b0c074953205465616d312d302b06035504030c2436663163306433612d356232652d356334642d386539662d3061316232633364346535663059301306072a8648ce3d020106082a8648ce3d03010703420004d0243b3e9f8ae071a8b221b0f369dc0e7a3c17d8200945453091209cc67104f1f2b44a0f11c188eb22502f12516129fb885b467022c64f0c8db0ede8fd3fdcf5a048304606092a864886f70d01090e3139303730090603551d1304023000300b0603551d0f040403020388301d0603551d0e04160414713477c6efa136614b633f16906432424827f0b3300a06082a8648ce3d040302034800304502205f77b6307c7cad263924355127858f3283dcc0e8bb4121b888a7478ad0a501e6022100cc752277ce6b480f7e450f21821cf699655aa8efe049e368c4d6e56c4544fce8"
     }
+  },
+  "pairing": {
+    "_comment": [
+      "Device pairing (_DOC/Pairing/PROTOCOL.md). 'controls' are CONTROL writes,",
+      "'statuses' STATUS values [state][error][detail][provState][role][own 7 B]",
+      "[peer 7 B]; an address on the wire is [type][6 B, LSB first]. 'oob' is an OOB",
+      "frame [r][c][signature] whose raw ECDSA-SHA256 signature (by 'private_key')",
+      "covers 'message' = r || c || sender || receiver. Regenerate the whole section",
+      "with _TEST/tools/gen_pair_vector.py (see _TEST/README.md)."
+    ],
+    "uuids": {
+      "service": "b1c10000-16a1-4812-af35-f3f29a92f6ca",
+      "control": "b1c10001-16a1-4812-af35-f3f29a92f6ca",
+      "status": "b1c10002-16a1-4812-af35-f3f29a92f6ca",
+      "secured": "b1c10003-16a1-4812-af35-f3f29a92f6ca"
+    },
+    "app_types": {
+      "PEER_CERT": 48,
+      "OOB": 49
+    },
+    "app_type_range": [
+      48,
+      63
+    ],
+    "ops": {
+      "START": 1,
+      "CANCEL": 2,
+      "UNPAIR": 3
+    },
+    "roles": {
+      "NONE": 0,
+      "CENTRAL": 1,
+      "PERIPHERAL": 2
+    },
+    "states": {
+      "IDLE": 0,
+      "ARMED": 1,
+      "CONNECTED": 2,
+      "CERT_EXCHANGE": 3,
+      "CERT_VERIFIED": 4,
+      "OOB_EXCHANGE": 5,
+      "PAIRING": 6,
+      "PAIRED": 7,
+      "FAILED": 8
+    },
+    "errors": {
+      "NONE": 0,
+      "NOT_PROVISIONED": 1,
+      "BAD_ARG": 2,
+      "BUSY": 3,
+      "TIMEOUT": 4,
+      "CONNECT": 5,
+      "NO_PEER_SVC": 6,
+      "PEER_CERT": 7,
+      "OOB_SIG": 8,
+      "SMP": 9,
+      "TRANSFER": 10,
+      "SECURED": 11,
+      "LINK_LOST": 12,
+      "CANCELLED": 13,
+      "INTERNAL": 14
+    },
+    "addr_types": {
+      "PUBLIC": 0,
+      "RANDOM": 1
+    },
+    "start_len": 9,
+    "status_len": 19,
+    "oob_frame_len": 96,
+    "oob_signed_len": 46,
+    "secured_value": 1,
+    "controls": [
+      {
+        "name": "start_central",
+        "op": 1,
+        "role": 1,
+        "peer": "E1:02:03:04:05:06",
+        "peer_type": 1,
+        "hex": "0101010605040302e1"
+      },
+      {
+        "name": "start_peripheral",
+        "op": 1,
+        "role": 2,
+        "peer": "C4:5E:2A:11:9F:03",
+        "peer_type": 1,
+        "hex": "010201039f112a5ec4"
+      },
+      {
+        "name": "cancel",
+        "op": 2,
+        "hex": "02"
+      },
+      {
+        "name": "unpair",
+        "op": 3,
+        "hex": "03"
+      }
+    ],
+    "statuses": [
+      {
+        "name": "idle_provisioned",
+        "state": 0,
+        "error": 0,
+        "detail": 0,
+        "prov_state": 3,
+        "role": 0,
+        "own": "C4:5E:2A:11:9F:03",
+        "own_type": 1,
+        "peer": "",
+        "peer_type": 0,
+        "hex": "000000030001039f112a5ec400000000000000"
+      },
+      {
+        "name": "armed_central",
+        "state": 1,
+        "error": 0,
+        "detail": 0,
+        "prov_state": 3,
+        "role": 1,
+        "own": "C4:5E:2A:11:9F:03",
+        "own_type": 1,
+        "peer": "E1:02:03:04:05:06",
+        "peer_type": 1,
+        "hex": "010000030101039f112a5ec4010605040302e1"
+      },
+      {
+        "name": "paired_peripheral",
+        "state": 7,
+        "error": 0,
+        "detail": 0,
+        "prov_state": 3,
+        "role": 2,
+        "own": "E1:02:03:04:05:06",
+        "own_type": 1,
+        "peer": "C4:5E:2A:11:9F:03",
+        "peer_type": 1,
+        "hex": "0700000302010605040302e101039f112a5ec4"
+      },
+      {
+        "name": "failed_peer_cert_bad_sig",
+        "state": 8,
+        "error": 7,
+        "detail": 5,
+        "prov_state": 3,
+        "role": 1,
+        "own": "C4:5E:2A:11:9F:03",
+        "own_type": 1,
+        "peer": "E1:02:03:04:05:06",
+        "peer_type": 1,
+        "hex": "080705030101039f112a5ec4010605040302e1"
+      },
+      {
+        "name": "failed_not_provisioned",
+        "state": 8,
+        "error": 1,
+        "detail": 0,
+        "prov_state": 1,
+        "role": 1,
+        "own": "C4:5E:2A:11:9F:03",
+        "own_type": 1,
+        "peer": "E1:02:03:04:05:06",
+        "peer_type": 1,
+        "hex": "080100010101039f112a5ec4010605040302e1"
+      }
+    ],
+    "oob": {
+      "private_key": "4f0b3de10deb8dd090e7e2eeb8aa0f8ff45381ecda805e82fc0bab6464158dec",
+      "public_key": "04c43cabbf814e6dadcdea93604c11d3ec7a9b0e5bcba84ce967be4ee160c88fbab068feeda5ffca1531c55ab8a2118fe581bdb539ae82b93a280e7ac5be2918af",
+      "r": "aea38443af6fc5ff07ec9ab023ec6fd9",
+      "c": "bd7e7236272610bfc2bf156d7073b7a1",
+      "sender": "01039f112a5ec4",
+      "receiver": "010605040302e1",
+      "message": "aea38443af6fc5ff07ec9ab023ec6fd9bd7e7236272610bfc2bf156d7073b7a101039f112a5ec4010605040302e1",
+      "signature_raw": "ee0507110f231f41c6339775f70b7977ab615c7eee5afb88a18bb2ea5ce02077148670490a809f6f8187a0a0fe51fb48e3dfc463667d9b2b2cee59466a3e127d",
+      "frame": "aea38443af6fc5ff07ec9ab023ec6fd9bd7e7236272610bfc2bf156d7073b7a1ee0507110f231f41c6339775f70b7977ab615c7eee5afb88a18bb2ea5ce02077148670490a809f6f8187a0a0fe51fb48e3dfc463667d9b2b2cee59466a3e127d"
+    }
   }
 }

@@ -27,6 +27,28 @@ config PROV_WIPE_HOLD_MS
 	  key and CSR, as the DEPROVISION message does. Releasing the button
 	  earlier does nothing.
 
+menu "Device pairing"
+
+config PAIR_TIMEOUT_MS
+	int "Time limit of a pairing run (ms)"
+	default 60000
+	range 10000 600000
+	help
+	  A pairing run (from the host's START to PAIRED) that takes longer
+	  fails with error TIMEOUT: the peer link is dropped and the host sees
+	  FAILED in the pairing status.
+
+config PAIR_CONNECT_TIMEOUT_MS
+	int "Time limit to reach the peer device (ms)"
+	default 30000
+	range 5000 600000
+	help
+	  The peripheral advertises directed to the central, and the central
+	  scans for the peripheral, for at most this long before the run fails
+	  with error TIMEOUT.
+
+endmenu
+
 menu "Device certificate subject (CSR)"
 
 config CSR_SUBJ_C
