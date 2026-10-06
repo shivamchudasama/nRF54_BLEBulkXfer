@@ -14,7 +14,8 @@ A CA lives in a folder:
 
 The profile matches what the device verifies (_ASW/_DEVICE_CERT/DeviceCert_Verify.c):
 X.509 v3, P-256, ecdsa-with-SHA256; the CA is self-signed with CA:TRUE and
-keyCertSign; a device certificate is CA:FALSE and allows keyAgreement, and
+keyCertSign; a device certificate is CA:FALSE and allows digitalSignature
+(pairing signs OOB data with the device key) and keyAgreement, and
 carries the CSR's subject and public key unchanged.
 """
 
@@ -200,8 +201,9 @@ class CertificateAuthority:
         if bc is not None and bc.value.ca:
             raise CsrRejected("CSR asks for a CA certificate")
         ku = exts.get(x509.KeyUsage.oid)
-        if ku is None or not ku.value.key_agreement:
-            raise CsrRejected("KeyUsage keyAgreement is required (pairing uses the key)")
+        if ku is None or not ku.value.key_agreement or not ku.value.digital_signature:
+            raise CsrRejected("KeyUsage digitalSignature and keyAgreement are required "
+                              "(pairing signs with the key); wipe the device for a new CSR")
         return csr
 
     def sign_csr(self, csr_der: bytes, validity_days: int = 365) -> IssuedCert:

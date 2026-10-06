@@ -908,9 +908,10 @@ static psa_status_t st_ConstructAndSign(DERVersion_E e_version, const X520DN_T *
       }
    };
 
-   // 4.2) Add key agreement key usage
+   // 4.2) Add key usage: digitalSignature (bit 0, signs the pairing OOB data)
+   // and keyAgreement (bit 4); BIT STRING 0x88 with 3 unused bits
 
-   uint8_t u8ar_keyAgreementBitString[4] = { 0x03, 0x02, 0x03, 0x08 };
+   uint8_t u8ar_keyUsageBitString[4] = { 0x03, 0x02, 0x03, 0x88 };
 
    DERValue_T star_extKeyUsageConsts[2] =
    {
@@ -927,8 +928,8 @@ static psa_status_t st_ConstructAndSign(DERVersion_E e_version, const X520DN_T *
          {
             .st_octetString =
             {
-               .t_len = sizeof(u8ar_keyAgreementBitString),
-               .u8pt_data = u8ar_keyAgreementBitString,
+               .t_len = sizeof(u8ar_keyUsageBitString),
+               .u8pt_data = u8ar_keyUsageBitString,
             }
          }
       }

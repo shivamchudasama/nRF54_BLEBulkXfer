@@ -50,7 +50,7 @@ This is the Silicon Labs flow of AN1396 §3 (`create_authority_certificate.py` a
 - **Re-verification at boot.** The stored CA is verified again, which also restores the mbedTLS trust anchor that phase 2 needs, and the device certificate is verified against it and against the device key with `ge_VerifyStoredDeviceCertificate()`. That skips the CSR subject check, because the CSR is gone; the subject was checked before storing, and ITS entries are authenticated.
 - **One-time provisioning, and the wipe.** A provisioned device refuses CSR_REQ, CA_CERT and DEV_CERT, so its identity cannot be replaced over the air. The wipe (`sb_EraseAndRegenerate()`) is the only way back: it forgets the trust anchor, removes both certificates, destroys the key and the CSR, then runs `gv_GenerateOrLoadCSR()`, which finds no key and makes a new one. The same wipe recovers a device whose stored pair fails at boot, or that is in NO_KEY. Two triggers share it: DEPROVISION (`0x27`, answered with RESULT) for the PC, and DK Button 0 held 5 s for someone at the bench. A new key means certificates issued before no longer match the device.
 - **Verification follows the BG22/BG24 reference.** `DeviceCert_Verify.c` keeps that reference's mbedTLS sequence (`mbedtls_x509_crt_parse` → `mbedtls_x509_crt_verify` → `mbedtls_x509_crt_free`, and `psa_import_key` of the peer key from `pk_raw`). The trust anchor is the CA received over BLE, so the CA itself is checked first. mbedTLS accepts a self-signed certificate that is in the trusted list without checking its signature, so `se_VerifySelfSignature()` checks it explicitly.
-- **The certificate profile is Silicon Labs'.** CA:FALSE and keyAgreement on device certificates (`sign_csr()` enforces keyAgreement), P-256, ecdsa-with-SHA256.
+- **The certificate profile is Silicon Labs', plus digitalSignature.** CA:FALSE and KeyUsage keyAgreement on device certificates, P-256, ecdsa-with-SHA256. KeyUsage also carries digitalSignature, because pairing signs its OOB data with the device key; `sign_csr()` and the device both require the two bits. Devices that made their CSR before this (keyAgreement only) are refused by the CA and by their peers: wipe them (Button 0 or DEPROVISION) and provision again.
 
 ## Provenance of the device code
 
@@ -123,7 +123,6 @@ The *PC service* pill in the Device card shows whether the PC BulkXfer service i
 - **No atomic pair write.** ITS has no transaction. The write order and the boot checks make every interrupted write either complete or wiped, never half-trusted.
 - **No validity check on the device.** It has no wall clock, so `MBEDTLS_HAVE_TIME_DATE` is off and expiry is not checked.
 - **The CA key is an unencrypted PEM file on the PC.** Silicon Labs notes the same for its scripts. Production should use an HSM.
-- **The CSR's KeyUsage is keyAgreement only.** Phase 2 signs OOB data with the device key. If its peers check KeyUsage for signatures, add digitalSignature in `DER.c` before devices are provisioned in quantity.
 - **The PC service needs Windows 10/11** and an adapter that supports the peripheral role (checked at start). The device must be able to discover it over the connection, which only a hardware run proves (spike (a)).
 
 ## Later stages

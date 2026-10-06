@@ -62,13 +62,15 @@ def device_csr(vectors):
     return bytes.fromhex(vectors["provisioning"]["csr"]["der"])
 
 
-def make_csr(key=None, cn="dev", ku=True, key_agreement=True, ca_flag=False, alg=hashes.SHA256()):
+def make_csr(key=None, cn="dev", ku=True, key_agreement=True, digital_signature=True, ca_flag=False,
+             alg=hashes.SHA256()):
     key = key or ec.generate_private_key(ec.SECP256R1())
     b = x509.CertificateSigningRequestBuilder().subject_name(
         x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, cn)] if cn else []))
     b = b.add_extension(x509.BasicConstraints(ca=ca_flag, path_length=None), critical=False)
     if ku:
-        b = b.add_extension(x509.KeyUsage(False, False, False, False, key_agreement, False, False, False, False),
+        b = b.add_extension(x509.KeyUsage(digital_signature, False, False, False, key_agreement, False, False,
+                                          False, False),
                             critical=False)
     return b.sign(key, alg).public_bytes(serialization.Encoding.DER)
 
@@ -132,7 +134,8 @@ def test_signs_the_real_device_csr(ca, device_csr, vectors):
     assert len(issued.der) <= 1024
     bc = cert.extensions.get_extension_for_class(x509.BasicConstraints)
     assert bc.critical and not bc.value.ca
-    assert cert.extensions.get_extension_for_class(x509.KeyUsage).value.key_agreement
+    ku = cert.extensions.get_extension_for_class(x509.KeyUsage).value
+    assert ku.key_agreement and ku.digital_signature, "pairing signs OOB data with the device key"
     ski = cert.extensions.get_extension_for_class(x509.SubjectKeyIdentifier).value.digest
     assert ski.hex() == v["ski_sha1"], "the device's SKI is copied, not recomputed"
     aki = cert.extensions.get_extension_for_class(x509.AuthorityKeyIdentifier).value.key_identifier
@@ -202,6 +205,7 @@ def tamper(der, at):
     (lambda d: make_csr(ca_flag=True), "CA certificate"),
     (lambda d: make_csr(ku=False), "keyAgreement"),
     (lambda d: make_csr(key_agreement=False), "keyAgreement"),
+    (lambda d: make_csr(digital_signature=False), "digitalSignature"),
     (lambda d: make_csr(cn=None), "common name"),
 ])
 def test_csr_rejections(ca, device_csr, csr, why):
