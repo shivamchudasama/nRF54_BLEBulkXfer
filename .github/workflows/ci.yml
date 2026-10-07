@@ -75,7 +75,8 @@ jobs:
           mkdir -p report
           xvfb-run -a pytest _TEST/python -q -p no:cacheprovider \
             --junitxml=report/junit/python.xml -o junit_suite_name=python_tools \
-            --cov=_TOOLS/BleHostGUI --cov-report=html:report/coverage/python \
+            --cov=_TOOLS/BleHostGUI --cov=_TOOLS/MemReport \
+            --cov-report=html:report/coverage/python \
             --cov-report=term | tee report/coverage-python.txt
       - uses: actions/upload-artifact@v7
         if: always()
@@ -121,6 +122,9 @@ jobs:
             echo "## Firmware ($BOARD, NCS $NCS_VERSION)"
             echo '```'
             grep -A6 'Memory region' build.log | tail -n 7
+            echo '```'
+            echo '```'
+            cat build_ci/app/zephyr/mem_report.txt     # per module, _TOOLS/MemReport
             echo '```'
           } | tee firmware-size.md >> "$GITHUB_STEP_SUMMARY"
       - uses: actions/upload-artifact@v7

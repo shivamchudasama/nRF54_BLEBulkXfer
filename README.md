@@ -10,6 +10,7 @@ Zephyr / nRF Connect SDK firmware for a BLE device on the **nRF54L15 DK**. It re
   - **Device pairing** (`0x30`–`0x3F`, between two devices): phase 2 (AN1396 §4.2). The PC tells two provisioned devices their roles and each other's address. The devices connect to each other and exchange and verify their device certificates against their CA. Each then signs fresh LE Secure Connections OOB data with its device key. Each verifies the other's signature, and they pair with the OOB method at security level 4, bonded. The central proves the link by writing a characteristic that only an encrypted, authenticated link may write, and the peripheral lights LED0. The PC follows both devices step by step. From then on the pair reconnects by itself, after a reset or a lost link, and encrypts with the stored keys; while that reconnected link is up, both devices blink LED0. A device keeps one link to the PC and one to its peer.
 - **BulkXfer library (`_LIB/BulkXfer`)**: the transfer protocol itself. The firmware runs both roles: the Server receives uploads, certificates and a peer's pairing data, and the Client sends the CSR to the PC and its own pairing data to the peer. The roles move between live links (`gi_BLKS_Rebind()`, `gi_BLKC_Detach()`).
 - **PC GUI** ([`_TOOLS/BleHostGUI`](_TOOLS/BleHostGUI/README.md)): a navigation rail with Device (scan, connect, read CAPS), Hex upload, Provisioning (the PC is the CA), Pairing (choose two devices and their roles, follow both live), Log and a switchable BLE traffic monitor. It hosts the PC's own BulkXfer service so that the device can send its CSR. The command-line client `bulkxfer_client.py` does the same uploads, provisioning and pairing without the GUI.
+- **Memory report** ([`_TOOLS/MemReport`](_TOOLS/MemReport/README.md)): every firmware build prints FLASH and RAM use per module of `_ASW` and `_LIB` below the linker's summary, read from the map file.
 
 ## BulkXfer in brief
 
@@ -57,6 +58,7 @@ The contract is in [_DOC/Pairing/PROTOCOL.md](_DOC/Pairing/PROTOCOL.md). Design,
 | [`_LIB/GATT_CB/`](_LIB/GATT_CB) | Generic GATT read/write callbacks driven by per-characteristic descriptors |
 | [`_LIB/BulkXfer/`](_LIB/BulkXfer) | Bulk-transfer library (Server and Client roles) |
 | [`_TOOLS/BleHostGUI/`](_TOOLS/BleHostGUI) | PC GUI (Tkinter + `bleak`, flat light/dark theme): Device, Hex upload, Provisioning, Pairing, Log and Traffic pages; the PC's GATT server and CA; the pairing orchestrator; the command-line client |
+| [`_TOOLS/MemReport/`](_TOOLS/MemReport) | Build-time script that splits the linker's FLASH/RAM figures by module of `_ASW` and `_LIB` |
 | [`_TEST/`](_TEST) | Host tests of the libraries, the application modules and the PC tools, with a merged test report |
 | [`.github/workflows/`](.github/workflows) | CI: host tests, Python tests, firmware build and the test report on every push; manual hardware-in-the-loop placeholders (one DK; two DKs for pairing) |
 | [`_DOC/`](_DOC) | Coding guidelines, library and protocol documentation, the CBAP application notes and reference notes |
@@ -74,6 +76,8 @@ Build with the nRF Connect extension for VS Code (sysbuild), or from an NCS shel
 ```sh
 west build -b nrf54l15dk/nrf54l15/cpuapp --sysbuild -d build .
 ```
+
+Below the linker's FLASH/RAM summary, the build prints the same figures per module of `_ASW` and `_LIB` (with Zephyr, NCS and libc as one "Other" row) and writes them to `zephyr/mem_report.txt` in the image's build folder; see [MemReport](_TOOLS/MemReport/README.md).
 
 After changing the layout or configuration, do a pristine build (`-p always`). A chip erase also erases the device's key, so the device makes a new key and CSR and has to be provisioned again.
 
@@ -100,13 +104,13 @@ The board's serial terminal runs at **921600 baud with RTS/CTS flow control** (s
 
 ## Testing
 
-Host tests cover `_LIB/BulkXfer`, `_LIB/GATT_CB`, every application module that is not only calls into the BT stack (data store, router, CSR, certificate storage, provisioning, wipe button, pairing, helpers), and the PC client, CA, pairing orchestrator, decoders and GUI pages in `_TOOLS`. Certificate verification runs on the real Mbed TLS, against certificates that the PC's CA issues on each build, including the cases the device must reject; the signed OOB data runs on the real TF-PSA-Crypto against a frame signed by Python. End-to-end tests run a hex upload, a full provisioning and a pairing exchange through the real BulkXfer engine over a simulated link. Expected wire bytes come from a real upload captured in `_LOG/` and are shared by the C and Python tests.
+Host tests cover `_LIB/BulkXfer`, `_LIB/GATT_CB`, every application module that is not only calls into the BT stack (data store, router, CSR, certificate storage, provisioning, wipe button, pairing, helpers), and the PC client, CA, pairing orchestrator, decoders, GUI pages and memory report in `_TOOLS`. Certificate verification runs on the real Mbed TLS, against certificates that the PC's CA issues on each build, including the cases the device must reject; the signed OOB data runs on the real TF-PSA-Crypto against a frame signed by Python. End-to-end tests run a hex upload, a full provisioning and a pairing exchange through the real BulkXfer engine over a simulated link. Expected wire bytes come from a real upload captured in `_LOG/` and are shared by the C and Python tests.
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File _TEST\run_tests.ps1   # add -Coverage for coverage
 ```
 
-This needs a host `gcc` and Python 3.8+. The report is written to `build_test/report/report.html`. On GitHub, [CI](.github/workflows/ci.yml) runs the same tests (plus ASan/UBSan, and the GUI tests under `xvfb-run`), builds the firmware, and publishes the results on each push and pull request. Manual `hil-tests` and `hil-pair-tests` jobs are placeholders for self-hosted runners with one DK and with two DKs. Details are in [_TEST/README.md](_TEST/README.md).
+This needs a host `gcc` and Python 3.8+. The report is written to `build_test/report/report.html`. On GitHub, [CI](.github/workflows/ci.yml) runs the same tests (plus ASan/UBSan, and the GUI tests under `xvfb-run`), builds the firmware (with the per-module memory table in the job summary), and publishes the results on each push and pull request. Manual `hil-tests` and `hil-pair-tests` jobs are placeholders for self-hosted runners with one DK and with two DKs. Details are in [_TEST/README.md](_TEST/README.md).
 
 ## Documentation
 
@@ -122,6 +126,7 @@ This needs a host `gcc` and Python 3.8+. The report is written to `build_test/re
 - [Device pairing design](_DOC/Pairing/README.md)
 - [CBAP application notes (AN1396, AN1268)](_DOC/CBAP/)
 - [BLE Host GUI](_TOOLS/BleHostGUI/README.md)
+- [Memory report per module](_TOOLS/MemReport/README.md)
 - [Tests and CI](_TEST/README.md)
 - [BATL coding guidelines](_DOC/BATL%20Coding%20Guidelines/)
 

@@ -25,3 +25,21 @@ project(nRF54_BLEBulkXfer)
 add_subdirectory(_ASW)
 add_subdirectory(_LIB)
 
+# Per-module memory report: after the final link, _TOOLS/MemReport splits the
+# FLASH/RAM usage in the map file by module of _ASW and _LIB, prints it below
+# the linker's summary and writes it to zephyr/mem_report.txt. It runs again
+# only when the image is relinked.
+set(MEM_REPORT_PY ${CMAKE_CURRENT_SOURCE_DIR}/_TOOLS/MemReport/mem_report.py)
+set(MEM_REPORT_TXT ${ZEPHYR_BINARY_DIR}/mem_report.txt)
+add_custom_command(
+   OUTPUT ${MEM_REPORT_TXT}
+   COMMAND ${PYTHON_EXECUTABLE} ${MEM_REPORT_PY}
+      --map ${ZEPHYR_BINARY_DIR}/${KERNEL_MAP_NAME}
+      --root ${CMAKE_CURRENT_SOURCE_DIR} --dirs _ASW _LIB
+      --out ${MEM_REPORT_TXT}
+   DEPENDS ${logical_target_for_zephyr_elf} ${MEM_REPORT_PY}
+   COMMENT "Splitting memory usage by module"
+   VERBATIM
+)
+add_custom_target(mem_report ALL DEPENDS ${MEM_REPORT_TXT})
+

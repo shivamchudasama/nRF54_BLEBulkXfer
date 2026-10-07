@@ -83,7 +83,8 @@ $pyArgs = @('-m', 'pytest', (Join-Path $PSScriptRoot 'python'), '-q', '-p', 'no:
    "--junitxml=$Report\junit\python.xml", '-o', 'junit_suite_name=python_tools')
 if ($Coverage) {
    $env:COVERAGE_FILE = Join-Path $Build '.coverage'      # keep the data file out of the repo root
-   $pyArgs += @("--cov=$Repo\_TOOLS\BleHostGUI", "--cov-report=html:$Report\coverage\python")
+   $pyArgs += @("--cov=$Repo\_TOOLS\BleHostGUI", "--cov=$Repo\_TOOLS\MemReport",
+      "--cov-report=html:$Report\coverage\python")
 }
 & $Py @pyArgs
 $pyResult = $LASTEXITCODE
