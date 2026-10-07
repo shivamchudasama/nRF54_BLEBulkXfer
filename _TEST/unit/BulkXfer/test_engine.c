@@ -166,6 +166,7 @@ static void test_Init(void)
    {
       BlkSrvCfg_T st_srv = { 0 };
 
+      TEST_ASSERT_EQUAL_INT(-EPERM, gi_BLKS_Rebind(&sst_conn));
       TEST_ASSERT_EQUAL_INT(-EINVAL, gi_BLKS_Init(&st_srv));
       st_srv.stpt_ctrlAttr = &sst_ctrlAttr;
       st_srv.fpt_onRxStart = si_DevRxStart;
@@ -181,6 +182,7 @@ static void test_Init(void)
       BlkCliCfg_T st_cli = { 0 };
 
       TEST_ASSERT_EQUAL_INT(-EPERM, gi_BLKC_Attach(&sst_conn));
+      TEST_ASSERT_EQUAL_INT(-EPERM, gi_BLKC_Detach());
       st_cli.fpt_onReady = sv_DevReady;
       st_cli.fpt_onTxDone = sv_DevTxDone;
       st_cli.fpt_onRxShort = sv_DevCliShort;
@@ -387,6 +389,61 @@ static void test_ClientAttach(void)
    TEST_ASSERT_EQUAL_INT(STATUS_NONE, si_devTxDone);
    TEST_ASSERT_EQUAL_UINT32(0U, sst_BLKC_slab.used);
 }
+/** Client detach: refused while attaching or sending; releases the link and
+    its subscription so another link can be attached, owing no callback. */
+static void test_ClientDetach(void)
+{
+   struct bt_gatt_subscribe_params *stpt_first = NULL;
+
+   sv_ConnectEx(247U, false);
+   TEST_ASSERT_EQUAL_INT(-ENOTCONN, gi_BLKC_Detach());
+
+   // Attach in progress
+   TEST_ASSERT_EQUAL_INT(0, gi_BLKC_Attach(&sst_conn));
+   TEST_ASSERT_EQUAL_INT(-EBUSY, gi_BLKC_Detach());
+   TEST_ASSERT_TRUE(sb_RunUntil(sb_DevReady, 1000));
+   TEST_ASSERT_EQUAL_INT(0, si_devReady);
+   TEST_ASSERT_EQUAL_INT(-EBUSY, gi_BLKC_Attach(&sst_conn2));
+
+   // Transfer in progress
+   TEST_ASSERT_EQUAL_INT(0, gi_BLKC_SendBuffer(0x42U, su8ar_pattern, 100000U));
+   sv_Settle(5);
+   TEST_ASSERT_TRUE(gb_BLKC_IsTxBusy());
+   TEST_ASSERT_EQUAL_INT(-EBUSY, gi_BLKC_Detach());
+   TEST_ASSERT_TRUE(sb_RunUntil(sb_DevTxDone, 60000));
+   TEST_ASSERT_EQUAL_INT(eBS_OK, si_devTxDone);
+
+   // Detach: the subscription is removed, the Client is unbound
+   stpt_first = sstpt_devSub;
+   TEST_ASSERT_NOT_NULL(stpt_first);
+   si_unsubscribes = 0;
+   si_devReadyCalls = 0;
+   si_devTxDone = STATUS_NONE;
+   TEST_ASSERT_EQUAL_INT(0, gi_BLKC_Detach());
+   TEST_ASSERT_EQUAL_INT(1, si_unsubscribes);
+   TEST_ASSERT_NULL(sstpt_devSub);
+   TEST_ASSERT_FALSE(gb_BLKC_IsReady());
+   TEST_ASSERT_EQUAL_INT(-ENOTCONN, gi_BLKC_SendBuffer(0x42U, su8ar_pattern, 10U));
+   TEST_ASSERT_EQUAL_INT(-ENOTCONN, gi_BLKC_Detach());
+   sv_Settle(10);
+   TEST_ASSERT_EQUAL_INT(0, si_devReadyCalls);
+   TEST_ASSERT_EQUAL_INT(STATUS_NONE, si_devTxDone);
+
+   // Another link can be bound now (here its discovery cannot start, which
+   // undoes the binding again)
+   TEST_ASSERT_EQUAL_INT(-ENOTCONN, gi_BLKC_Attach(&sst_conn2));
+
+   // Attaching again uses the other subscription set, and transfers work
+   TEST_ASSERT_EQUAL_INT(0, gi_BLKC_Attach(&sst_conn));
+   TEST_ASSERT_TRUE(sb_RunUntil(sb_DevReady, 1000));
+   TEST_ASSERT_EQUAL_INT(0, si_devReady);
+   TEST_ASSERT_NOT_NULL(sstpt_devSub);
+   TEST_ASSERT_TRUE(sstpt_devSub != stpt_first);
+   TEST_ASSERT_EQUAL_INT(0, gi_BLKC_SendBuffer(0x42U, su8ar_pattern, 3000U));
+   TEST_ASSERT_TRUE(sb_RunUntil(sb_DevTxDone, 60000));
+   TEST_ASSERT_EQUAL_INT(eBS_OK, si_devTxDone);
+   TEST_ASSERT_EQUAL_MEMORY(su8ar_pattern, sst_peer.u8ar_rx, 3000U);
+}
 #endif // BLK_ENABLE_CLIENT
 
 /******************************************************************************/
@@ -536,6 +593,58 @@ static void test_ServerMalformedData(void)
    TEST_ASSERT_EQUAL_INT(BT_GATT_ERR(BT_ATT_ERR_WRITE_NOT_PERMITTED),
       gt_BLKS_DataWriteHook(&sst_conn, &sst_dataAttr, u8ar_f, 10U, 0U, BT_GATT_WRITE_FLAG_PREPARE));
 }
+
+/** Server rebind: moves to another live link or releases it; refused while a
+    transfer runs; the old link's writes are dropped afterwards. */
+static void test_ServerRebind(void)
+{
+   uint8_t u8ar_f[BLK_CTRL_FRAME_MAX_LEN];
+
+   sv_Connect(247U);
+
+   // Same connection: nothing to do
+   TEST_ASSERT_EQUAL_INT(0, gi_BLKS_Rebind(&sst_conn));
+   TEST_ASSERT_EQUAL_PTR(&sst_conn, sstpt_BLKS_conn);
+
+   // A transfer is never cut
+   sv_PeerStartSend(0x42U, su8ar_pattern, 100000U, 4U, false);
+   sv_Settle(20);
+   TEST_ASSERT_TRUE(gb_BLKS_IsRxBusy());
+   TEST_ASSERT_EQUAL_INT(-EBUSY, gi_BLKS_Rebind(&sst_conn2));
+   TEST_ASSERT_EQUAL_INT(-EBUSY, gi_BLKS_Rebind(NULL));
+   TEST_ASSERT_TRUE(sb_RunUntil(sb_PeerTxDone, 60000));
+   TEST_ASSERT_EQUAL_INT(eBS_OK, sst_peer.i_txDone);
+   TEST_ASSERT_EQUAL_INT(eBS_OK, si_devRxDone);
+
+   // Moved to the other link: writes from the old one are dropped, and its
+   // disconnect is not the Server's any more
+   TEST_ASSERT_EQUAL_INT(0, gi_BLKS_Rebind(&sst_conn2));
+   TEST_ASSERT_EQUAL_PTR(&sst_conn2, sstpt_BLKS_conn);
+   si_devRxStartCalls = 0;
+   (void)gu16_BLK_EncodeStart(u8ar_f, sizeof(u8ar_f), 50U, 0x42U, 1000U, 240U, 16U, 0U);
+   sv_PeerWrite(u8ar_f, BLK_CTRL_FRAME_MAX_LEN);
+   sv_Settle(20);
+   TEST_ASSERT_EQUAL_INT(0, si_devRxStartCalls);
+   TEST_ASSERT_EQUAL_UINT32(0U, sst_BLKS_slab.used);
+   gv_BLKS_OnDisconnected(&sst_conn);
+   TEST_ASSERT_EQUAL_PTR(&sst_conn2, sstpt_BLKS_conn);
+
+   // Released: nothing bound
+   TEST_ASSERT_EQUAL_INT(0, gi_BLKS_Rebind(NULL));
+   TEST_ASSERT_NULL(sstpt_BLKS_conn);
+   TEST_ASSERT_EQUAL_INT(-ENOTCONN, gi_BLKS_SendShort(0x01U, NULL, 0U, K_NO_WAIT));
+   TEST_ASSERT_EQUAL_INT(0, gi_BLKS_Rebind(NULL));
+
+   // Bound back to the first link: transfers work again
+   TEST_ASSERT_EQUAL_INT(0, gi_BLKS_Rebind(&sst_conn));
+   si_devRxDone = STATUS_NONE;
+   sv_PeerStartSend(0x42U, su8ar_pattern, 3000U, 4U, false);
+   TEST_ASSERT_TRUE(sb_RunUntil(sb_PeerTxDone, 60000));
+   TEST_ASSERT_EQUAL_INT(eBS_OK, sst_peer.i_txDone);
+   TEST_ASSERT_EQUAL_INT(eBS_OK, si_devRxDone);
+   TEST_ASSERT_EQUAL_UINT32(3000U, su32_devRxLen);
+   TEST_ASSERT_EQUAL_UINT(BLK_SRV_NOTIFY_INFLIGHT_MAX, sst_BLKS_credits.count);
+}
 #endif // BLK_ENABLE_SERVER
 
 /******************************************************************************/
@@ -637,6 +746,7 @@ int main(int argc, char **argv)
    RUN_TEST(test_ClientSmallMtu);
    RUN_TEST(test_ClientAbortAndDisconnect);
    RUN_TEST(test_ClientAttach);
+   RUN_TEST(test_ClientDetach);
 #endif // BLK_ENABLE_CLIENT
 #if BLK_ENABLE_SERVER
    RUN_TEST(test_ServerSizes);
@@ -644,6 +754,7 @@ int main(int argc, char **argv)
    RUN_TEST(test_ServerCrcAndReject);
    RUN_TEST(test_ServerAbortAndStale);
    RUN_TEST(test_ServerMalformedData);
+   RUN_TEST(test_ServerRebind);
 #endif // BLK_ENABLE_SERVER
    RUN_TEST(test_ShortMessages);
 #if BLK_ENABLE_SERVER && BLK_ENABLE_CLIENT

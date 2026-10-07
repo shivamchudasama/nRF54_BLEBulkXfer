@@ -1,9 +1,11 @@
 /**
  * @file          test_router.c
  * @brief         Host unit tests for the BulkXfer appType router
- *                (_ASW/_BLK_SVC/BulkRouter.c): registration rules and dispatch
- *                of the Server callbacks by appType range. BulkRouter.c is
- *                included; the GATT service and the BulkXfer Server are stubbed.
+ *                (_ASW/_BLK_SVC/BulkRouter.c): registration rules, dispatch of
+ *                the Server callbacks by appType range, the appType filter, and
+ *                the shared Client (attach on behalf of a module, results back
+ *                to it). BulkRouter.c is included; the GATT service and both
+ *                BulkXfer roles are stubbed.
  *
  * @date          01/10/2026
  * @author        Shivam Chudasama [SC]
@@ -33,12 +35,49 @@ int gi_BLKS_Init(const BlkSrvCfg_T *stpt_cfg)
    return si_initRet;
 }
 
+/* BulkXfer Client: records the calls; results are scripted per call */
+static BlkCliCfg_T sst_cliCfg;
+static int si_cliInitRet;
+static bool sb_cliReady;
+static int sir_attachRet[2];
+static uint32_t su32_attachCalls;
+static struct bt_conn *sstpt_attachConn;
+static int si_detachRet;
+static uint32_t su32_detachCalls;
+static struct bt_conn sst_connA = { 1 };
+static struct bt_conn sst_connB = { 2 };
+
+int gi_BLKC_Init(const BlkCliCfg_T *stpt_cfg)
+{
+   sst_cliCfg = *stpt_cfg;
+   return si_cliInitRet;
+}
+
+bool gb_BLKC_IsReady(void) { return sb_cliReady; }
+
+int gi_BLKC_Attach(struct bt_conn *stpt_conn)
+{
+   int i_ret = sir_attachRet[MIN(su32_attachCalls, 1U)];
+
+   su32_attachCalls++;
+   sstpt_attachConn = stpt_conn;
+   return i_ret;
+}
+
+int gi_BLKC_Detach(void)
+{
+   su32_detachCalls++;
+   return si_detachRet;
+}
+
 /******************************************************************************/
 /*  Recording module callbacks (two modules: A and B)                         */
 /******************************************************************************/
 typedef struct
 {
-   uint32_t u32_start, u32_data, u32_done, u32_short;
+   uint32_t u32_start, u32_data, u32_done, u32_short, u32_txDone, u32_ready;
+   int i_readyStatus;
+   struct bt_conn *stpt_readyConn;
    uint8_t u8_lastType;
    uint32_t u32_lastLen;
    uint32_t u32_lastOffset;
@@ -58,7 +97,11 @@ static Rec_T sst_b;
    static void sv_##X##Done(uint8_t t, BlkStatus_E s, uint32_t l) \
    { R.u32_done++; R.u8_lastType = t; R.e_lastStatus = s; R.u32_lastLen = l; } \
    static void sv_##X##Short(uint8_t t, const uint8_t *d, uint8_t l) \
-   { (void)d; R.u32_short++; R.u8_lastType = t; R.u32_lastLen = l; }
+   { (void)d; R.u32_short++; R.u8_lastType = t; R.u32_lastLen = l; } \
+   static void sv_##X##TxDone(uint8_t t, BlkStatus_E s) \
+   { R.u32_txDone++; R.u8_lastType = t; R.e_lastStatus = s; } \
+   static void sv_##X##Ready(struct bt_conn *c, int i) \
+   { R.u32_ready++; R.stpt_readyConn = c; R.i_readyStatus = i; }
 
 REC_FUNCS(A, sst_a)
 REC_FUNCS(B, sst_b)
@@ -73,6 +116,8 @@ static BulkRoute_T st_Route(uint8_t u8_first, uint8_t u8_last, bool b_a)
    st_r.fpt_onRxData = b_a ? si_AData : si_BData;
    st_r.fpt_onRxDone = b_a ? sv_ADone : sv_BDone;
    st_r.fpt_onRxShort = b_a ? sv_AShort : sv_BShort;
+   st_r.fpt_onTxDone = b_a ? sv_ATxDone : sv_BTxDone;
+   st_r.fpt_onCliReady = b_a ? sv_AReady : sv_BReady;
    return st_r;
 }
 
@@ -80,9 +125,20 @@ void setUp(void)
 {
    su8_routeCnt = 0U;
    sb_isStarted = false;
+   gv_BulkRouter_ClearFilter();
    si_initRet = 0;
    su32_initCalls = 0U;
    (void)memset(&sst_cfg, 0, sizeof(sst_cfg));
+   (void)memset(&sst_cliCfg, 0, sizeof(sst_cliCfg));
+   si_cliInitRet = 0;
+   sb_cliReady = false;
+   sir_attachRet[0] = 0;
+   sir_attachRet[1] = 0;
+   su32_attachCalls = 0U;
+   sstpt_attachConn = NULL;
+   si_detachRet = 0;
+   su32_detachCalls = 0U;
+   (void)atomic_ptr_set(&st_cliConn, NULL);
    (void)memset(&sst_a, 0, sizeof(sst_a));
    (void)memset(&sst_b, 0, sizeof(sst_b));
    gv_SimLogClear();
@@ -295,6 +351,172 @@ static void test_ShortMessagesAreRoutedOrLogged(void)
    TEST_ASSERT_EQUAL_UINT32(1U, sst_b.u32_short);
 }
 
+/******************************************************************************/
+/*  Filter                                                                    */
+/******************************************************************************/
+static void test_FilterRejectsOtherTransfersAtStart(void)
+{
+   sv_StartTwoModules();
+   gv_BulkRouter_SetFilter(0x20U, 0x2FU);
+
+   // Outside: rejected before the owner is asked
+   TEST_ASSERT_EQUAL_INT(-ENOTSUP, sst_cfg.fpt_onRxStart(0x10U, 5U));
+   TEST_ASSERT_EQUAL_UINT32(0U, sst_a.u32_start);
+   TEST_ASSERT_NOT_NULL(gcpt_SimLogFind("rejected: type 0x10 filtered"));
+
+   // Inside, boundaries included: the owner decides as before
+   TEST_ASSERT_EQUAL_INT(0, sst_cfg.fpt_onRxStart(0x20U, 5U));
+   TEST_ASSERT_EQUAL_INT(0, sst_cfg.fpt_onRxStart(0x2FU, 5U));
+   TEST_ASSERT_EQUAL_UINT32(2U, sst_b.u32_start);
+
+   // Cleared: every range reachable again
+   gv_BulkRouter_ClearFilter();
+   TEST_ASSERT_EQUAL_INT(0, sst_cfg.fpt_onRxStart(0x10U, 5U));
+   TEST_ASSERT_EQUAL_UINT32(1U, sst_a.u32_start);
+}
+
+static void test_FilterDropsOtherShortMessages(void)
+{
+   uint8_t u8ar_p[2] = { 9, 9 };
+
+   sv_StartTwoModules();
+   gv_BulkRouter_SetFilter(0x10U, 0x10U);
+   sst_cfg.fpt_onRxShort(0x27U, u8ar_p, 2U);
+   TEST_ASSERT_EQUAL_UINT32(0U, sst_b.u32_short);
+   TEST_ASSERT_NOT_NULL(gcpt_SimLogFind("short message type 0x27 filtered"));
+   sst_cfg.fpt_onRxShort(0x10U, u8ar_p, 2U);
+   TEST_ASSERT_EQUAL_UINT32(1U, sst_a.u32_short);
+
+   // A new filter replaces the previous one
+   gv_BulkRouter_SetFilter(0x20U, 0x2FU);
+   sst_cfg.fpt_onRxShort(0x27U, u8ar_p, 2U);
+   TEST_ASSERT_EQUAL_UINT32(1U, sst_b.u32_short);
+   sst_cfg.fpt_onRxShort(0x10U, u8ar_p, 2U);
+   TEST_ASSERT_EQUAL_UINT32(1U, sst_a.u32_short);
+}
+
+static void test_FilterLetsAnAcceptedTransferFinish(void)
+{
+   uint8_t u8_d = 0U;
+
+   sv_StartTwoModules();
+   TEST_ASSERT_EQUAL_INT(0, sst_cfg.fpt_onRxStart(0x10U, 1U));
+   gv_BulkRouter_SetFilter(0x20U, 0x2FU);
+   TEST_ASSERT_EQUAL_INT(0, sst_cfg.fpt_onRxData(0x10U, 0U, &u8_d, 1U));
+   sst_cfg.fpt_onRxDone(0x10U, eBS_OK, 1U);
+   TEST_ASSERT_EQUAL_UINT32(1U, sst_a.u32_data);
+   TEST_ASSERT_EQUAL_UINT32(1U, sst_a.u32_done);
+}
+
+/******************************************************************************/
+/*  Shared Client                                                             */
+/******************************************************************************/
+static void test_StartInitialisesTheClient(void)
+{
+   sv_StartTwoModules();
+   TEST_ASSERT_NOT_NULL(sst_cliCfg.fpt_onReady);
+   TEST_ASSERT_NOT_NULL(sst_cliCfg.fpt_onTxDone);
+   TEST_ASSERT_FALSE_MESSAGE(sst_cliCfg.b_autoTuneLink, "_BLE negotiates the link itself");
+}
+
+static void test_StartClientFailureCanBeRetried(void)
+{
+   BulkRoute_T st_a = st_Route(0x10U, 0x10U, true);
+
+   TEST_ASSERT_EQUAL_INT(0, gi_BulkRouter_Register(&st_a));
+   si_cliInitRet = -EINVAL;
+   TEST_ASSERT_EQUAL_INT(-EINVAL, gi_BulkRouter_Start());
+   TEST_ASSERT_NOT_NULL(gcpt_SimLogFind("gi_BLKC_Init failed"));
+   TEST_ASSERT_FALSE(sb_isStarted);
+   // The Server is up already: its -EALREADY on the retry is fine
+   si_initRet = -EALREADY;
+   si_cliInitRet = 0;
+   TEST_ASSERT_EQUAL_INT(0, gi_BulkRouter_Start());
+}
+
+static void test_TxResultGoesToTheOwningRange(void)
+{
+   sv_StartTwoModules();
+   sst_cliCfg.fpt_onTxDone(0x23U, eBS_CRC_ERROR);
+   TEST_ASSERT_EQUAL_UINT32(1U, sst_b.u32_txDone);
+   TEST_ASSERT_EQUAL_HEX8(0x23U, sst_b.u8_lastType);
+   TEST_ASSERT_EQUAL_INT(eBS_CRC_ERROR, sst_b.e_lastStatus);
+   TEST_ASSERT_EQUAL_UINT32(0U, sst_a.u32_txDone);
+
+   // No range: logged
+   sst_cliCfg.fpt_onTxDone(0x31U, eBS_OK);
+   TEST_ASSERT_NOT_NULL(gcpt_SimLogFind("transfer 0x31 ended (0), no owner"));
+}
+
+static void test_ClientAttachArguments(void)
+{
+   BulkRoute_T st_c = st_Route(0x40U, 0x40U, true);
+
+   TEST_ASSERT_EQUAL_INT(-EPERM, gi_BulkRouter_ClientAttach(&sst_connA, 0x10U));
+   st_c.fpt_onCliReady = NULL;
+   TEST_ASSERT_EQUAL_INT(0, gi_BulkRouter_Register(&st_c));
+   sv_StartTwoModules();
+   TEST_ASSERT_EQUAL_INT(-EINVAL, gi_BulkRouter_ClientAttach(NULL, 0x10U));
+   TEST_ASSERT_EQUAL_INT(-EINVAL, gi_BulkRouter_ClientAttach(&sst_connA, 0x05U));
+   TEST_ASSERT_EQUAL_INT(-EINVAL, gi_BulkRouter_ClientAttach(&sst_connA, 0x40U));
+   TEST_ASSERT_EQUAL_UINT32(0U, su32_attachCalls);
+}
+
+static void test_ClientAttachResultGoesToTheAsker(void)
+{
+   sv_StartTwoModules();
+   TEST_ASSERT_EQUAL_INT(0, gi_BulkRouter_ClientAttach(&sst_connA, 0x22U));
+   TEST_ASSERT_EQUAL_PTR(&sst_connA, sstpt_attachConn);
+   sst_cliCfg.fpt_onReady(&sst_connA, 0);
+   TEST_ASSERT_EQUAL_UINT32(1U, sst_b.u32_ready);
+   TEST_ASSERT_EQUAL_PTR(&sst_connA, sst_b.stpt_readyConn);
+   TEST_ASSERT_EQUAL_UINT32(0U, sst_a.u32_ready);
+
+   // Ready on that link: the asker may send at once, no callback follows
+   sb_cliReady = true;
+   TEST_ASSERT_EQUAL_INT(-EALREADY, gi_BulkRouter_ClientAttach(&sst_connA, 0x10U));
+   TEST_ASSERT_EQUAL_UINT32(1U, su32_attachCalls);
+
+   // An attach still running for that link continues (-EALREADY below)
+   sb_cliReady = false;
+   sir_attachRet[0] = -EALREADY;
+   su32_attachCalls = 0U;
+   TEST_ASSERT_EQUAL_INT(0, gi_BulkRouter_ClientAttach(&sst_connA, 0x10U));
+   sst_cliCfg.fpt_onReady(&sst_connA, -ENOENT);
+   TEST_ASSERT_EQUAL_UINT32(1U, sst_a.u32_ready);
+   TEST_ASSERT_EQUAL_INT(-ENOENT, sst_a.i_readyStatus);
+}
+
+static void test_ClientAttachMovesTheClient(void)
+{
+   sv_StartTwoModules();
+
+   // Bound to another link: detached, then attached here
+   sir_attachRet[0] = -EBUSY;
+   sir_attachRet[1] = 0;
+   TEST_ASSERT_EQUAL_INT(0, gi_BulkRouter_ClientAttach(&sst_connB, 0x10U));
+   TEST_ASSERT_EQUAL_UINT32(1U, su32_detachCalls);
+   TEST_ASSERT_EQUAL_UINT32(2U, su32_attachCalls);
+   TEST_ASSERT_EQUAL_PTR(&sst_connB, sstpt_attachConn);
+
+   // Released meanwhile: attached anyway
+   su32_attachCalls = 0U;
+   si_detachRet = -ENOTCONN;
+   TEST_ASSERT_EQUAL_INT(0, gi_BulkRouter_ClientAttach(&sst_connA, 0x10U));
+   TEST_ASSERT_EQUAL_UINT32(2U, su32_attachCalls);
+
+   // Busy there (attach or transfer): refused, nothing moved
+   su32_attachCalls = 0U;
+   si_detachRet = -EBUSY;
+   TEST_ASSERT_EQUAL_INT(-EBUSY, gi_BulkRouter_ClientAttach(&sst_connB, 0x10U));
+   TEST_ASSERT_EQUAL_UINT32(1U, su32_attachCalls);
+
+   // Other errors of the attach are passed back
+   su32_attachCalls = 0U;
+   sir_attachRet[0] = -ENOTCONN;
+   TEST_ASSERT_EQUAL_INT(-ENOTCONN, gi_BulkRouter_ClientAttach(&sst_connB, 0x10U));
+}
+
 int main(void)
 {
    (void)setvbuf(stdout, NULL, _IONBF, 0);
@@ -312,5 +534,14 @@ int main(void)
    RUN_TEST(test_RangeWithoutReceiverRejectsTransfers);
    RUN_TEST(test_RangeWithoutStartAcceptsEverything);
    RUN_TEST(test_ShortMessagesAreRoutedOrLogged);
+   RUN_TEST(test_FilterRejectsOtherTransfersAtStart);
+   RUN_TEST(test_FilterDropsOtherShortMessages);
+   RUN_TEST(test_FilterLetsAnAcceptedTransferFinish);
+   RUN_TEST(test_StartInitialisesTheClient);
+   RUN_TEST(test_StartClientFailureCanBeRetried);
+   RUN_TEST(test_TxResultGoesToTheOwningRange);
+   RUN_TEST(test_ClientAttachArguments);
+   RUN_TEST(test_ClientAttachResultGoesToTheAsker);
+   RUN_TEST(test_ClientAttachMovesTheClient);
    return UNITY_END();
 }

@@ -12,12 +12,13 @@ import tkinter as tk
 from blehost.context import AppContext
 from blehost.core.gatt_server import PcGattServer
 from blehost.features.hex_upload import HexUploadFeature
+from blehost.features.pairing import PairingFeature
 from blehost.features.provisioning import ProvisioningFeature
 from blehost.protocols.bulkxfer import BulkXferService
 from blehost.ui.main_window import MainWindow
 
 # Feature pages, in rail order. Add new features here.
-FEATURES = [HexUploadFeature, ProvisioningFeature]
+FEATURES = [HexUploadFeature, ProvisioningFeature, PairingFeature]
 
 
 def _dpi_aware():

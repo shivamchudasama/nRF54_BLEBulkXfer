@@ -38,11 +38,11 @@ def _der(cert) -> bytes:
     return cert.public_bytes(serialization.Encoding.DER)
 
 
-def _ku(key_agreement=False, cert_sign=False):
-    # digitalSignature keeps at least one bit set: an all-zero KeyUsage would be
-    # an empty BIT STRING, which mbedTLS refuses to parse, and the case would
-    # test PARSE instead of the profile rule it is about.
-    return x509.KeyUsage(digital_signature=True, content_commitment=False, key_encipherment=False,
+def _ku(key_agreement=False, cert_sign=False, digital_signature=True):
+    # Keep at least one bit set: an all-zero KeyUsage would be an empty BIT
+    # STRING, which mbedTLS refuses to parse, and the case would test PARSE
+    # instead of the profile rule it is about.
+    return x509.KeyUsage(digital_signature=digital_signature, content_commitment=False, key_encipherment=False,
                          data_encipherment=False, key_agreement=key_agreement, key_cert_sign=cert_sign,
                          crl_sign=cert_sign, encipher_only=False, decipher_only=False)
 
@@ -61,10 +61,12 @@ def _ca_cert(key, name, ca=True, signer=None, issuer=None, cert_sign=True):
     return b.sign(signer or key, hashes.SHA256())
 
 
-def _dev_cert(ca_key, ca_name, subject, public_key, ca_flag=False, key_agreement=True, alg=None):
+def _dev_cert(ca_key, ca_name, subject, public_key, ca_flag=False, key_agreement=True, alg=None,
+              digital_signature=True):
     b = _builder(subject, ca_name, public_key)
     b = b.add_extension(x509.BasicConstraints(ca=ca_flag, path_length=None), critical=True)
-    b = b.add_extension(_ku(key_agreement=key_agreement), critical=False)
+    b = b.add_extension(_ku(key_agreement=key_agreement, digital_signature=digital_signature),
+                        critical=False)
     return b.sign(ca_key, alg or hashes.SHA256())
 
 
@@ -108,6 +110,8 @@ def negative_cases(ca, csr_der: bytes) -> list:
              BAD_PROFILE),
         Case("dev_no_key_agreement", DEV_CERT,
              _der(_dev_cert(ca.key, good_name, subject, dev_key, key_agreement=False)), BAD_PROFILE),
+        Case("dev_no_digital_signature", DEV_CERT,
+             _der(_dev_cert(ca.key, good_name, subject, dev_key, digital_signature=False)), BAD_PROFILE),
         Case("dev_sha384", DEV_CERT,
              _der(_dev_cert(ca.key, good_name, subject, dev_key, alg=hashes.SHA384())), BAD_PROFILE),
     ]

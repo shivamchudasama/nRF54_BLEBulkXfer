@@ -63,14 +63,14 @@ Short messages from the provisioner go to the device's DATA. Short messages from
 | `status` | Name | Meaning |
 |---|---|---|
 | `0x00` | OK | Done: CSR delivered; the certificate is verified and in force (for DEV_CERT: both certificates stored); the device is wiped and has a fresh key and CSR |
-| `0x01` | BAD_STATE | Not allowed now: device certificate before a CA, no key, already provisioned, request already running, DEPROVISION while the CSR or a certificate is in progress, wrong appType |
+| `0x01` | BAD_STATE | Not allowed now: device certificate before a CA, no key, already provisioned, request already running, DEPROVISION while the CSR or a certificate is in progress or a pairing runs, wrong appType |
 | `0x02` | TOO_LARGE | Certificate empty or above 1024 bytes |
 | `0x03` | PARSE | Not a parsable DER X.509 certificate |
 | `0x04` | NOT_CA | CA certificate is not CA:TRUE, not self-issued, or does not allow keyCertSign |
 | `0x05` | BAD_SIG | Signature does not verify: the CA's own, or the device certificate's against the CA |
 | `0x06` | KEY_MISMATCH | Device certificate carries another public key than the device's |
 | `0x07` | SUBJECT_MISMATCH | Device certificate subject differs from the CSR subject (byte for byte) |
-| `0x08` | BAD_PROFILE | Outside the profile (§7): key not P-256, signature not ecdsa-with-SHA256, not X.509 v3, device certificate CA:TRUE or without keyAgreement |
+| `0x08` | BAD_PROFILE | Outside the profile (§7): key not P-256, signature not ecdsa-with-SHA256, not X.509 v3, device certificate CA:TRUE or without digitalSignature and keyAgreement |
 | `0x09` | NO_PEER_SVC | The device found no BulkXfer service on the provisioner |
 | `0x0A` | INTERNAL | Crypto, storage, memory or BulkXfer failure on the device. For DEV_CERT: the certificates could not be stored (neither is kept; the state stays CA_OK and the device certificate can be sent again). For DEPROVISION: something could not be erased, or no new key and CSR could be made (state NO_KEY) |
 | `0x0B` | TRANSFER | The CSR transfer failed (its END or ABORT was not OK) |
@@ -91,7 +91,7 @@ A provisioner MUST treat an unknown status as a failure.
 | CA_OK | DEV_CERT verified, storing failed | Remove whatever was stored; RESULT INTERNAL | CA_OK |
 | CA_OK | DEV_CERT rejected | RESULT with the reason | CA_OK |
 | PROVISIONED | CSR_REQ, CA_CERT, DEV_CERT | RESULT BAD_STATE (one-time provisioning) | PROVISIONED |
-| any | DEPROVISION or Button 0 held (default 5 s) | Forget the trust anchor; remove both certificates, the key and the CSR; generate a fresh key and CSR. Refused (BAD_STATE) while the CSR is being sent or a certificate is being received or verified | KEY_READY (NO_KEY if no key could be made) |
+| any | DEPROVISION or Button 0 held (default 5 s) | Forget the trust anchor; remove both certificates, the key and the CSR; generate a fresh key and CSR; delete every pairing bond ([../Pairing/PROTOCOL.md §4](../Pairing/PROTOCOL.md#4-states)). Refused (BAD_STATE) while the CSR is being sent, a certificate is being received or verified, or a pairing runs | KEY_READY (NO_KEY if no key could be made) |
 | CA_OK | Reset | The CA was in RAM only | KEY_READY |
 
 A disconnect changes no state: a provisioner can send the CA in one connection and the device certificate in the next. The button wipe sends no RESULT.
@@ -155,7 +155,7 @@ All certificates are X.509 v3 in DER, P-256 keys, signed with ecdsa-with-SHA256.
 **CSR** (built by the device, [_ASW/_CSR/DER.c](../../_ASW/_CSR/DER.c)):
 
 - Subject: C, ST, L, O, OU from Kconfig `CONFIG_CSR_SUBJ_*`, all UTF8String. CN is an RFC 4122 version-5 UUID (SHA-1 of a fixed namespace and the hardware device ID), lowercase, for example `6f1c0d3a-5b2e-5c4d-8e9f-0a1b2c3d4e5f`: the third group starts with `5`. Devices that generated their CSR before this was corrected may still carry a CN with another digit there until their next wipe.
-- Requested extensions, all non-critical: BasicConstraints CA:FALSE; KeyUsage keyAgreement; SubjectKeyIdentifier = SHA-1 over `X ‖ Y` (without the `04` prefix).
+- Requested extensions, all non-critical: BasicConstraints CA:FALSE; KeyUsage digitalSignature + keyAgreement (pairing signs its OOB data with the key, [../Pairing/PROTOCOL.md](../Pairing/PROTOCOL.md)); SubjectKeyIdentifier = SHA-1 over `X ‖ Y` (without the `04` prefix).
 - Signed with the device key, which never leaves the device.
 
 **CA certificate**, checked by the device:
@@ -170,7 +170,7 @@ All certificates are X.509 v3 in DER, P-256 keys, signed with ecdsa-with-SHA256.
 - Subject byte-identical to the CSR subject.
 - Public key equal to the device's own key.
 - BasicConstraints absent or CA:FALSE.
-- KeyUsage present and including keyAgreement.
+- KeyUsage present and including digitalSignature and keyAgreement.
 
 The device does not check validity dates: it has no wall clock. The provisioner issues certificates that are valid now. The GUI CA copies the CSR's extensions, adds CA:FALSE (critical) and AuthorityKeyIdentifier, and caps the validity at its own.
 
@@ -215,13 +215,13 @@ Golden frames from [_TEST/vectors/wire.json](../../_TEST/vectors/wire.json) (`pr
 | GET_STATUS | `00 20` |
 | CSR_REQ | `00 22` |
 | DEPROVISION | `00 27` |
-| STATUS, KEY_READY, CSR 420 B | `24 21 01 00 a4 01 b9 f7 f8 43 … 5f 00` (36-byte payload) |
+| STATUS, KEY_READY, CSR 420 B | `24 21 01 00 a4 01 52 11 a2 ee … 66 cc` (36-byte payload) |
 | RESULT CA_CERT OK | `02 26 24 00` |
 | RESULT DEV_CERT BAD_SIG | `02 26 25 05` |
 | RESULT CSR_REQ NO_PEER_SVC | `02 26 22 09` |
 | RESULT CSR delivered | `02 26 23 00` |
-| STATUS, PROVISIONED (no CSR) | `24 21 03 00 00 00 b9 f7 f8 43 … 5f 00` |
+| STATUS, PROVISIONED (no CSR) | `24 21 03 00 00 00 52 11 a2 ee … 66 cc` |
 | RESULT CSR_REQ BAD_STATE (provisioned) | `02 26 22 01` |
 | RESULT DEPROVISION OK | `02 26 27 00` |
 
-`provisioning.csr` in the same file is a CSR built by the device's encoder, with a real signature (421 bytes).
+`provisioning.csr` in the same file is a CSR built by the device's encoder, with a real signature (420 bytes).

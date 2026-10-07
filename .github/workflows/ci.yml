@@ -12,6 +12,10 @@ on:
         description: "Also run the hardware-in-the-loop job (needs a self-hosted runner with a DK)"
         type: boolean
         default: false
+      hil_pair:
+        description: "Also run the pairing hardware job (needs a self-hosted runner with two DKs)"
+        type: boolean
+        default: false
 
 env:
   NCS_VERSION: v3.4.1
@@ -224,3 +228,57 @@ jobs:
       # "SEG addr=0x00000000 len=6560 crc=0xe2e72827" line, the two PEM blocks,
       # "device provisioned", and after a reset "provisioned: stored
       # certificates verified".
+
+  # ---- Pairing on hardware: two DKs (placeholder, manual) ----------------------
+  # Device pairing (_DOC/Pairing/PROTOCOL.md) between two DKs on one Windows
+  # runner. The runner's variables give each DK's J-Link serial number and BLE
+  # address (both DKs advertise the same name, so they are told apart by
+  # address): DK_A_SNR, DK_A_ADDR, DK_B_SNR, DK_B_ADDR.
+  hil-pair-tests:
+    needs: firmware-build
+    if: github.event_name == 'workflow_dispatch' && inputs.hil_pair
+    runs-on: [self-hosted, nrf54l15dk-pair]
+    env:
+      CLI: python _TOOLS/BleHostGUI/bulkxfer_client.py
+      A: ${{ vars.DK_A_ADDR }}
+      B: ${{ vars.DK_B_ADDR }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/download-artifact@v8
+        with:
+          name: firmware
+          path: fw
+      - name: Flash both DKs (fresh keys, no bonds)
+        run: |
+          nrfutil device program --serial-number ${{ vars.DK_A_SNR }} --firmware fw/build_ci/merged.hex --options chip_erase_mode=ERASE_ALL
+          nrfutil device program --serial-number ${{ vars.DK_B_SNR }} --firmware fw/build_ci/merged.hex --options chip_erase_mode=ERASE_ALL
+      - name: Provision both with the same CA
+        run: |
+          ${{ env.CLI }} provision --address ${{ env.A }} --ca ${{ runner.temp }}/ca
+          ${{ env.CLI }} provision --address ${{ env.B }} --ca ${{ runner.temp }}/ca
+      # Exit code 0 only when both devices end PAIRED: certificates exchanged and
+      # verified, signed OOB data verified, LE SC OOB pairing at level 4, bonded,
+      # SECURED written over the encrypted link
+      - name: Pair A (central) with B (peripheral)
+        run: ${{ env.CLI }} pair --central ${{ env.A }} --peripheral ${{ env.B }}
+      - name: The bond survives a reset
+        shell: pwsh
+        run: |
+          nrfutil device reset --serial-number ${{ vars.DK_A_SNR }}
+          nrfutil device reset --serial-number ${{ vars.DK_B_SNR }}
+          Start-Sleep -Seconds 3
+          foreach ($d in "${{ env.A }}", "${{ env.B }}") {
+            $out = ${{ env.CLI }} pairstatus --address $d | Out-String
+            if ($out -notmatch "PAIRED") { throw "no bond after reset: $out" }
+          }
+      # A device certified by another CA is refused: the run fails (PEER_CERT)
+      - name: A device of another CA cannot pair
+        shell: pwsh
+        run: |
+          ${{ env.CLI }} unpair --address ${{ env.A }}
+          ${{ env.CLI }} deprovision --address ${{ env.B }}
+          ${{ env.CLI }} provision --address ${{ env.B }} --ca ${{ runner.temp }}/other_ca
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $out = ${{ env.CLI }} pair --central ${{ env.A }} --peripheral ${{ env.B }} | Out-String
+          if ($LASTEXITCODE -eq 0) { throw "paired across CAs" } else { $global:LASTEXITCODE = 0 }
+          if ($out -notmatch "certificate was rejected") { throw "unexpected failure: $out" }

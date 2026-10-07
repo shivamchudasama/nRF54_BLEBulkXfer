@@ -30,7 +30,8 @@
  *                //             disconnected -> gv_BLK_OnDisconnected(conn)
  * @endcode
  *
- *                One connection at a time.
+ *                One connection at a time; gi_BLKS_Rebind() moves the
+ *                binding to another live connection.
  *
  * @date          24/09/2026
  * @author        Shivam Chudasama
@@ -117,6 +118,7 @@ typedef struct
 extern int gi_BLKS_Init(const BlkSrvCfg_T *stpt_cfg);
 extern void gv_BLKS_OnConnected(struct bt_conn *stpt_conn);
 extern void gv_BLKS_OnDisconnected(struct bt_conn *stpt_conn);
+extern int gi_BLKS_Rebind(struct bt_conn *stpt_conn);
 
 /* ---- Server -> client ---------------------------------------------------- */
 extern int gi_BLKS_SendShort(uint8_t u8_appType, const void *vpt_data, uint8_t u8_len,

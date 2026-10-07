@@ -16,7 +16,7 @@ PC sends:
 The "device" is a P-256 key made here: its private scalar goes into the
 header so the test can import it into PSA as the persistent device key
 (CSR_DEVICE_SIGNING_KEY_ID), and its CSR (subject as the device builds it:
-C, ST, L, O, OU, CN, KeyUsage keyAgreement) stands in for gst_CSRData.
+C, ST, L, O, OU, CN, KeyUsage digitalSignature + keyAgreement) stands in for gst_CSRData.
 A second device ("remote", phase-2 pairing) and a second CA are included too.
 
 Needs cryptography (_TEST/requirements-test.txt).

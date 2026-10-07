@@ -15,7 +15,8 @@
  *                  OK when an mbedTLS call failed);
  *                - certificate contexts are freed on every path;
  *                - the profile is enforced: P-256 key, ecdsa-with-SHA256,
- *                  CA:FALSE and KeyUsage keyAgreement on device certificates, and
+ *                  CA:FALSE and KeyUsage digitalSignature + keyAgreement on
+ *                  device certificates, and
  *                  the own certificate must carry this device's key and the CSR
  *                  subject;
  *                - the 26-byte SPKI prefix is checked before the public key is
@@ -391,8 +392,10 @@ static DeviceCertStatus_E se_VerifyChain(mbedtls_x509_crt *stpt_crt)
 
 /**
  * @private       se_CheckLeafProfile
- * @brief         Check a device certificate is not a CA and allows keyAgreement
- *                (the KeyUsage extension must be present; the CSR requests it).
+ * @brief         Check a device certificate is not a CA and allows both
+ *                digitalSignature (pairing signs its OOB data with the key) and
+ *                keyAgreement (the KeyUsage extension must be present; the CSR
+ *                requests both).
  * @param[in]     stpt_crt Parsed certificate.
  * @return        eDCS_OK, or eDCS_BAD_PROFILE.
  */
@@ -405,11 +408,12 @@ static DeviceCertStatus_E se_CheckLeafProfile(const mbedtls_x509_crt *stpt_crt)
       return eDCS_BAD_PROFILE;
    }
 
-   // Check the KeyUsage extension is present and allows keyAgreement
+   // Check the KeyUsage extension is present and allows signing and key agreement
    if ((!mbedtls_x509_crt_has_ext_type(stpt_crt, MBEDTLS_X509_EXT_KEY_USAGE)) ||
-      (mbedtls_x509_crt_check_key_usage(stpt_crt, MBEDTLS_X509_KU_KEY_AGREEMENT) != 0))
+      (mbedtls_x509_crt_check_key_usage(stpt_crt,
+         MBEDTLS_X509_KU_DIGITAL_SIGNATURE | MBEDTLS_X509_KU_KEY_AGREEMENT) != 0))
    {
-      APP_LOG_WRN("Device certificate does not allow keyAgreement");
+      APP_LOG_WRN("Device certificate does not allow digitalSignature and keyAgreement");
       return eDCS_BAD_PROFILE;
    }
 
@@ -616,7 +620,8 @@ DeviceCertStatus_E ge_VerifyCACertificate(const uint8_t *u8pt_der, size_t t_len)
  * @public        ge_VerifyOwnDeviceCertificate
  * @brief         Verify this device's certificate during provisioning: signed by
  *                the trust anchor, within the profile (P-256, ecdsa-with-SHA256,
- *                CA:FALSE, KeyUsage keyAgreement), carrying this device's public
+ *                CA:FALSE, KeyUsage digitalSignature + keyAgreement), carrying
+ *                this device's public
  *                key (CSR_DEVICE_SIGNING_KEY_ID) and the subject of this device's
  *                CSR (gst_CSRData).
  * @param[in]     u8pt_der DER certificate.

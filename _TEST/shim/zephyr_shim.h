@@ -16,9 +16,12 @@
  *                  printed only with gb_simVerbose.
  *                - __ASSERT failures can be trapped with SIM_EXPECT_ASSERT().
  *                - bt_gatt_notify_cb, bt_gatt_write_without_response_cb,
- *                  bt_gatt_discover, bt_gatt_subscribe, bt_gatt_exchange_mtu,
+ *                  bt_gatt_discover, bt_gatt_subscribe, bt_gatt_unsubscribe,
+ *                  bt_gatt_exchange_mtu, bt_gatt_write,
  *                  bt_gatt_is_subscribed and bt_gatt_get_mtu are implemented
- *                  by the test that needs them (simulated link and peer).
+ *                  by the test that needs them (simulated link and peer), as
+ *                  are the address, advertising, scanning, connection, SMP,
+ *                  OOB and bond functions (declarations only).
  *
  * @date          22/09/2026
  * @author        Shivam Chudasama
@@ -305,6 +308,13 @@ static inline int k_work_schedule(struct k_work_delayable *w, k_timeout_t d)
    w->pending = true;
    return 1;
 }
+/** As Zephyr's: (re)schedule with the new delay, pending or not; gives 1. */
+static inline int k_work_reschedule(struct k_work_delayable *w, k_timeout_t d)
+{
+   w->deadline = gi64_simNowMs + d.ms;
+   w->pending = true;
+   return 1;
+}
 static inline int k_work_cancel_delayable(struct k_work_delayable *w)
 {
    w->pending = false;
@@ -354,6 +364,13 @@ static inline bool atomic_cas(atomic_t *a, atomic_val_t old_v, atomic_val_t new_
 }
 static inline void *atomic_ptr_get(const atomic_ptr_t *p) { return *p; }
 static inline void *atomic_ptr_set(atomic_ptr_t *p, void *v) { void *o = *p; *p = v; return o; }
+static inline bool atomic_test_bit(const atomic_t *a, int b) { return (*a & (1L << b)) != 0; }
+static inline bool atomic_ptr_cas(atomic_ptr_t *p, void *old_v, void *new_v)
+{
+   if (*p != old_v) { return false; }
+   *p = new_v;
+   return true;
+}
 
 /* ---- CRC ----------------------------------------------------------------- */
 static inline uint32_t crc32_ieee_update(uint32_t crc, const uint8_t *data, size_t len)
@@ -471,6 +488,7 @@ struct bt_gatt_notify_params
 #define BT_ATT_ERR_UNLIKELY                0x0e
 #define BT_ATT_ERR_INSUFFICIENT_RESOURCES  0x11
 #define BT_ATT_ERR_VALUE_NOT_ALLOWED       0x13
+#define BT_ATT_ERR_PROCEDURE_IN_PROGRESS   0xfe
 /** Same contract as Zephyr's bt_gatt_attr_read() (subsys/bluetooth/host/gatt.c). */
 static inline ssize_t bt_gatt_attr_read(struct bt_conn *conn, const struct bt_gatt_attr *attr,
    void *buf, uint16_t buf_len, uint16_t offset, const void *value, uint16_t value_len)
@@ -541,6 +559,150 @@ extern int bt_gatt_write_without_response_cb(struct bt_conn *conn, uint16_t hand
    const void *data, uint16_t length, bool sign, bt_gatt_complete_func_t func, void *user_data);
 extern int bt_gatt_discover(struct bt_conn *conn, struct bt_gatt_discover_params *params);
 extern int bt_gatt_subscribe(struct bt_conn *conn, struct bt_gatt_subscribe_params *params);
+extern int bt_gatt_unsubscribe(struct bt_conn *conn, struct bt_gatt_subscribe_params *params);
 extern int bt_gatt_exchange_mtu(struct bt_conn *conn, struct bt_gatt_exchange_params *params);
+struct bt_gatt_write_params;
+typedef void (*bt_gatt_write_func_t)(struct bt_conn *conn, uint8_t err,
+   struct bt_gatt_write_params *params);
+struct bt_gatt_write_params
+{
+   bt_gatt_write_func_t func;
+   uint16_t handle;
+   uint16_t offset;
+   const void *data;
+   uint16_t length;
+};
+extern int bt_gatt_write(struct bt_conn *conn, struct bt_gatt_write_params *params);
+
+/* ---- Bluetooth: addresses, advertising, scanning, connections, SMP --------
+        Declarations only, with Zephyr's names, layouts and contracts
+        (bluetooth.h, conn.h, addr.h). A test that reaches them defines them
+        and records the calls; the macros build the same compound literals as
+        Zephyr's, with representative values. -------------------------------- */
+#define BT_ID_DEFAULT                      0
+#ifndef CONFIG_BT_ID_MAX
+#define CONFIG_BT_ID_MAX                   1
+#endif
+#define BT_ADDR_LE_PUBLIC                  0x00
+#define BT_ADDR_LE_RANDOM                  0x01
+typedef struct { uint8_t val[6]; } bt_addr_t;
+typedef struct { uint8_t type; bt_addr_t a; } bt_addr_le_t;
+static inline int bt_addr_le_cmp(const bt_addr_le_t *a, const bt_addr_le_t *b)
+{
+   return memcmp(a, b, sizeof(*a));
+}
+struct net_buf_simple;
+struct bt_data { uint8_t type; uint8_t data_len; const uint8_t *data; };
+#define BT_LE_ADV_OPT_CONN                 (1U << 1)
+#define BT_LE_ADV_OPT_DIR_MODE_LOW_DUTY    (1U << 4)
+struct bt_le_adv_param
+{
+   uint8_t id;
+   uint8_t sid;
+   uint8_t secondary_max_skip;
+   uint32_t options;
+   uint32_t interval_min;
+   uint32_t interval_max;
+   const bt_addr_le_t *peer;
+};
+#define BT_LE_ADV_CONN_DIR_LOW_DUTY(_peer) \
+   (&(struct bt_le_adv_param){ 0U, 0U, 0U, BT_LE_ADV_OPT_CONN | BT_LE_ADV_OPT_DIR_MODE_LOW_DUTY, \
+      0x0060U, 0x0090U, (_peer) })
+extern int bt_le_adv_start(const struct bt_le_adv_param *param, const struct bt_data *ad,
+   size_t ad_len, const struct bt_data *sd, size_t sd_len);
+extern int bt_le_adv_stop(void);
+#define BT_GAP_ADV_TYPE_ADV_IND            0x00
+#define BT_GAP_ADV_TYPE_ADV_DIRECT_IND     0x01
+#define BT_GAP_ADV_TYPE_ADV_SCAN_IND       0x02
+#define BT_GAP_ADV_TYPE_ADV_NONCONN_IND    0x03
+#define BT_LE_SCAN_TYPE_PASSIVE            0x00
+struct bt_le_scan_param { uint8_t type; uint32_t options; uint16_t interval; uint16_t window; };
+#define BT_LE_SCAN_PASSIVE \
+   (&(struct bt_le_scan_param){ BT_LE_SCAN_TYPE_PASSIVE, 0U, 0x0060U, 0x0060U })
+typedef void bt_le_scan_cb_t(const bt_addr_le_t *addr, int8_t rssi, uint8_t adv_type,
+   struct net_buf_simple *buf);
+extern int bt_le_scan_start(const struct bt_le_scan_param *param, bt_le_scan_cb_t cb);
+extern int bt_le_scan_stop(void);
+struct bt_conn_le_create_param { uint32_t options; uint16_t interval; uint16_t window; };
+#define BT_CONN_LE_CREATE_CONN \
+   (&(struct bt_conn_le_create_param){ 0U, 0x0060U, 0x0060U })
+struct bt_le_conn_param { uint16_t interval_min; uint16_t interval_max; uint16_t latency; uint16_t timeout; };
+#define BT_LE_CONN_PARAM(a, b, c, d)       (&(struct bt_le_conn_param){ (a), (b), (c), (d) })
+extern int bt_conn_le_create(const bt_addr_le_t *peer,
+   const struct bt_conn_le_create_param *create_param,
+   const struct bt_le_conn_param *conn_param, struct bt_conn **conn);
+#define BT_HCI_ERR_REMOTE_USER_TERM_CONN   0x13
+extern int bt_conn_disconnect(struct bt_conn *conn, uint8_t reason);
+extern const bt_addr_le_t *bt_conn_get_dst(const struct bt_conn *conn);
+extern void bt_id_get(bt_addr_le_t *addrs, size_t *count);
+struct bt_bond_info { bt_addr_le_t addr; };
+extern void bt_foreach_bond(uint8_t id, void (*func)(const struct bt_bond_info *info,
+   void *user_data), void *user_data);
+extern int bt_unpair(uint8_t id, const bt_addr_le_t *addr);
+typedef enum
+{
+   BT_SECURITY_L0, BT_SECURITY_L1, BT_SECURITY_L2, BT_SECURITY_L3, BT_SECURITY_L4,
+} bt_security_t;
+enum bt_security_err
+{
+   BT_SECURITY_ERR_SUCCESS,
+   BT_SECURITY_ERR_AUTH_FAIL,
+   BT_SECURITY_ERR_PIN_OR_KEY_MISSING,
+   BT_SECURITY_ERR_OOB_NOT_AVAILABLE,
+   BT_SECURITY_ERR_AUTH_REQUIREMENT,
+   BT_SECURITY_ERR_PAIR_NOT_SUPPORTED,
+   BT_SECURITY_ERR_PAIR_NOT_ALLOWED,
+   BT_SECURITY_ERR_INVALID_PARAM,
+   BT_SECURITY_ERR_KEY_REJECTED,
+   BT_SECURITY_ERR_UNSPECIFIED,
+};
+extern int bt_conn_set_security(struct bt_conn *conn, bt_security_t sec);
+extern bt_security_t bt_conn_get_security(const struct bt_conn *conn);
+struct bt_le_oob_sc_data { uint8_t r[16]; uint8_t c[16]; };
+struct bt_le_oob { bt_addr_le_t addr; struct bt_le_oob_sc_data le_sc_data; };
+extern int bt_le_oob_get_local(uint8_t id, struct bt_le_oob *oob);
+extern void bt_le_oob_set_sc_flag(bool enable);
+extern int bt_le_oob_set_sc_data(struct bt_conn *conn, const struct bt_le_oob_sc_data *oobd_local,
+   const struct bt_le_oob_sc_data *oobd_remote);
+struct bt_conn_oob_info
+{
+   enum { BT_CONN_OOB_LE_LEGACY, BT_CONN_OOB_LE_SC } type;
+   union
+   {
+      struct
+      {
+         enum
+         {
+            BT_CONN_OOB_LOCAL_ONLY,
+            BT_CONN_OOB_REMOTE_ONLY,
+            BT_CONN_OOB_BOTH_PEERS,
+            BT_CONN_OOB_NO_DATA,
+         } oob_config;
+      } lesc;
+   };
+};
+struct bt_conn_pairing_feat
+{
+   uint8_t io_capability;
+   uint8_t oob_data_flag;
+   uint8_t auth_req;
+   uint8_t max_enc_key_size;
+   uint8_t init_key_dist;
+   uint8_t resp_key_dist;
+};
+struct bt_conn_auth_cb
+{
+   enum bt_security_err (*pairing_accept)(struct bt_conn *conn,
+      const struct bt_conn_pairing_feat *const feat);
+   void (*oob_data_request)(struct bt_conn *conn, struct bt_conn_oob_info *info);
+};
+struct bt_conn_auth_info_cb
+{
+   void (*pairing_complete)(struct bt_conn *conn, bool bonded);
+   void (*pairing_failed)(struct bt_conn *conn, enum bt_security_err reason);
+};
+extern int bt_conn_auth_cb_register(const struct bt_conn_auth_cb *cb);
+extern int bt_conn_auth_info_cb_register(struct bt_conn_auth_info_cb *cb);
+extern int bt_conn_auth_cancel(struct bt_conn *conn);
 
 #endif // _ZEPHYR_SHIM_H

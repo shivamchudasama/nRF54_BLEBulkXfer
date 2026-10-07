@@ -9,8 +9,8 @@ For now the server does not program flash. It buffers each segment in RAM and lo
 | Item | Value |
 |---|---|
 | Device name (scan response) | `BLE Bulk Transfer` (`CONFIG_BT_DEVICE_NAME`) |
-| Advertised service (adv data, 128-bit list) | `B1C00000-16A1-4812-AF35-F3F29A92F6CA` |
-| Connections | One at a time |
+| Advertised service (adv data, 128-bit list) | `B1C00000-16A1-4812-AF35-F3F29A92F6CA` until the device is provisioned; then the Pairing service `B1C10000-…` ([../Pairing/PROTOCOL.md §2](../Pairing/PROTOCOL.md#2-gatt-the-pairing-service)). The BulkXfer service is in the GATT table either way |
+| Connections | One host at a time (a second is refused); while pairing, a peer device on a second link |
 | Security | None (open link) |
 
 ## 2. GATT table
@@ -47,9 +47,12 @@ The device's BulkXfer Server is shared by appType range ([_ASW/_BLK_SVC/BulkRout
 |---|---|---|
 | `0x01`, `0x10`, `0x11` | Hex upload (`_DATA_STORE`) | This document |
 | `0x20`–`0x2F` | Device provisioning (`_PROV`) | [../Provisioning/PROTOCOL.md](../Provisioning/PROTOCOL.md) |
+| `0x30`–`0x3F` | Device pairing (`_PAIR`), between two devices | [../Pairing/PROTOCOL.md](../Pairing/PROTOCOL.md) |
 | others up to `0xEF` | Free | A transfer is refused (§5), a short message is logged and ignored |
 
 A new user of the Server registers a free range with `gi_BulkRouter_Register()` before `gi_BulkRouter_Start()` and adds it here.
+
+While the Server is bound to a peer device for pairing, the router's filter (`gv_BulkRouter_SetFilter()`) admits only `0x30`–`0x3F`: any other transfer is refused at START as an unknown type and any other short message is dropped, so a peer device cannot upload hex or reach provisioning.
 
 ## 4. Upload sequence
 

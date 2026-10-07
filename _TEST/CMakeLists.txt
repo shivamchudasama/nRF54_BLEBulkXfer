@@ -157,15 +157,16 @@ add_unit_test(hex_upload_e2e
    DEFINES CONFIG_BT_GATT_CLIENT BLK_ENABLE_CLIENT=0)
 
 # ---- _ASW/_BLK_SVC -----------------------------------------------------------
-# The appType router, with the GATT service and the BulkXfer Server stubbed
+# The appType router, with the GATT service and both BulkXfer roles stubbed
 add_unit_test(bulk_router
    SOURCES unit/BlkSvc/test_router.c
-   INCLUDES ${ASW_DIR}/_BLK_SVC ${BLK_INCLUDES})
+   INCLUDES ${ASW_DIR}/_BLK_SVC ${BLK_INCLUDES}
+   DEFINES CONFIG_BT_GATT_CLIENT)
 
 # ---- _ASW/_PROV --------------------------------------------------------------
 # Provisioning flow; key/CSR, certificate verification, PSA, router and the
 # BulkXfer roles are stubbed (each has its own test)
-set(PROV_INCLUDES ${ASW_DIR}/_PROV ${ASW_DIR}/_BLK_SVC ${ASW_DIR}/_CSR ${ASW_DIR}/_DEVICE_CERT
+set(PROV_INCLUDES ${ASW_DIR}/_PROV ${ASW_DIR}/_PAIR ${ASW_DIR}/_BLK_SVC ${ASW_DIR}/_CSR ${ASW_DIR}/_DEVICE_CERT
    ${PSA_STUB_DIR} ${BLK_INCLUDES})
 add_unit_test(prov
    SOURCES unit/Prov/test_prov.c
@@ -183,6 +184,30 @@ add_unit_test(prov_e2e
 add_unit_test(prov_button
    SOURCES unit/Prov/test_prov_button.c
    INCLUDES ${PROV_INCLUDES})
+
+# ---- _ASW/_PAIR --------------------------------------------------------------
+# Pairing flow (Pair.c): BT stack, BulkXfer, router, certificate verification,
+# OOB signing, provisioning, LEDs and the service stubbed (calls recorded)
+set(PAIR_INCLUDES ${ASW_DIR}/_PAIR ${ASW_DIR}/_PROV ${ASW_DIR}/_BLK_SVC ${ASW_DIR}/_CSR
+   ${ASW_DIR}/_DEVICE_CERT ${PSA_STUB_DIR} ${BLK_INCLUDES})
+add_unit_test(pair
+   SOURCES unit/Pair/test_pair.c
+   INCLUDES ${PAIR_INCLUDES}
+   DEFINES CONFIG_BT_GATT_CLIENT)
+
+# Pairing end to end: real BulkXfer (both roles) + router + Pair.c over the
+# simulated link, with the peer as the other device and a second link as host
+add_unit_test(pair_e2e
+   SOURCES unit/Pair/test_pair_e2e.c ${BLK_DIR}/BulkXfer_Frame.c
+   INCLUDES ${PAIR_INCLUDES}
+   DEFINES CONFIG_BT_GATT_CLIENT)
+
+# Signed OOB data (PairOob.c) with the real TF-PSA-Crypto, against the vector
+# signed by Python's cryptography
+add_unit_test(pair_oob
+   SOURCES unit/Pair/test_pair_oob.c ${TFPSA_SHIM_DIR}/tfpsa_host_platform.c
+   INCLUDES ${ASW_DIR}/_PAIR)
+target_link_libraries(pair_oob PRIVATE tfpsacrypto)
 
 # ---- _ASW/_DEVICE_CERT -------------------------------------------------------
 # Certificate storage (DeviceCert.c) against an in-memory PSA ITS
@@ -242,6 +267,7 @@ set(CHECKED_HEADERS
    ${GATT_CB_DIR}/GATT_CB_Types.h ${GATT_CB_DIR}/GATT_GenericCallbacks.h
    ${ASW_DIR}/_BLK_SVC/BulkSvc.h ${ASW_DIR}/_BLK_SVC/BulkRouter.h ${ASW_DIR}/_DATA_STORE/DataStore.h
    ${ASW_DIR}/_PROV/Prov.h ${ASW_DIR}/_PROV/ProvButton.h
+   ${ASW_DIR}/_PAIR/Pair.h ${ASW_DIR}/_PAIR/PairOob.h ${ASW_DIR}/_PAIR/PairSvc.h
    ${ASW_DIR}/_DEVICE_CERT/DeviceCert.h ${ASW_DIR}/_DEVICE_CERT/DeviceCert_Verify.h
    ${ASW_DIR}/_DEVICE_CERT/DeviceCert_Types.h ${ASW_DIR}/_DEVICE_CERT/DeviceCert_Config.h
    ${ASW_DIR}/_CSR/CSR_Generator.h ${ASW_DIR}/_CSR/CSR_Generator_Types.h

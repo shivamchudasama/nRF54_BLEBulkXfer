@@ -172,7 +172,27 @@ This project's firmware builds both roles (`_LIB/CMakeLists.txt`): the Server re
 segments and certificates, the Client sends the CSR. It keeps its RX-priority
 `CONFIG_BT_ATT_TX_COUNT=6` and lowers `BLK_CLI_WRITE_INFLIGHT_MAX` to 3 instead (2 + 3 < 6);
 the CSR is under 1 KiB, so the smaller Client window costs nothing. The Server's single
-callback set is shared by appType range through `_ASW/_BLK_SVC/BulkRouter.c`.
+callback set is shared by appType range through `_ASW/_BLK_SVC/BulkRouter.c`. For device
+pairing both roles also carry certificates and OOB data to and from a peer device.
+
+### Several links: moving a role
+
+Each role binds one connection at a time, and a binding stays until that link drops. A
+device that keeps a host link up while it talks to a peer on a second link moves the roles
+explicitly, between transfers:
+
+- **Server:** `gv_BLKS_OnConnected()` binds only the first connection. `gi_BLKS_Rebind(peer)`
+  moves the binding to the peer, and `gi_BLKS_Rebind(host)` (or `NULL`) moves it back. The
+  link it leaves is not disconnected: its writes to DATA are simply dropped from then on.
+- **Client:** `gi_BLKC_Detach()` releases the bound link and unsubscribes its CTRL, then
+  `gi_BLKC_Attach(peer)` discovers the peer's service. The Client keeps two subscription
+  parameter sets, used in turn, because the stack holds on to the old one until the
+  unsubscribe's CCC write has completed.
+
+Both calls refuse to move a role in the middle of a transfer (`-EBUSY`). This project's
+pairing module moves both roles to the peer device for the certificate and OOB exchange
+([_DOC/Pairing/README.md](../Pairing/README.md)), and limits what that peer can reach with the
+router's appType filter (`gv_BulkRouter_SetFilter()`).
 
 ### Threading model
 

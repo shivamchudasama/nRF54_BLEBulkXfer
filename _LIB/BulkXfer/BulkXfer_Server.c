@@ -107,6 +107,9 @@ static void sv_RxSendAck(void);
 static void sv_RxComplete(void);
 static void sv_RxOnStart(const BlkFrame_T *stpt_frame);
 static void sv_RxOnData(const BlkFrame_T *stpt_frame);
+static void sv_SrvBind(struct bt_conn *stpt_conn);
+static void sv_SrvUnbind(void);
+static void sv_SrvTuneLink(struct bt_conn *stpt_conn);
 #if defined(CONFIG_BT_GATT_CLIENT)
 static void sv_SrvMtuExchanged(struct bt_conn *stpt_conn, uint8_t u8_err,
    struct bt_gatt_exchange_params *stpt_params);
@@ -683,6 +686,93 @@ static void sv_SrvMtuExchanged(struct bt_conn *stpt_conn, uint8_t u8_err,
 }
 #endif // CONFIG_BT_GATT_CLIENT
 
+/**
+ * @private       sv_SrvBind
+ * @brief         Bind a connection. Caller holds gst_BLK_lock and has checked
+ *                that none is bound.
+ *
+ *                Takes its own reference, released by sv_SrvUnbind(). Bumps
+ *                st_BLKS_connGen before publishing the connection to the
+ *                write hook, so every frame the hook accepts for the new link
+ *                carries the new generation.
+ * @param[in]     stpt_conn Connection to bind.
+ * @return        void
+ */
+static void sv_SrvBind(struct bt_conn *stpt_conn)
+{
+   // Own reference, released in sv_SrvUnbind()
+   sstpt_BLKS_conn = bt_conn_ref(stpt_conn);
+
+   // Bumped before publishing st_BLKS_hookConn so the first frame accepted
+   // for this link already carries the new generation
+   (void)atomic_inc(&st_BLKS_connGen);
+
+   // Lock-free copy for the write hook. Only compared, never dereferenced.
+   (void)atomic_ptr_set(&st_BLKS_hookConn, stpt_conn);
+}
+
+/**
+ * @private       sv_SrvUnbind
+ * @brief         Release the bound connection. Caller holds gst_BLK_lock and
+ *                has checked that one is bound; the caller wakes the engine.
+ *
+ *                Unpublishes the connection from the write hook and bumps
+ *                st_BLKS_connGen (queued frames are discarded by the next
+ *                gv_BLKS_EnginePre()), clears the Server events and timers,
+ *                records a running transfer as failed for the engine
+ *                (fpt_onRxDone(eBS_DISCONNECTED)), restores the notification
+ *                credits and drops the connection reference.
+ * @return        void
+ */
+static void sv_SrvUnbind(void)
+{
+   // Stop queueing frames for this link and invalidate those already queued
+   (void)atomic_ptr_set(&st_BLKS_hookConn, NULL);
+   (void)atomic_inc(&st_BLKS_connGen);
+
+   atomic_clear_bit(&gt_BLK_events, eBE_SRV_ACK_DUE);
+   atomic_clear_bit(&gt_BLK_events, eBE_SRV_IDLE);
+   atomic_clear_bit(&gt_BLK_events, eBE_SRV_OVERFLOW);
+   atomic_clear_bit(&gt_BLK_events, eBE_SRV_ABORT_REQ);
+   k_timer_stop(&sst_BLKS_ackTimer);
+   k_timer_stop(&sst_BLKS_idleTimer);
+
+   // Callbacks cannot run in BT context: record it for the engine
+   if (sst_BLKS_session.b_active)
+   {
+      sst_BLKS_pendingDone.b_pending = true;
+      sst_BLKS_pendingDone.u8_appType = sst_BLKS_session.u8_appType;
+      sst_BLKS_pendingDone.u32_totalLen = sst_BLKS_session.u32_totalLen;
+      sst_BLKS_session.b_active = false;
+   }
+
+   // Notifications lost with the link never complete: restore all credits
+   sv_SrvResetCredits();
+
+   bt_conn_unref(sstpt_BLKS_conn);
+   sstpt_BLKS_conn = NULL;
+}
+
+/**
+ * @private       sv_SrvTuneLink
+ * @brief         Request 2M PHY and maximum data length, and (with
+ *                CONFIG_BT_GATT_CLIENT) start an ATT MTU exchange whose
+ *                result is only logged. Called without gst_BLK_lock: these
+ *                stack calls may block.
+ * @param[in]     stpt_conn Connection to tune.
+ * @return        void
+ */
+static void sv_SrvTuneLink(struct bt_conn *stpt_conn)
+{
+   gv_BLK_TuneLink(stpt_conn);
+#if defined(CONFIG_BT_GATT_CLIENT)
+   // Static: the stack keeps this pointer until the callback runs
+   static struct bt_gatt_exchange_params slst_BLKS_mtuParams = { .func = sv_SrvMtuExchanged };
+
+   (void)bt_gatt_exchange_mtu(stpt_conn, &slst_BLKS_mtuParams);
+#endif // CONFIG_BT_GATT_CLIENT
+}
+
 /******************************************************************************/
 /*                                                                            */
 /*                        PUBLIC FUNCTION DEFINITIONS                         */
@@ -918,29 +1008,14 @@ void gv_BLKS_OnConnected(struct bt_conn *stpt_conn)
       return;
    }
 
-   // Own reference, released in gv_BLKS_OnDisconnected()
-   sstpt_BLKS_conn = bt_conn_ref(stpt_conn);
-
-   // Bumped before publishing st_BLKS_hookConn so the first frame accepted
-   // for this link already carries the new generation
-   (void)atomic_inc(&st_BLKS_connGen);
-
-   // Lock-free copy for the write hook. Only compared, never dereferenced.
-   (void)atomic_ptr_set(&st_BLKS_hookConn, stpt_conn);
-
+   sv_SrvBind(stpt_conn);
    b_tune = sst_BLKS_cfg.b_autoTuneLink;
    k_mutex_unlock(&gst_BLK_lock);
 
    // Check if the Server should request throughput-oriented link settings
    if (b_tune)
    {
-      gv_BLK_TuneLink(stpt_conn);
-#if defined(CONFIG_BT_GATT_CLIENT)
-      // Static: the stack keeps this pointer until the callback runs
-      static struct bt_gatt_exchange_params slst_BLKS_mtuParams = { .func = sv_SrvMtuExchanged };
-
-      (void)bt_gatt_exchange_mtu(stpt_conn, &slst_BLKS_mtuParams);
-#endif // CONFIG_BT_GATT_CLIENT
+      sv_SrvTuneLink(stpt_conn);
    }
 }
 
@@ -983,34 +1058,89 @@ void gv_BLKS_OnDisconnected(struct bt_conn *stpt_conn)
       return;
    }
 
-   // Stop queueing frames for this link and invalidate those already queued
-   (void)atomic_ptr_set(&st_BLKS_hookConn, NULL);
-   (void)atomic_inc(&st_BLKS_connGen);
-
-   atomic_clear_bit(&gt_BLK_events, eBE_SRV_ACK_DUE);
-   atomic_clear_bit(&gt_BLK_events, eBE_SRV_IDLE);
-   atomic_clear_bit(&gt_BLK_events, eBE_SRV_OVERFLOW);
-   atomic_clear_bit(&gt_BLK_events, eBE_SRV_ABORT_REQ);
-   k_timer_stop(&sst_BLKS_ackTimer);
-   k_timer_stop(&sst_BLKS_idleTimer);
-
-   // Callbacks cannot run in BT context: record it for the engine
-   if (sst_BLKS_session.b_active)
-   {
-      sst_BLKS_pendingDone.b_pending = true;
-      sst_BLKS_pendingDone.u8_appType = sst_BLKS_session.u8_appType;
-      sst_BLKS_pendingDone.u32_totalLen = sst_BLKS_session.u32_totalLen;
-      sst_BLKS_session.b_active = false;
-   }
-
-   // Notifications lost with the link never complete: restore all credits
-   sv_SrvResetCredits();
-
-   bt_conn_unref(sstpt_BLKS_conn);
-   sstpt_BLKS_conn = NULL;
+   sv_SrvUnbind();
    k_mutex_unlock(&gst_BLK_lock);
 
    gv_BLK_Kick();
+}
+
+/**
+ * @public        gi_BLKS_Rebind
+ * @brief         Move the Server to another connection, or release it, while
+ *                both links stay up. Thread context only; not ISR-safe.
+ *
+ *                For a device that serves several links in turn, for example
+ *                a host link and then a peer link. gv_BLKS_OnConnected()
+ *                binds only the first connection; this call moves the
+ *                binding explicitly.
+ *
+ *                - Refused while an incoming transfer is in progress, so no
+ *                  transfer is ever cut by a rebind.
+ *                - Releases the bound connection as gv_BLKS_OnDisconnected()
+ *                  does (frames still queued for it are discarded, its
+ *                  reference is dropped). Writes the old link makes to DATA
+ *                  afterwards are dropped silently. The old link's CTRL
+ *                  subscription is left to its client.
+ *                - Then binds stpt_conn as gv_BLKS_OnConnected() does,
+ *                  including the link tuning when b_autoTuneLink is set.
+ *                - Rebinding the connection that is already bound is a no-op.
+ * @param[in]     stpt_conn Connection to bind, or NULL to only release the
+ *                current one.
+ * @return        0 on success.
+ *                -EPERM if gi_BLKS_Init() has not run.
+ *                -EBUSY if an incoming transfer is in progress.
+ */
+int gi_BLKS_Rebind(struct bt_conn *stpt_conn)
+{
+   bool b_tune = false;
+
+   (void)k_mutex_lock(&gst_BLK_lock, K_FOREVER);
+
+   // Check if the Server is running
+   if (!sb_BLKS_initialized)
+   {
+      k_mutex_unlock(&gst_BLK_lock);
+      return -EPERM;
+   }
+
+   // Check if a transfer would be cut
+   if (sst_BLKS_session.b_active)
+   {
+      k_mutex_unlock(&gst_BLK_lock);
+      return -EBUSY;
+   }
+
+   // Check if there is nothing to move
+   if (stpt_conn == sstpt_BLKS_conn)
+   {
+      k_mutex_unlock(&gst_BLK_lock);
+      return 0;
+   }
+
+   // Check if a connection is bound: release it first
+   if (sstpt_BLKS_conn != NULL)
+   {
+      sv_SrvUnbind();
+   }
+
+   // Check if a new connection is to be bound
+   if (stpt_conn != NULL)
+   {
+      sv_SrvBind(stpt_conn);
+      b_tune = sst_BLKS_cfg.b_autoTuneLink;
+   }
+
+   k_mutex_unlock(&gst_BLK_lock);
+
+   gv_BLK_Kick();
+
+   // Check if the Server should request throughput-oriented link settings
+   if (b_tune)
+   {
+      sv_SrvTuneLink(stpt_conn);
+   }
+
+   return 0;
 }
 
 /**

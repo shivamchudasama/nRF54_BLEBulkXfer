@@ -46,11 +46,14 @@
 /******************************************************************************/
 /**
  * @struct        BulkRoute_T
- * @brief         One module's appType range and its receive callbacks. Every
- *                callback is optional: a range without fpt_onRxStart or
- *                fpt_onRxData rejects transfers, one without fpt_onRxShort ignores
- *                short messages. The callbacks run on the BulkXfer engine thread
- *                with the BulkXfer lock held (see the BulkXfer API reference).
+ * @brief         One module's appType range and its callbacks. Every callback
+ *                is optional: a range without fpt_onRxStart or fpt_onRxData
+ *                rejects transfers, one without fpt_onRxShort ignores short
+ *                messages. fpt_onTxDone receives the result of the module's own
+ *                Client transfers (by appType), fpt_onCliReady the result of a
+ *                gi_BulkRouter_ClientAttach() the module asked for. The callbacks
+ *                run on the BulkXfer engine thread with the BulkXfer lock held
+ *                (see the BulkXfer API reference).
  */
 typedef struct
 {
@@ -60,6 +63,10 @@ typedef struct
    BlkRxData_F fpt_onRxData;                 /**< In-order chunk.                        */
    BlkRxDone_F fpt_onRxDone;                 /**< Transfer result.                       */
    BlkRxShort_F fpt_onRxShort;               /**< Short message.                         */
+#if BLK_ENABLE_CLIENT
+   BlkTxDone_F fpt_onTxDone;                 /**< Own Client transfer finished.          */
+   BlkCliReady_F fpt_onCliReady;             /**< Client attach finished.                */
+#endif // BLK_ENABLE_CLIENT
 } BulkRoute_T;
 
 /******************************************************************************/
@@ -81,6 +88,11 @@ typedef struct
 /******************************************************************************/
 extern int gi_BulkRouter_Register(const BulkRoute_T *stpt_route);
 extern int gi_BulkRouter_Start(void);
+extern void gv_BulkRouter_SetFilter(uint8_t u8_first, uint8_t u8_last);
+extern void gv_BulkRouter_ClearFilter(void);
+#if BLK_ENABLE_CLIENT
+extern int gi_BulkRouter_ClientAttach(struct bt_conn *stpt_conn, uint8_t u8_ownerAppType);
+#endif // BLK_ENABLE_CLIENT
 
 #endif //!_BULK_ROUTER_H
 
