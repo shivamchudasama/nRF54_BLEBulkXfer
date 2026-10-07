@@ -1,8 +1,9 @@
 # SPDX-License-Identifier: MIT
 """The Pairing page (_TOOLS/BleHostGUI/blehost/features/pairing.py).
 
-The page's logic (scan for the Pairing service, check each device, choose the
-roles, pair, cancel, unpair, which buttons are enabled, what the pills and step
+The page's logic (scan for the Pairing service and clear the progress pane,
+choose the roles, check the chosen devices, pair, refuse devices paired with
+each other, cancel, unpair, which buttons are enabled, what the pills and step
 lists show) runs against stand-in Tk variables and buttons, a fake AppContext
 whose run() executes the coroutine at once, and the simulated devices of
 test_pairing.py behind fake links (the orchestrator itself is tested there).
@@ -202,6 +203,7 @@ def test_result_pill():
     assert fpair.result_pill("Cancelled (…)") == ("Cancelled", "warn")
     assert fpair.result_pill("Failed: x") == ("Failed", "err")
     assert fpair.result_pill("Not started: x") == ("Failed", "err")
+    assert fpair.result_pill("Checked: central ready") == ("Checked", "info")
 
 
 # ---- scan, check, roles ----------------------------------------------------------------
@@ -221,19 +223,96 @@ def test_scan_keeps_pairing_devices_and_proposes_roles(page):
     assert fpair.choice_address(page.central_var.get()) == B[0]
 
 
-def test_check_reads_each_device(page):
+def test_check_reads_the_chosen_devices(page):
+    page.world.devices[C[0]] = SimDevice(C[0])
     scanned(page)
     page.world.devices[B[0]].prov_state = 1
     page._check()
     page.ctx.flush()
+    assert set(page._checked) == {A[0], B[0]}, "only the chosen central and peripheral"
     assert page._checked[A[0]].provisioned
     assert fpair.row_status(page._checked[B[0]]) == "not provisioned"
-    assert f"{B[0]}: not provisioned" in logged(page)
-    # An unreachable device shows its error, the others their status
+    assert "peripheral dev-E1: not provisioned" in logged(page)
+    # Shown in the progress pane
+    assert page.role_vars["central"].get() == "IDLE"
+    assert page.role_vars["peripheral"].get() == "IDLE"
+    assert page.result_var.get() == "Checked: central ready; peripheral not provisioned"
+    assert fpair.result_pill(page.result_var.get()) == ("Checked", "info")
+    # An unreachable device shows its error, the other its status
     page._found["AA:BB:CC:DD:EE:FF"] = ScanResult("AA:BB:CC:DD:EE:FF", "gone", -90, [])
+    page.peripheral_var.set(fpair.choice_text("gone", "AA:BB:CC:DD:EE:FF"))
     page._check()
     page.ctx.flush()
     assert fpair.row_status(page._checked["AA:BB:CC:DD:EE:FF"]).startswith("error:")
+    assert page.role_vars["peripheral"].get() == ""
+    assert "peripheral error:" in page.result_var.get()
+    # One role chosen: only that one
+    page.peripheral_var.set("")
+    page._checked.clear()
+    page._check()
+    page.ctx.flush()
+    assert set(page._checked) == {A[0]} and page.result_var.get() == "Checked: central ready"
+
+
+def test_check_shows_devices_paired_with_each_other(page):
+    scanned(page)
+    a, b = page.world.devices[A[0]], page.world.devices[B[0]]
+    a.state, a.peer, a.peer_type, a.role = pp.State.PAIRED, B[0], 1, 1
+    b.state, b.peer, b.peer_type, b.role = pp.State.PAIRED, A[0], 1, 2
+    page._check()
+    page.ctx.flush()
+    assert page.role_vars["central"].get().startswith("PAIRED as central")
+    assert page.role_vars["peripheral"].get().startswith("PAIRED as peripheral")
+    assert page.result_var.get().startswith("Paired with each other already")
+    assert fpair.result_pill(page.result_var.get()) == ("Paired", "ok")
+
+
+def test_scan_clears_the_progress_pane(page):
+    scanned(page)
+    page._pair()
+    page.ctx.flush()
+    assert page.result_var.get().startswith("Paired")
+    scanned(page)
+    assert page.result_var.get() == ""
+    assert page.role_vars["central"].get() == "" and page.role_vars["peripheral"].get() == ""
+    assert page._outcome is None
+
+
+def test_paired_devices_are_not_paired_again(page, dialogs):
+    scanned(page)
+    page._pair()
+    page.ctx.flush()
+    assert "pair" not in enabled(page), "paired with each other: unpair one first"
+    assert "paired with each other already" in page.hint_var.get()
+    controls = list(page.world.devices[A[0]].controls)
+    page._pair()
+    assert dialogs["errors"] and "paired with each other already" in dialogs["errors"][0]
+    assert page.world.devices[A[0]].controls == controls, "no START"
+    # Swapped roles are the same two devices
+    page._swap()
+    page._update()
+    assert "pair" not in enabled(page)
+    # Unpairing one of them allows a new run
+    page._unpair("central")
+    page.ctx.flush()
+    assert "pair" in enabled(page) and page.hint_var.get() == ""
+    page._pair()
+    page.ctx.flush()
+    assert page.result_var.get().startswith("Paired: both devices paired")
+
+
+def test_paired_devices_found_by_another_tool_are_refused(page):
+    """The page's statuses may be stale: the orchestrator checks again."""
+    scanned(page)
+    a, b = page.world.devices[A[0]], page.world.devices[B[0]]
+    a.state, a.peer, a.peer_type = pp.State.PAIRED, B[0], 1
+    b.state, b.peer, b.peer_type = pp.State.PAIRED, A[0], 1
+    page._update()
+    assert "pair" in enabled(page), "not checked since"
+    page._pair()
+    page.ctx.flush()
+    assert page.result_var.get().startswith("Not started: the devices are paired with each other")
+    assert a.controls == [] and b.controls == []
 
 
 def test_swap(page):

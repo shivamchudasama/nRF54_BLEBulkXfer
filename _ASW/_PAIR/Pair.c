@@ -19,7 +19,16 @@
  *                  5. the central starts pairing (level 4); SMP asks both for
  *                     OOB data, which each answers once the peer's is verified;
  *                  6. once bonded, the central writes SECURED on the peer, which
- *                     only a level-4 link may write; the peripheral lights LED 1.
+ *                     only a level-4 link may write; the peripheral lights its
+ *                     LED (DK_LED1, LED0 on the board). The role and the peer
+ *                     address are saved in settings with the bond.
+ *
+ *                A bonded pair reconnects by itself, after a reset or a lost
+ *                link: the peripheral advertises (undirected, also while a host
+ *                is connected), the central scans for the peer and connects,
+ *                then encrypts with the stored keys. Once the link is at level
+ *                4 again, both blink their LED for as long as it stays up. A
+ *                link that does not reach level 4 is dropped and retried.
  *
  *                Every step is reported to the host in STATUS. Callbacks (BT
  *                stack, BulkXfer engine, GATT writes) only check, copy and post
@@ -50,6 +59,7 @@
 #include <zephyr/bluetooth/bluetooth.h>
 #include <zephyr/bluetooth/conn.h>
 #include <zephyr/bluetooth/gatt.h>
+#include <zephyr/settings/settings.h>
 #include <dk_buttons_and_leds.h>
 #include <psa/crypto.h>
 #include "PairOob.h"
@@ -116,10 +126,49 @@
 
 /**
  * @def           PAIR_LED
- * @brief         DK LED lit on the peripheral when the paired central has
- *                written SECURED.
+ * @brief         DK LED (LED0 on the board): steady on the peripheral when the
+ *                paired central has written SECURED; blinking on both devices
+ *                while a bonded reconnection is up at level 4.
  */
 #define PAIR_LED                             (DK_LED1)
+
+/**
+ * @def           PAIR_LED_BLINK_MS
+ * @brief         Half period of the LED blink.
+ */
+#define PAIR_LED_BLINK_MS                    (500)
+
+/**
+ * @def           PAIR_RECONNECT_DELAY_MS
+ * @brief         Central: wait before scanning for the bonded peer again after
+ *                the link dropped or an attempt failed.
+ */
+#define PAIR_RECONNECT_DELAY_MS              (1000)
+
+/**
+ * @def           PAIR_RECONNECT_SECURE_MS
+ * @brief         A bonded peer link must reach level 4 within this time, or it
+ *                is dropped.
+ */
+#define PAIR_RECONNECT_SECURE_MS             (10000)
+
+/**
+ * @def           PAIR_SETTINGS_SUBTREE
+ * @brief         Settings subtree of this module.
+ */
+#define PAIR_SETTINGS_SUBTREE                "pair"
+
+/**
+ * @def           PAIR_SETTINGS_BOND_KEY
+ * @brief         Settings key (in PAIR_SETTINGS_SUBTREE) of the bond record.
+ */
+#define PAIR_SETTINGS_BOND_KEY               "peer"
+
+/**
+ * @def           PAIR_BOND_RECORD_LEN
+ * @brief         Bond record in settings: [u8 role][7 B peer address].
+ */
+#define PAIR_BOND_RECORD_LEN                 (1U + PAIR_ADDR_LEN)
 
 /**
  * @def           PAIR_RX_CERT
@@ -170,7 +219,22 @@ typedef enum
    ePEV_SECURED_RX,                          /**< Peripheral: peer wrote SECURED      */
    ePEV_SECURED_TX,                          /**< Central: SECURED written (i32 err)  */
    ePEV_TIMEOUT,                             /**< Run timer (i32 = run id)            */
+   ePEV_RECONNECT,                           /**< Central: look for the bonded peer   */
+   ePEV_RECONNECTED,                         /**< Bonded peer link up (i32 0) or not  */
+   ePEV_SECURITY,                            /**< Peer link level (i32), u8 = error   */
+   ePEV_SECURE_TIMEOUT,                      /**< Bonded link not at level 4 in time  */
 } PairEventType_E;
+
+/**
+ * @enum          PairLed_E
+ * @brief         What PAIR_LED shows.
+ */
+typedef enum
+{
+   ePLD_OFF = 0,                             /**< No proven link                       */
+   ePLD_ON,                                  /**< Peripheral: pairing proven (SECURED) */
+   ePLD_BLINK,                               /**< Bonded reconnection up at level 4    */
+} PairLed_E;
 
 /******************************************************************************/
 /*                                                                            */
@@ -205,6 +269,20 @@ typedef struct
 /******************************************************************************/
 static void sv_Post(const PairEvent_T *stpt_event);
 static void sv_PostSimple(uint8_t u8_type, int32_t i32_value);
+static void sv_SetLed(PairLed_E e_mode);
+static void sv_SaveBond(void);
+static void sv_ForgetBond(void);
+static void sv_ScheduleReconnect(void);
+static void sv_StopReconnect(void);
+static void sv_ReconnectStart(void);
+static void sv_HandleReconnected(int32_t i32_err);
+static void sv_HandleSecurity(int32_t i32_level, uint8_t u8_err);
+static void sv_HandleSecureTimeout(void);
+static void sv_LedWork(struct k_work *stpt_work);
+static void sv_ReconnectWork(struct k_work *stpt_work);
+static void sv_SecureTimeout(struct k_work *stpt_work);
+static int si_SettingsSet(const char *cpt_key, size_t t_len, settings_read_cb fpt_read,
+   void *vpt_arg);
 static bool sb_IsRunningState(PairState_E e_state);
 static struct bt_conn *sstpt_PeerConnRef(void);
 static void sv_Publish(void);
@@ -407,6 +485,61 @@ static bool sb_oobAnswered = false;
 static bool sb_securedSent = false;
 
 /**
+ * @var           st_bondRole
+ * @brief         PairRole_E this device has towards its bonded peer
+ *                (sst_peerAddr), whom it reconnects to; ePRL_NONE if there is
+ *                none to reconnect to. Written by the pairing thread; read by
+ *                callbacks.
+ */
+static atomic_t st_bondRole = ATOMIC_INIT(ePRL_NONE);
+
+/**
+ * @var           sb_bondLink
+ * @brief         The peer link is a bonded reconnection (not a pairing run's).
+ *                Pairing thread.
+ */
+static bool sb_bondLink = false;
+
+/**
+ * @var           sb_rolesMoved
+ * @brief         BulkXfer is on the peer link (a run's link came up) and not
+ *                returned to the host yet. Pairing thread.
+ */
+static bool sb_rolesMoved = false;
+
+/**
+ * @var           sb_bondSecured
+ * @brief         The bonded reconnection reached level 4. Pairing thread.
+ */
+static bool sb_bondSecured = false;
+
+/**
+ * @var           su8ar_savedBond
+ * @brief         Bond record read from settings at start-up
+ *                ([u8 role][7 B peer address]).
+ */
+static uint8_t su8ar_savedBond[PAIR_BOND_RECORD_LEN];
+
+/**
+ * @var           sb_savedBondValid
+ * @brief         su8ar_savedBond holds a valid record.
+ */
+static bool sb_savedBondValid = false;
+
+/**
+ * @var           st_ledMode
+ * @brief         PairLed_E to show; applied by sv_LedWork(), the only writer of
+ *                the LED.
+ */
+static atomic_t st_ledMode = ATOMIC_INIT(ePLD_OFF);
+
+/**
+ * @var           sb_ledLit
+ * @brief         The LED is on. System work queue.
+ */
+static bool sb_ledLit = false;
+
+/**
  * @var           st_peerKey
  * @brief         Peer public key (volatile PSA key) from its certificate, 0 if
  *                none.
@@ -517,6 +650,31 @@ K_WORK_DELAYABLE_DEFINE(sst_connectTimeout, sv_ConnectTimeout);
 K_WORK_DELAYABLE_DEFINE(sst_runTimeout, sv_RunTimeout);
 
 /**
+ * @var           sst_reconnectWork
+ * @brief         Central: look for the bonded peer again after a delay.
+ */
+K_WORK_DELAYABLE_DEFINE(sst_reconnectWork, sv_ReconnectWork);
+
+/**
+ * @var           sst_secureTimeout
+ * @brief         A bonded peer link must reach level 4 in
+ *                PAIR_RECONNECT_SECURE_MS.
+ */
+K_WORK_DELAYABLE_DEFINE(sst_secureTimeout, sv_SecureTimeout);
+
+/**
+ * @var           sst_ledWork
+ * @brief         Applies st_ledMode to the LED, and blinks it.
+ */
+K_WORK_DELAYABLE_DEFINE(sst_ledWork, sv_LedWork);
+
+/**
+ * @var           settings_handler_pair
+ * @brief         Loads the bond record (settings_load(), before BT_READY).
+ */
+SETTINGS_STATIC_HANDLER_DEFINE(pair, PAIR_SETTINGS_SUBTREE, NULL, si_SettingsSet, NULL, NULL);
+
+/**
  * @var           sst_pairMsgq
  * @brief         Events to the pairing thread.
  */
@@ -585,6 +743,115 @@ static void sv_PostSimple(uint8_t u8_type, int32_t i32_value)
 }
 
 /**
+ * @private       sv_SetLed
+ * @brief         Show something else on the LED (sv_LedWork() applies it).
+ * @param[in]     e_mode PairLed_E.
+ * @return        None.
+ */
+static void sv_SetLed(PairLed_E e_mode)
+{
+   (void)atomic_set(&st_ledMode, (atomic_val_t)e_mode);
+   (void)k_work_reschedule(&sst_ledWork, K_NO_WAIT);
+}
+
+/**
+ * @private       sv_SaveBond
+ * @brief         Paired: remember the role and the peer, in RAM for the
+ *                reconnection and in settings for the next start-up.
+ * @return        None.
+ */
+static void sv_SaveBond(void)
+{
+   uint8_t u8ar_record[PAIR_BOND_RECORD_LEN];
+   int i_ret;
+
+   u8ar_record[0] = (uint8_t)se_role;
+   (void)memcpy(&u8ar_record[1], PAIR_ADDR_BYTES(&sst_peerAddr), PAIR_ADDR_LEN);
+   (void)atomic_set(&st_bondRole, (atomic_val_t)se_role);
+
+   i_ret = settings_save_one(PAIR_SETTINGS_SUBTREE "/" PAIR_SETTINGS_BOND_KEY, u8ar_record,
+      sizeof(u8ar_record));
+
+   // Check if the record was stored (the bond itself is the stack's)
+   if (i_ret != 0)
+   {
+      APP_LOG_WRN("bond record not saved (%d): no reconnection after a reset", i_ret);
+   }
+}
+
+/**
+ * @private       sv_ForgetBond
+ * @brief         No bonded peer to reconnect to any more (START, UNPAIR, wipe).
+ * @return        None.
+ */
+static void sv_ForgetBond(void)
+{
+   (void)atomic_set(&st_bondRole, ePRL_NONE);
+   sb_savedBondValid = false;
+   (void)settings_delete(PAIR_SETTINGS_SUBTREE "/" PAIR_SETTINGS_BOND_KEY);
+}
+
+/**
+ * @private       sv_ScheduleReconnect
+ * @brief         Central: look for the bonded peer again in
+ *                PAIR_RECONNECT_DELAY_MS.
+ * @return        None.
+ */
+static void sv_ScheduleReconnect(void)
+{
+   // Check if this device is the one that connects
+   if (atomic_get(&st_bondRole) == ePRL_CENTRAL)
+   {
+      (void)k_work_schedule(&sst_reconnectWork, K_MSEC(PAIR_RECONNECT_DELAY_MS));
+   }
+}
+
+/**
+ * @private       sv_StopReconnect
+ * @brief         Stop reconnecting: the timers, and the central's scan or
+ *                connection attempt. Outside a run.
+ * @return        None.
+ */
+static void sv_StopReconnect(void)
+{
+   (void)k_work_cancel_delayable(&sst_reconnectWork);
+   (void)k_work_cancel_delayable(&sst_secureTimeout);
+   sv_StopRadio();
+}
+
+/**
+ * @private       sv_ReconnectStart
+ * @brief         Central: scan for the bonded peer, unless it is connected or
+ *                being reached already.
+ * @return        None.
+ */
+static void sv_ReconnectStart(void)
+{
+   int i_ret;
+
+   // Check if this central has a bonded peer to reach, and nothing under way
+   if ((atomic_get(&st_state) != ePST_PAIRED) || (atomic_get(&st_bondRole) != ePRL_CENTRAL) ||
+      (sstpt_PeerConnRef() != NULL) || sb_scanning || (sstpt_createConn != NULL))
+   {
+      return;
+   }
+
+   (void)atomic_set(&st_scanMatched, 0);
+   i_ret = bt_le_scan_start(BT_LE_SCAN_PASSIVE, sv_ScanCb);
+
+   // Check if the scan runs
+   if (i_ret != 0)
+   {
+      APP_LOG_WRN("scan for the bonded peer not started (%d)", i_ret);
+      sv_ScheduleReconnect();
+      return;
+   }
+
+   sb_scanning = true;
+   APP_LOG_INF("looking for the bonded peer");
+}
+
+/**
  * @private       sb_IsRunningState
  * @brief         Whether a state belongs to a run in progress.
  * @param[in]     e_state State.
@@ -649,6 +916,8 @@ static void sv_SetState(PairState_E e_state)
  */
 static void sv_ResetRun(void)
 {
+   sb_bondLink = false;
+   sb_bondSecured = false;
    sb_runHasLink = false;
    sb_ownCertSent = false;
    sb_peerCertOk = false;
@@ -714,6 +983,7 @@ static void sv_ReturnRoles(void)
    struct bt_conn *stpt_host = gstpt_BLE_GetHostConn();
    int i_ret;
 
+   sb_rolesMoved = false;
    gv_BulkRouter_ClearFilter();
 
    i_ret = gi_BLKS_Rebind(stpt_host);
@@ -761,8 +1031,9 @@ static void sv_EndRun(void)
 /**
  * @private       sv_DropPeerLink
  * @brief         Disconnect the peer link if it is up. Its BulkXfer bindings
- *                are released by the disconnect; sv_HandleDisconnected() then
- *                returns the roles to the host.
+ *                (if BulkXfer is on it) are released by the disconnect;
+ *                sv_HandleDisconnected() then returns the roles to the host.
+ *                BulkXfer on the host link (a bonded link) is left alone.
  * @return        None.
  */
 static void sv_DropPeerLink(void)
@@ -772,11 +1043,15 @@ static void sv_DropPeerLink(void)
    // Check if the peer link is up
    if (stpt_peer != NULL)
    {
-      gv_BLKS_AbortRx();
-      gv_BLKC_AbortTx();
+      // Check if BulkXfer serves the peer link (its transfers end now)
+      if (sb_rolesMoved)
+      {
+         gv_BLKS_AbortRx();
+         gv_BLKC_AbortTx();
+      }
       (void)bt_conn_disconnect(stpt_peer, BT_HCI_ERR_REMOTE_USER_TERM_CONN);
    }
-   else
+   else if (sb_rolesMoved)
    {
       sv_ReturnRoles();
    }
@@ -824,7 +1099,8 @@ static void sv_Fail(PairError_E e_error, int32_t i32_detail)
 /**
  * @private       sv_Succeed
  * @brief         End the run paired: the peer link stays up, encrypted and
- *                bonded; BulkXfer goes back to the host.
+ *                bonded; BulkXfer goes back to the host; the bond is saved for
+ *                the reconnections.
  * @return        None.
  */
 static void sv_Succeed(void)
@@ -833,6 +1109,7 @@ static void sv_Succeed(void)
 
    sv_EndRun();
    sv_ReturnRoles();
+   sv_SaveBond();
    sv_SetState(ePST_PAIRED);
 }
 
@@ -853,10 +1130,12 @@ static void sv_ForgetPeer(bool b_allBonds)
       sv_EndRun();
    }
 
+   sv_StopReconnect();
+   sv_ForgetBond();
    sv_DropPeerLink();
    // NULL, like an all-zero address (BT_ADDR_LE_ANY), deletes every bond
    (void)bt_unpair(BT_ID_DEFAULT, b_allBonds ? NULL : &st_peer);
-   (void)dk_set_led(PAIR_LED, 0U);
+   sv_SetLed(ePLD_OFF);
 
    (void)k_mutex_lock(&sst_statusLock, K_FOREVER);
    se_error = ePER_NONE;
@@ -1009,8 +1288,9 @@ static void sv_WriteSecured(void)
 
 /**
  * @private       sv_HandleBtReady
- * @brief         The stack is up and its settings (bonds) are loaded: learn
- *                this device's address; keep a bond only while provisioned.
+ * @brief         The stack is up and its settings (bonds, the bond record) are
+ *                loaded: learn this device's address; keep a bond only while
+ *                provisioned; reconnect to the bonded peer.
  * @return        None.
  */
 static void sv_HandleBtReady(void)
@@ -1039,32 +1319,56 @@ static void sv_HandleBtReady(void)
       bt_foreach_bond(BT_ID_DEFAULT, sv_BondFound, NULL);
    }
 
+   // Check if the bond record has no bond (any more): it is stale
+   if (sb_savedBondValid && (atomic_get(&st_bondRole) == ePRL_NONE))
+   {
+      sv_ForgetBond();
+   }
+
    sv_Publish();
+
+   // Check if this device has a bonded peer to reconnect to
+   if (atomic_get(&st_bondRole) == ePRL_CENTRAL)
+   {
+      sv_ReconnectStart();
+   }
+   else if (atomic_get(&st_bondRole) == ePRL_PERIPHERAL)
+   {
+      gv_BLE_RefreshAdv();
+   }
 }
 
 /**
  * @private       sv_BondFound
- * @brief         bt_foreach_bond() callback: the first bond is the paired peer.
+ * @brief         bt_foreach_bond() callback: the bond of the saved record is
+ *                the paired peer, reconnected to in the saved role; without a
+ *                record, the first bond is (and is not reconnected to).
  * @param[in]     stpt_info Bond.
  * @param[in]     vpt_user Unused.
  * @return        None.
  */
 static void sv_BondFound(const struct bt_bond_info *stpt_info, void *vpt_user)
 {
+   bool b_saved = sb_savedBondValid &&
+      (memcmp(&stpt_info->addr, &su8ar_savedBond[1], PAIR_ADDR_LEN) == 0);
+   PairRole_E e_role = b_saved ? (PairRole_E)su8ar_savedBond[0] : ePRL_NONE;
+
    ARG_UNUSED(vpt_user);
 
-   // Check if a peer is known already (the first bond wins)
-   if (atomic_get(&st_state) == ePST_PAIRED)
+   // Check if a peer is known already (the record's bond, else the first one)
+   if ((atomic_get(&st_state) == ePST_PAIRED) && !b_saved)
    {
       return;
    }
 
    (void)k_mutex_lock(&sst_statusLock, K_FOREVER);
    sst_peerAddr = stpt_info->addr;
+   se_role = e_role;
    (void)atomic_set(&st_state, ePST_PAIRED);
    k_mutex_unlock(&sst_statusLock);
+   (void)atomic_set(&st_bondRole, (atomic_val_t)e_role);
 
-   APP_LOG_INF("bonded peer restored");
+   APP_LOG_INF("bonded peer restored%s", b_saved ? "" : " (no record: not reconnected)");
 }
 
 /**
@@ -1085,10 +1389,13 @@ static void sv_HandleStart(const PairEvent_T *stpt_event)
       return;
    }
 
-   // A previous pairing's link goes first. It is released here, so its
-   // disconnect is not taken for this run's (BulkXfer is already the host's).
+   // A previous pairing goes first: no more reconnecting to it, and its link
+   // is released here, so its disconnect is not taken for this run's
+   // (BulkXfer is already the host's).
+   sv_StopReconnect();
+   sv_ForgetBond();
    sv_ReleaseOldLink();
-   (void)dk_set_led(PAIR_LED, 0U);
+   sv_SetLed(ePLD_OFF);
    sv_ResetRun();
    su32_runId++;
 
@@ -1167,15 +1474,18 @@ static void sv_HandleStart(const PairEvent_T *stpt_event)
 
 /**
  * @private       sv_HandleScanMatch
- * @brief         Central: the peer advertises; stop scanning and connect.
+ * @brief         Central: the peer advertises (to a run, or as the bonded
+ *                peer); stop scanning and connect.
  * @return        None.
  */
 static void sv_HandleScanMatch(void)
 {
+   bool b_run = (atomic_get(&st_state) == ePST_ARMED);
    int i_ret;
 
-   // Check if the run still waits for the peer
-   if ((atomic_get(&st_state) != ePST_ARMED) || !sb_scanning)
+   // Check if a run, or the reconnection, still waits for the peer
+   if ((!b_run && ((atomic_get(&st_state) != ePST_PAIRED) ||
+         (atomic_get(&st_bondRole) != ePRL_CENTRAL))) || !sb_scanning)
    {
       return;
    }
@@ -1191,7 +1501,17 @@ static void sv_HandleScanMatch(void)
    if (i_ret != 0)
    {
       sstpt_createConn = NULL;
-      sv_Fail(ePER_CONNECT, i_ret);
+
+      // Check if a run made it, or the reconnection (which tries again)
+      if (b_run)
+      {
+         sv_Fail(ePER_CONNECT, i_ret);
+      }
+      else
+      {
+         APP_LOG_WRN("bonded peer not connected (%d)", i_ret);
+         sv_ScheduleReconnect();
+      }
    }
 }
 
@@ -1206,6 +1526,13 @@ static void sv_HandleConnected(int32_t i32_err)
 {
    struct bt_conn *stpt_peer = sstpt_PeerConnRef();
    int i_ret;
+
+   // Check if it is the end of an attempt this run did not make: a
+   // reconnection's, cancelled when START came
+   if ((i32_err != 0) && (se_role == ePRL_CENTRAL) && (sstpt_createConn == NULL))
+   {
+      return;
+   }
 
    // The connection object from bt_conn_le_create() is not needed any more
    if (sstpt_createConn != NULL)
@@ -1239,6 +1566,7 @@ static void sv_HandleConnected(int32_t i32_err)
    sv_SetState(ePST_CONNECTED);
 
    // From now on only the pairing range is reachable, on whatever link
+   sb_rolesMoved = true;
    gv_BulkRouter_SetFilter(PAIR_APP_TYPE_FIRST, PAIR_APP_TYPE_LAST);
    i_ret = gi_BLKS_Rebind(stpt_peer);
 
@@ -1266,8 +1594,9 @@ static void sv_HandleConnected(int32_t i32_err)
  * @private       sv_HandleDisconnected
  * @brief         The peer link is down (gv_Pair_OnDisconnected() has already
  *                cleared st_peerConn): drop its reference, give BulkXfer back
- *                to the host. The run that had it fails; a pairing stays
- *                paired (bonded).
+ *                to the host if it was moved. The run that had it fails; a
+ *                pairing stays paired (bonded), its LED goes off and the
+ *                reconnection starts.
  * @param[in]     stpt_conn The link (its reference is dropped here).
  * @param[in]     i32_reason HCI reason.
  * @return        None.
@@ -1281,12 +1610,140 @@ static void sv_HandleDisconnected(struct bt_conn *stpt_conn, int32_t i32_reason)
    }
 
    APP_LOG_INF("peer link down (reason 0x%02x)", (unsigned int)i32_reason);
-   sv_ReturnRoles();
+
+   // Check if BulkXfer is still on the peer link
+   if (sb_rolesMoved)
+   {
+      sv_ReturnRoles();
+   }
 
    // Check if the running pairing lost its link
    if (sb_runHasLink && sb_IsRunningState((PairState_E)atomic_get(&st_state)))
    {
       sv_Fail(ePER_LINK_LOST, i32_reason);
+   }
+   // Check if the bonded peer is gone: reach it again
+   else if (atomic_get(&st_state) == ePST_PAIRED)
+   {
+      sb_bondLink = false;
+      sb_bondSecured = false;
+      (void)k_work_cancel_delayable(&sst_secureTimeout);
+      sv_SetLed(ePLD_OFF);
+
+      // Check if this device connects, or waits for the peer to
+      if (atomic_get(&st_bondRole) == ePRL_CENTRAL)
+      {
+         sv_ScheduleReconnect();
+      }
+      else if (atomic_get(&st_bondRole) == ePRL_PERIPHERAL)
+      {
+         gv_BLE_RefreshAdv();
+      }
+   }
+}
+
+/**
+ * @private       sv_HandleReconnected
+ * @brief         A bonded peer link is up (or the central's attempt failed):
+ *                the central encrypts it with the stored keys; both give it
+ *                PAIR_RECONNECT_SECURE_MS to reach level 4.
+ * @param[in]     i32_err 0, or the HCI error of a failed attempt.
+ * @return        None.
+ */
+static void sv_HandleReconnected(int32_t i32_err)
+{
+   struct bt_conn *stpt_peer = sstpt_PeerConnRef();
+   int i_ret;
+
+   // The connection object from bt_conn_le_create() is not needed any more
+   if (sstpt_createConn != NULL)
+   {
+      bt_conn_unref(sstpt_createConn);
+      sstpt_createConn = NULL;
+   }
+
+   // Check if the bond is still the one to reach (START or UNPAIR came first)
+   if ((atomic_get(&st_state) != ePST_PAIRED) || (atomic_get(&st_bondRole) == ePRL_NONE))
+   {
+      // Check if a link of no use came up (not a run's, which is up to the run)
+      if ((i32_err == 0) && (stpt_peer != NULL) &&
+         !sb_IsRunningState((PairState_E)atomic_get(&st_state)))
+      {
+         sv_DropPeerLink();
+      }
+      return;
+   }
+
+   // Check if the link came up
+   if ((i32_err != 0) || (stpt_peer == NULL))
+   {
+      APP_LOG_WRN("bonded peer not reached (0x%02x)", (unsigned int)i32_err);
+      sv_ScheduleReconnect();
+      return;
+   }
+
+   sb_bondLink = true;
+   sb_bondSecured = false;
+   APP_LOG_INF("bonded peer link up");
+   (void)k_work_schedule(&sst_secureTimeout, K_MSEC(PAIR_RECONNECT_SECURE_MS));
+
+   // Check if this device starts encryption
+   if (atomic_get(&st_bondRole) == ePRL_CENTRAL)
+   {
+      i_ret = bt_conn_set_security(stpt_peer, BT_SECURITY_L4);
+
+      // Check if encryption could not start
+      if (i_ret != 0)
+      {
+         APP_LOG_WRN("bonded link not encrypted (%d)", i_ret);
+         sv_DropPeerLink();
+      }
+   }
+}
+
+/**
+ * @private       sv_HandleSecurity
+ * @brief         The peer link's security changed: a bonded reconnection at
+ *                level 4 blinks the LED; anything less drops the link.
+ * @param[in]     i32_level Security level.
+ * @param[in]     u8_err bt_security_err, 0 on success.
+ * @return        None.
+ */
+static void sv_HandleSecurity(int32_t i32_level, uint8_t u8_err)
+{
+   // Check if a bonded reconnection waits for it (a run follows SMP instead)
+   if (!sb_bondLink || sb_bondSecured || (atomic_get(&st_state) != ePST_PAIRED))
+   {
+      return;
+   }
+
+   // Check if the stored keys gave the level of the pairing
+   if ((u8_err != 0U) || (i32_level < (int32_t)BT_SECURITY_L4))
+   {
+      APP_LOG_WRN("bonded link not secured: level %d, error %u", (int)i32_level,
+         (unsigned int)u8_err);
+      sv_DropPeerLink();
+      return;
+   }
+
+   sb_bondSecured = true;
+   (void)k_work_cancel_delayable(&sst_secureTimeout);
+   APP_LOG_INF("bonded peer reconnected at level 4");
+   sv_SetLed(ePLD_BLINK);
+}
+
+/**
+ * @private       sv_HandleSecureTimeout
+ * @brief         The bonded link did not reach level 4 in time: drop it.
+ * @return        None.
+ */
+static void sv_HandleSecureTimeout(void)
+{
+   // Check if the bonded link still waits for encryption
+   if (sb_bondLink && !sb_bondSecured && (atomic_get(&st_state) == ePST_PAIRED))
+   {
+      APP_LOG_WRN("bonded link not secured in time");
+      sv_DropPeerLink();
    }
 }
 
@@ -1580,7 +2037,7 @@ static void sv_HandleEvent(const PairEvent_T *stpt_event)
          // Check if this peripheral waits for the proof
          if ((atomic_get(&st_state) == ePST_PAIRING) && (se_role == ePRL_PERIPHERAL))
          {
-            (void)dk_set_led(PAIR_LED, 1U);
+            sv_SetLed(ePLD_ON);
             sv_Succeed();
          }
          break;
@@ -1608,6 +2065,22 @@ static void sv_HandleEvent(const PairEvent_T *stpt_event)
          {
             sv_Fail(ePER_TIMEOUT, (int32_t)atomic_get(&st_state));
          }
+         break;
+
+      case ePEV_RECONNECT:
+         sv_ReconnectStart();
+         break;
+
+      case ePEV_RECONNECTED:
+         sv_HandleReconnected(stpt_event->i32_value);
+         break;
+
+      case ePEV_SECURITY:
+         sv_HandleSecurity(stpt_event->i32_value, stpt_event->u8_status);
+         break;
+
+      case ePEV_SECURE_TIMEOUT:
+         sv_HandleSecureTimeout();
          break;
 
       default:
@@ -1665,6 +2138,107 @@ static void sv_RunTimeout(struct k_work *stpt_work)
    ARG_UNUSED(stpt_work);
 
    sv_PostSimple(ePEV_TIMEOUT, (int32_t)su32_runId);
+}
+
+/**
+ * @private       sv_ReconnectWork
+ * @brief         Central: time to look for the bonded peer again (work queue).
+ * @param[in]     stpt_work Unused.
+ * @return        None.
+ */
+static void sv_ReconnectWork(struct k_work *stpt_work)
+{
+   ARG_UNUSED(stpt_work);
+
+   sv_PostSimple(ePEV_RECONNECT, 0);
+}
+
+/**
+ * @private       sv_SecureTimeout
+ * @brief         The bonded link had its time to reach level 4 (work queue).
+ * @param[in]     stpt_work Unused.
+ * @return        None.
+ */
+static void sv_SecureTimeout(struct k_work *stpt_work)
+{
+   ARG_UNUSED(stpt_work);
+
+   sv_PostSimple(ePEV_SECURE_TIMEOUT, 0);
+}
+
+/**
+ * @private       sv_LedWork
+ * @brief         Show st_ledMode on the LED; while it is ePLD_BLINK, toggle it
+ *                every PAIR_LED_BLINK_MS (work queue).
+ * @param[in]     stpt_work Unused.
+ * @return        None.
+ */
+static void sv_LedWork(struct k_work *stpt_work)
+{
+   ARG_UNUSED(stpt_work);
+
+   switch ((PairLed_E)atomic_get(&st_ledMode))
+   {
+      case ePLD_BLINK:
+         sb_ledLit = !sb_ledLit;
+         (void)k_work_schedule(&sst_ledWork, K_MSEC(PAIR_LED_BLINK_MS));
+         break;
+
+      case ePLD_ON:
+         sb_ledLit = true;
+         break;
+
+      default:
+         sb_ledLit = false;
+         break;
+   }
+
+   (void)dk_set_led(PAIR_LED, sb_ledLit ? 1U : 0U);
+}
+
+/**
+ * @private       si_SettingsSet
+ * @brief         Settings handler (settings_load()): read the bond record.
+ * @param[in]     cpt_key Key below PAIR_SETTINGS_SUBTREE.
+ * @param[in]     t_len Stored length.
+ * @param[in]     fpt_read Reads the value.
+ * @param[in]     vpt_arg Argument of fpt_read.
+ * @return        0, -ENOENT for an unknown key, -EINVAL for a wrong length or
+ *                role, or the read error.
+ */
+static int si_SettingsSet(const char *cpt_key, size_t t_len, settings_read_cb fpt_read,
+   void *vpt_arg)
+{
+   ssize_t t_read;
+
+   // Check if it is the bond record, with its size
+   if (strcmp(cpt_key, PAIR_SETTINGS_BOND_KEY) != 0)
+   {
+      return -ENOENT;
+   }
+   if (t_len != sizeof(su8ar_savedBond))
+   {
+      return -EINVAL;
+   }
+
+   t_read = fpt_read(vpt_arg, su8ar_savedBond, sizeof(su8ar_savedBond));
+
+   // Check if the record was read whole
+   if (t_read != (ssize_t)sizeof(su8ar_savedBond))
+   {
+      return (t_read < 0) ? (int)t_read : -EINVAL;
+   }
+
+   // Check if the role is one a pairing gives
+   if ((su8ar_savedBond[0] != (uint8_t)ePRL_CENTRAL) &&
+      (su8ar_savedBond[0] != (uint8_t)ePRL_PERIPHERAL))
+   {
+      return -EINVAL;
+   }
+
+   sb_savedBondValid = true;
+
+   return 0;
 }
 
 /**
@@ -2028,7 +2602,7 @@ int gi_Pair_Init(void)
       return i_ret;
    }
 
-   // LED 1 shows a proven pairing; without it pairing still works
+   // The LED shows a proven link; without it pairing still works
    if (dk_leds_init() != 0)
    {
       APP_LOG_WRN("DK LEDs not available");
@@ -2068,30 +2642,35 @@ void gv_Pair_OnBtReady(void)
 /**
  * @public        gb_Pair_ClaimConn
  * @brief         Whether a new connection is the peer link this module waits
- *                for (BT context, from bt_conn_cb.connected, also for a failed
+ *                for: a run's, or the bonded peer's while it is not connected
+ *                (BT context, from bt_conn_cb.connected, also for a failed
  *                connection). A claimed link is not a host link.
  * @param[in]     stpt_conn New connection.
  * @param[in]     u8_err HCI error of the connection (0 when it is up).
- * @return        true if it belongs to the pairing run.
+ * @return        true if it belongs to the pairing run or the bond.
  */
 bool gb_Pair_ClaimConn(struct bt_conn *stpt_conn, uint8_t u8_err)
 {
    const bt_addr_le_t *stpt_dst = bt_conn_get_dst(stpt_conn);
+   PairState_E e_state = (PairState_E)atomic_get(&st_state);
+   bool b_run = (e_state == ePST_ARMED);
+   bool b_bond = (e_state == ePST_PAIRED) && (atomic_get(&st_bondRole) != ePRL_NONE) &&
+      (atomic_ptr_get(&st_peerConn) == NULL);
 
-   // Check if a run waits for a link from (or to) its peer
-   if ((atomic_get(&st_state) != ePST_ARMED) || (stpt_dst == NULL) ||
+   // Check if a run or the bond waits for a link from (or to) its peer
+   if ((!b_run && !b_bond) || (stpt_dst == NULL) ||
       (bt_addr_le_cmp(stpt_dst, &sst_peerAddr) != 0))
    {
       return false;
    }
 
-   // Check if the link came up: hold it for the run
+   // Check if the link came up: hold it for the run or the bond
    if (u8_err == 0U)
    {
       (void)atomic_ptr_set(&st_peerConn, bt_conn_ref(stpt_conn));
    }
 
-   sv_PostSimple(ePEV_CONNECTED, (int32_t)u8_err);
+   sv_PostSimple(b_run ? ePEV_CONNECTED : ePEV_RECONNECTED, (int32_t)u8_err);
 
    return true;
 }
@@ -2118,6 +2697,46 @@ void gv_Pair_OnDisconnected(struct bt_conn *stpt_conn, uint8_t u8_reason)
       st_event.stpt_conn = stpt_conn;
       sv_Post(&st_event);
    }
+}
+
+/**
+ * @public        gv_Pair_OnSecurityChanged
+ * @brief         A connection's security changed (BT context, from
+ *                bt_conn_cb.security_changed). Only the peer link matters here.
+ * @param[in]     stpt_conn Connection.
+ * @param[in]     u8_level New security level (bt_security_t).
+ * @param[in]     u8_err bt_security_err, 0 on success.
+ * @return        None.
+ */
+void gv_Pair_OnSecurityChanged(struct bt_conn *stpt_conn, uint8_t u8_level, uint8_t u8_err)
+{
+   PairEvent_T st_event;
+
+   // Check if it is the peer link
+   if ((stpt_conn == NULL) || (stpt_conn != atomic_ptr_get(&st_peerConn)))
+   {
+      return;
+   }
+
+   (void)memset(&st_event, 0, sizeof(st_event));
+   st_event.u8_type = ePEV_SECURITY;
+   st_event.i32_value = (int32_t)u8_level;
+   st_event.u8_status = u8_err;
+   sv_Post(&st_event);
+}
+
+/**
+ * @public        gb_Pair_AwaitsBondedPeer
+ * @brief         Whether this device is a bonded peripheral whose central is
+ *                not connected: ConnectionHandling.c then advertises even with
+ *                a host connected, so the central can reconnect. Any thread.
+ * @return        true while the bonded central is awaited.
+ */
+bool gb_Pair_AwaitsBondedPeer(void)
+{
+   return (atomic_get(&st_state) == ePST_PAIRED) &&
+      (atomic_get(&st_bondRole) == ePRL_PERIPHERAL) &&
+      (atomic_ptr_get(&st_peerConn) == NULL);
 }
 
 /**

@@ -13,8 +13,9 @@
  *                peripheral side of a link also asks for a short connection
  *                interval.
  *
- *                Undirected advertising runs only while there is no host link
- *                and _PAIR is not using the advertiser. It carries the Pairing
+ *                Undirected advertising runs while there is no host link, or
+ *                while _PAIR awaits its bonded central (gb_Pair_AwaitsBondedPeer()),
+ *                and only while _PAIR is not using the advertiser. It carries the Pairing
  *                service UUID once the device is provisioned, the BulkXfer
  *                service UUID before.
  * @date          21/02/2026
@@ -461,7 +462,16 @@ static void sv_ConnParamNegotiation(struct k_work *stpt_work)
             }
 
             LOG_INF("Requesting DLE 251...");
-            i_err = bt_conn_le_data_len_update(stpt_conn, NULL);
+            // Zephyr reads the parameters without a NULL check: a NULL here
+            // sends the controller whatever lies at address 0
+            i_err = bt_conn_le_data_len_update(stpt_conn, BT_LE_DATA_LEN_PARAM_MAX);
+
+            // Check if the controller already uses these parameters
+            if (i_err == -EALREADY)
+            {
+               stpt_link->e_step = eCNS_MTU;
+               continue;
+            }
 
             // Check if there was an error initiating DLE update
             if (i_err)
@@ -635,8 +645,9 @@ static void sv_MTUExchangeCallback(struct bt_conn *stpt_conn, uint8_t u8_err,
 /**
  * @private       sv_StartAdvIfAllowed
  * @brief         Start connectable undirected advertising if nothing stops it:
- *                the stack is ready, no host link is up, and _PAIR does not use
- *                the advertiser. The data follows the provisioning state.
+ *                the stack is ready, no host link is up (unless the bonded
+ *                central is awaited), and _PAIR does not use the advertiser.
+ *                The data follows the provisioning state.
  * @return        None.
  */
 static void sv_StartAdvIfAllowed(void)
@@ -651,7 +662,7 @@ static void sv_StartAdvIfAllowed(void)
    k_spin_unlock(&sst_hostLock, t_key);
 
    // Check if advertising is wanted now
-   if (!sb_btReady || b_hasHost || gb_Pair_IsAdvertising())
+   if (!sb_btReady || (b_hasHost && !gb_Pair_AwaitsBondedPeer()) || gb_Pair_IsAdvertising())
    {
       return;
    }
@@ -700,6 +711,9 @@ static void sv_Connected(struct bt_conn *stpt_conn, uint8_t u8_err)
       {
          LOG_INF("Peer link connected");
          sv_OpenLink(stpt_conn);
+
+         // The connection ended advertising: resume it for a host if wanted
+         sv_StartAdvIfAllowed();
       }
       return;
    }
@@ -734,6 +748,10 @@ static void sv_Connected(struct bt_conn *stpt_conn, uint8_t u8_err)
    gv_BLKS_OnConnected(stpt_conn);
 
    sv_OpenLink(stpt_conn);
+
+   // The connection ended advertising: resume it if the bonded central is
+   // still awaited
+   sv_StartAdvIfAllowed();
 }
 
 /**
@@ -787,8 +805,9 @@ static void sv_Recycled(void)
 
 /**
  * @private       sv_SecurityChanged
- * @brief         Callback for handling security level changes (logged; the
- *                pairing module follows the SMP result callbacks).
+ * @brief         Callback for handling security level changes: logged, and
+ *                passed to the pairing module, which follows the encryption of
+ *                a bonded peer link (a pairing run follows the SMP callbacks).
  * @param[in]     stpt_conn Connection handle.
  * @param[in]     e_level New security level.
  * @param[in]     e_err Security error.
@@ -797,9 +816,9 @@ static void sv_Recycled(void)
 static void sv_SecurityChanged(struct bt_conn *stpt_conn, bt_security_t e_level,
    enum bt_security_err e_err)
 {
-   ARG_UNUSED(stpt_conn);
-
    LOG_INF("Security level %d (err %d)", (int)e_level, (int)e_err);
+
+   gv_Pair_OnSecurityChanged(stpt_conn, (uint8_t)e_level, (uint8_t)e_err);
 }
 
 /**
@@ -969,8 +988,9 @@ struct bt_conn *gstpt_BLE_GetHostConn(void)
  * @public        gv_BLE_RefreshAdv
  * @brief         Re-evaluate advertising after a provisioning or pairing
  *                change: undirected advertising restarts with data for the new
- *                provisioning state, or stays off (host connected, or _PAIR
- *                uses the advertiser). Any thread.
+ *                provisioning state, or stays off (host connected and no
+ *                bonded central awaited, or _PAIR uses the advertiser). Any
+ *                thread.
  * @return        None.
  */
 void gv_BLE_RefreshAdv(void)

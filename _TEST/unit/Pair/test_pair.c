@@ -121,6 +121,7 @@ static uint32_t su32_unpair;
 static bool sb_unpairAll;
 static bt_addr_le_t sst_unpairAddr;
 static bool sb_hasBond;
+static bool sb_otherBondFirst;
 
 int bt_unpair(uint8_t id, const bt_addr_le_t *addr)
 {
@@ -139,11 +140,48 @@ void bt_foreach_bond(uint8_t id, void (*func)(const struct bt_bond_info *info, v
    TEST_ASSERT_EQUAL_UINT8(BT_ID_DEFAULT, id);
    if (sb_hasBond)
    {
-      st_info.addr = sst_addrB;
+      /* two bonds: without a record the first one wins */
+      st_info.addr = sb_otherBondFirst ? sst_addrOther : sst_addrB;
       func(&st_info, user_data);
-      st_info.addr = sst_addrOther;          /* a second bond: the first one wins */
+      st_info.addr = sb_otherBondFirst ? sst_addrB : sst_addrOther;
       func(&st_info, user_data);
    }
+}
+
+/******************************************************************************/
+/*  Stubs: settings (the bond record)                                         */
+/******************************************************************************/
+static int si_saveRet;
+static uint32_t su32_save, su32_settingsDelete;
+static char scar_saveName[32], scar_deleteName[32];
+static uint8_t su8ar_saved[16];
+static size_t st_savedLen;
+
+int settings_save_one(const char *name, const void *value, size_t val_len)
+{
+   su32_save++;
+   (void)snprintf(scar_saveName, sizeof(scar_saveName), "%s", name);
+   TEST_ASSERT_TRUE(val_len <= sizeof(su8ar_saved));
+   (void)memcpy(su8ar_saved, value, val_len);
+   st_savedLen = val_len;
+   return si_saveRet;
+}
+
+int settings_delete(const char *name)
+{
+   su32_settingsDelete++;
+   (void)snprintf(scar_deleteName, sizeof(scar_deleteName), "%s", name);
+   return 0;
+}
+
+/** settings_load()'s read callback: hands out su8ar_saved, or an error. */
+static ssize_t st_readRet;
+static ssize_t st_ReadRecord(void *cb_arg, void *data, size_t len)
+{
+   (void)cb_arg;
+   if (st_readRet < 0) { return st_readRet; }
+   (void)memcpy(data, su8ar_saved, MIN(len, st_savedLen));
+   return (ssize_t)MIN(len, st_savedLen);
 }
 
 static int si_setSecRet;
@@ -408,6 +446,8 @@ static const PairVector_T *sstpt_PairVec(const PairVector_T *stpt_set, uint32_t 
 static void sv_RunPair(void)
 {
    gv_SimRunThread(sv_PairThread);
+   // The work queue shows the LED
+   (void)gb_SimRunDelayedWork(&sst_ledWork);
 }
 
 static uint8_t su8ar_statusNow[PAIR_STATUS_LEN];
@@ -551,6 +591,9 @@ static void sv_AdvanceMs(int64_t i64_ms)
    gi64_simNowMs += i64_ms;
    (void)gb_SimRunDelayedWork(&sst_connectTimeout);
    (void)gb_SimRunDelayedWork(&sst_runTimeout);
+   (void)gb_SimRunDelayedWork(&sst_reconnectWork);
+   (void)gb_SimRunDelayedWork(&sst_secureTimeout);
+   (void)gb_SimRunDelayedWork(&sst_ledWork);
    sv_RunPair();
 }
 
@@ -580,8 +623,58 @@ static void sv_ResetModule(void)
    sb_scanning = false;
    st_peerKey = 0U;
    sv_ResetRun();
+   sb_rolesMoved = false;
+   (void)atomic_set(&st_bondRole, ePRL_NONE);
+   sb_savedBondValid = false;
+   (void)memset(su8ar_savedBond, 0, sizeof(su8ar_savedBond));
+   (void)atomic_set(&st_ledMode, ePLD_OFF);
+   sb_ledLit = false;
    (void)k_work_cancel_delayable(&sst_connectTimeout);
    (void)k_work_cancel_delayable(&sst_runTimeout);
+   (void)k_work_cancel_delayable(&sst_reconnectWork);
+   (void)k_work_cancel_delayable(&sst_secureTimeout);
+   (void)k_work_cancel_delayable(&sst_ledWork);
+}
+
+/** A bond record as settings_load() hands it to the module. */
+static int si_LoadRecord(PairRole_E e_role, const bt_addr_le_t *stpt_peer)
+{
+   su8ar_saved[0] = (uint8_t)e_role;
+   (void)memcpy(&su8ar_saved[1], stpt_peer, 7U);
+   st_savedLen = PAIR_BOND_RECORD_LEN;
+   st_readRet = 0;
+   return settings_handler_pair.h_set("peer", PAIR_BOND_RECORD_LEN, st_ReadRecord, NULL);
+}
+
+/** Start-up of a device bonded with the peer in the given role. */
+static void sv_RestoreBond(PairRole_E e_role)
+{
+   sv_ResetModule();
+   TEST_ASSERT_EQUAL_INT(0, si_LoadRecord(e_role, &sst_addrB));
+   sb_hasBond = true;
+   gv_Pair_OnBtReady();
+   sv_RunPair();
+   TEST_ASSERT_EQUAL_UINT8(ePST_PAIRED, su8_State());
+}
+
+/** The bonded peer link comes up (the central sees the peer and connects). */
+static void sv_BondLinkUp(PairRole_E e_role)
+{
+   if (e_role == ePRL_CENTRAL)
+   {
+      TEST_ASSERT_NOT_NULL(sfpt_scanCb);
+      sfpt_scanCb(&sst_addrB, -40, BT_GAP_ADV_TYPE_ADV_IND, NULL);
+      sv_RunPair();
+   }
+   TEST_ASSERT_TRUE(gb_Pair_ClaimConn(&sst_peer, 0U));
+   sv_RunPair();
+}
+
+/** The stack reports the bonded link encrypted at the given level. */
+static void sv_BondSecurity(bt_security_t e_level, enum bt_security_err e_err)
+{
+   gv_Pair_OnSecurityChanged(&sst_peer, (uint8_t)e_level, (uint8_t)e_err);
+   sv_RunPair();
 }
 
 void setUp(void)
@@ -602,7 +695,9 @@ void setUp(void)
    si_scanStartRet = 0; su32_scanStart = 0U; su32_scanStop = 0U; sfpt_scanCb = NULL;
    si_createRet = 0; su32_create = 0U;
    su32_disconnect = 0U; sstpt_disconnected = NULL;
-   su32_unpair = 0U; sb_unpairAll = false; sb_hasBond = false;
+   su32_unpair = 0U; sb_unpairAll = false; sb_hasBond = false; sb_otherBondFirst = false;
+   si_saveRet = 0; su32_save = 0U; su32_settingsDelete = 0U; st_savedLen = 0U; st_readRet = 0;
+   scar_saveName[0] = '\0'; scar_deleteName[0] = '\0';
    si_setSecRet = 0; su32_setSec = 0U; se_security = BT_SECURITY_L1;
    si_oobGetRet = 0; su32_oobGet = 0U; sb_scFlag = false; su32_scFlagSets = 0U;
    si_setScDataRet = 0; su32_setScData = 0U; sstpt_scLocal = NULL; sstpt_scRemote = NULL;
@@ -1594,6 +1689,427 @@ static void test_StatusWithoutHostIsNotNotified(void)
    TEST_ASSERT_EQUAL_UINT8(ePST_ARMED, su8_State());
 }
 
+/******************************************************************************/
+/*  Bond record and bonded reconnection                                       */
+/******************************************************************************/
+static void test_PairingSavesTheBondRecord(void)
+{
+   // Central: [role][peer address] under pair/peer
+   sv_ToPairing(ePRL_CENTRAL);
+   TEST_ASSERT_EQUAL_UINT32_MESSAGE(1U, su32_settingsDelete, "START drops an older record");
+   TEST_ASSERT_EQUAL_STRING("pair/peer", scar_deleteName);
+   TEST_ASSERT_EQUAL_UINT32(0U, su32_save);
+   sv_SmpDone();
+   sv_PeerAcceptsSecured(0U);
+   TEST_ASSERT_EQUAL_UINT32(1U, su32_save);
+   TEST_ASSERT_EQUAL_STRING("pair/peer", scar_saveName);
+   TEST_ASSERT_EQUAL_UINT32(PAIR_BOND_RECORD_LEN, st_savedLen);
+   TEST_ASSERT_EQUAL_HEX8(ePRL_CENTRAL, su8ar_saved[0]);
+   TEST_ASSERT_EQUAL_HEX8_ARRAY(&sst_addrB, &su8ar_saved[1], 7U);
+
+   // Peripheral; a failed save is logged, and the pairing stands
+   si_saveRet = -ENOSPC;
+   sv_ToPairing(ePRL_PERIPHERAL);
+   sv_SmpDone();
+   TEST_ASSERT_EQUAL_INT(0, gt_Pair_OnSecuredWrite(&sst_peer, &(uint8_t){ VEC_PAIR_SECURED_VALUE }, 1U));
+   sv_RunPair();
+   TEST_ASSERT_EQUAL_UINT8(ePST_PAIRED, su8_State());
+   TEST_ASSERT_EQUAL_HEX8(ePRL_PERIPHERAL, su8ar_saved[0]);
+   TEST_ASSERT_NOT_NULL(gcpt_SimLogFind("bond record not saved"));
+
+   // A failed run saves nothing
+   su32_save = 0U;
+   sv_StartRun(ePRL_CENTRAL);
+   sv_AdvanceMs(CONFIG_PAIR_CONNECT_TIMEOUT_MS);
+   sv_AssertFailed(ePER_TIMEOUT, ePST_ARMED);
+   TEST_ASSERT_EQUAL_UINT32(0U, su32_save);
+}
+
+static void test_SettingsHandlerChecksTheRecord(void)
+{
+   sv_ResetModule();
+   TEST_ASSERT_EQUAL_STRING("pair", settings_handler_pair.name);
+   TEST_ASSERT_EQUAL_INT(-ENOENT, settings_handler_pair.h_set("other", PAIR_BOND_RECORD_LEN,
+      st_ReadRecord, NULL));
+   TEST_ASSERT_EQUAL_INT(-EINVAL, settings_handler_pair.h_set("peer", PAIR_BOND_RECORD_LEN - 1U,
+      st_ReadRecord, NULL));
+   TEST_ASSERT_EQUAL_INT(-EINVAL, si_LoadRecord(ePRL_NONE, &sst_addrB));
+   TEST_ASSERT_EQUAL_INT(-EINVAL, si_LoadRecord((PairRole_E)3, &sst_addrB));
+   TEST_ASSERT_FALSE(sb_savedBondValid);
+
+   // A read error, or a short read
+   su8ar_saved[0] = ePRL_CENTRAL;
+   st_readRet = -EIO;
+   TEST_ASSERT_EQUAL_INT(-EIO, settings_handler_pair.h_set("peer", PAIR_BOND_RECORD_LEN,
+      st_ReadRecord, NULL));
+   st_readRet = 0;
+   st_savedLen = 3U;
+   TEST_ASSERT_EQUAL_INT(-EINVAL, settings_handler_pair.h_set("peer", PAIR_BOND_RECORD_LEN,
+      st_ReadRecord, NULL));
+   TEST_ASSERT_FALSE(sb_savedBondValid);
+
+   TEST_ASSERT_EQUAL_INT(0, si_LoadRecord(ePRL_PERIPHERAL, &sst_addrB));
+   TEST_ASSERT_TRUE(sb_savedBondValid);
+}
+
+static void test_BtReadyRestoresTheRecordedBond(void)
+{
+   // The record's bond wins over a bond listed before it
+   sv_ResetModule();
+   TEST_ASSERT_EQUAL_INT(0, si_LoadRecord(ePRL_CENTRAL, &sst_addrB));
+   sb_hasBond = true;
+   sb_otherBondFirst = true;
+   gv_Pair_OnBtReady();
+   sv_RunPair();
+   TEST_ASSERT_EQUAL_UINT8(ePST_PAIRED, su8_State());
+   TEST_ASSERT_EQUAL_UINT8_MESSAGE(ePRL_CENTRAL, su8ar_statusNow[4], "the saved role");
+   TEST_ASSERT_EQUAL_HEX8_ARRAY(&sst_addrB, &su8ar_statusNow[12], 7U);
+   TEST_ASSERT_TRUE(su32_notify > 0U);
+   TEST_ASSERT_EQUAL_UINT32(0U, su32_settingsDelete);
+   // The central looks for its peer at once
+   TEST_ASSERT_EQUAL_UINT32(1U, su32_scanStart);
+   TEST_ASSERT_FALSE(gb_Pair_AwaitsBondedPeer());
+
+   // Without a record: the first bond, not reconnected to
+   sv_ResetModule();
+   su32_scanStart = 0U;
+   gv_Pair_OnBtReady();
+   sv_RunPair();
+   TEST_ASSERT_EQUAL_UINT8(ePST_PAIRED, su8_State());
+   TEST_ASSERT_EQUAL_UINT8(ePRL_NONE, su8ar_statusNow[4]);
+   TEST_ASSERT_EQUAL_HEX8_ARRAY(&sst_addrOther, &su8ar_statusNow[12], 7U);
+   TEST_ASSERT_EQUAL_UINT32(0U, su32_scanStart);
+   TEST_ASSERT_FALSE(gb_Pair_ClaimConn(&sst_other, 0U));
+   TEST_ASSERT_NOT_NULL(gcpt_SimLogFind("no record: not reconnected"));
+}
+
+static void test_StaleRecordIsDeleted(void)
+{
+   // A record without its bond
+   sv_ResetModule();
+   TEST_ASSERT_EQUAL_INT(0, si_LoadRecord(ePRL_CENTRAL, &sst_addrB));
+   gv_Pair_OnBtReady();
+   sv_RunPair();
+   TEST_ASSERT_EQUAL_UINT8(ePST_IDLE, su8_State());
+   TEST_ASSERT_EQUAL_UINT32(1U, su32_settingsDelete);
+   TEST_ASSERT_EQUAL_STRING("pair/peer", scar_deleteName);
+   TEST_ASSERT_EQUAL_UINT32(0U, su32_scanStart);
+
+   // A device that is not provisioned keeps neither
+   sv_ResetModule();
+   su32_settingsDelete = 0U;
+   se_provState = ePS_KEY_READY;
+   sb_hasBond = true;
+   TEST_ASSERT_EQUAL_INT(0, si_LoadRecord(ePRL_PERIPHERAL, &sst_addrB));
+   gv_Pair_OnBtReady();
+   sv_RunPair();
+   TEST_ASSERT_EQUAL_UINT8(ePST_IDLE, su8_State());
+   TEST_ASSERT_TRUE(sb_unpairAll);
+   TEST_ASSERT_EQUAL_UINT32(1U, su32_settingsDelete);
+   TEST_ASSERT_FALSE(gb_Pair_AwaitsBondedPeer());
+}
+
+static void test_CentralReconnectsAndBlinks(void)
+{
+   sv_RestoreBond(ePRL_CENTRAL);
+   TEST_ASSERT_EQUAL_UINT32(1U, su32_scanStart);
+
+   // Another device, then the peer's undirected advertising
+   sfpt_scanCb(&sst_addrOther, -40, BT_GAP_ADV_TYPE_ADV_IND, NULL);
+   sv_RunPair();
+   TEST_ASSERT_EQUAL_UINT32(0U, su32_create);
+   sv_BondLinkUp(ePRL_CENTRAL);
+   TEST_ASSERT_EQUAL_UINT32(1U, su32_scanStop);
+   TEST_ASSERT_EQUAL_UINT32(1U, su32_create);
+   TEST_ASSERT_EQUAL_HEX8_ARRAY(&sst_addrB, &sst_createPeer, 7U);
+   TEST_ASSERT_EQUAL_UINT16(PAIR_CONN_INTERVAL, sst_createParam.interval_min);
+
+   // The central encrypts with the stored keys; BulkXfer stays with the host
+   TEST_ASSERT_EQUAL_UINT32_MESSAGE(1U, su32_setSec, "encryption at level 4");
+   TEST_ASSERT_EQUAL_UINT32(0U, su32_filterSet);
+   TEST_ASSERT_EQUAL_UINT32(0U, su32_rebind);
+   TEST_ASSERT_EQUAL_UINT32(0U, su32_attach);
+   TEST_ASSERT_EQUAL_UINT8(ePST_PAIRED, su8_State());
+   TEST_ASSERT_EQUAL_UINT32(0U, su32_ledValue);
+
+   // Level 4: the LED blinks for as long as the link is up
+   sv_BondSecurity(BT_SECURITY_L4, BT_SECURITY_ERR_SUCCESS);
+   TEST_ASSERT_NOT_NULL(gcpt_SimLogFind("bonded peer reconnected at level 4"));
+   TEST_ASSERT_EQUAL_UINT32(1U, su32_ledValue);
+   sv_AdvanceMs(PAIR_LED_BLINK_MS);
+   TEST_ASSERT_EQUAL_UINT32(0U, su32_ledValue);
+   sv_AdvanceMs(PAIR_LED_BLINK_MS);
+   TEST_ASSERT_EQUAL_UINT32(1U, su32_ledValue);
+   // The secure timer was stopped
+   sv_AdvanceMs(PAIR_RECONNECT_SECURE_MS);
+   TEST_ASSERT_EQUAL_UINT32(0U, su32_disconnect);
+   // A later security event changes nothing
+   su32_ledSets = 0U;
+   sv_BondSecurity(BT_SECURITY_L4, BT_SECURITY_ERR_SUCCESS);
+   TEST_ASSERT_EQUAL_UINT32(0U, su32_ledSets);
+
+   // The link drops: LED off, no more blinking, and the central looks again
+   sv_LinkDown(0x08U);
+   TEST_ASSERT_EQUAL_UINT8(ePST_PAIRED, su8_State());
+   TEST_ASSERT_EQUAL_UINT32(0U, su32_ledValue);
+   TEST_ASSERT_EQUAL_UINT32_MESSAGE(0U, su32_filterClear, "BulkXfer never moved");
+   TEST_ASSERT_EQUAL_UINT32(0U, su32_detach);
+   su32_ledSets = 0U;
+   sv_AdvanceMs(PAIR_RECONNECT_DELAY_MS - 1);
+   TEST_ASSERT_EQUAL_UINT32(1U, su32_scanStart);
+   TEST_ASSERT_EQUAL_UINT32(0U, su32_ledSets);
+   sv_AdvanceMs(1);
+   TEST_ASSERT_EQUAL_UINT32(2U, su32_scanStart);
+
+   // And reconnects again, every time
+   sv_BondLinkUp(ePRL_CENTRAL);
+   sv_BondSecurity(BT_SECURITY_L4, BT_SECURITY_ERR_SUCCESS);
+   TEST_ASSERT_EQUAL_UINT32(2U, su32_setSec);
+   TEST_ASSERT_EQUAL_UINT32(1U, su32_ledValue);
+}
+
+static void test_PeripheralAwaitsItsCentralAndBlinks(void)
+{
+   su32_refresh = 0U;
+   sv_RestoreBond(ePRL_PERIPHERAL);
+   TEST_ASSERT_EQUAL_UINT32_MESSAGE(0U, su32_scanStart, "the peripheral does not scan");
+   TEST_ASSERT_TRUE_MESSAGE(gb_Pair_AwaitsBondedPeer(), "advertising runs even with a host");
+   TEST_ASSERT_TRUE(su32_refresh > 0U);
+   TEST_ASSERT_FALSE(gb_Pair_IsAdvertising());
+
+   // The central connects; the peripheral leaves encryption to it
+   TEST_ASSERT_FALSE(gb_Pair_ClaimConn(&sst_other, 0U));
+   sv_BondLinkUp(ePRL_PERIPHERAL);
+   TEST_ASSERT_FALSE(gb_Pair_AwaitsBondedPeer());
+   TEST_ASSERT_FALSE_MESSAGE(gb_Pair_ClaimConn(&sst_peer, 0U), "one peer link");
+   TEST_ASSERT_EQUAL_UINT32(0U, su32_setSec);
+   sv_BondSecurity(BT_SECURITY_L4, BT_SECURITY_ERR_SUCCESS);
+   TEST_ASSERT_EQUAL_UINT32(1U, su32_ledValue);
+   sv_AdvanceMs(PAIR_LED_BLINK_MS);
+   TEST_ASSERT_EQUAL_UINT32(0U, su32_ledValue);
+
+   // The link drops: LED off, advertising for the central again
+   su32_refresh = 0U;
+   sv_LinkDown(0x13U);
+   TEST_ASSERT_EQUAL_UINT32(0U, su32_ledValue);
+   TEST_ASSERT_TRUE(gb_Pair_AwaitsBondedPeer());
+   TEST_ASSERT_TRUE(su32_refresh > 0U);
+   sv_AdvanceMs(PAIR_RECONNECT_DELAY_MS);
+   TEST_ASSERT_EQUAL_UINT32(0U, su32_scanStart);
+}
+
+static void test_BondedLinkMustReachLevel4(void)
+{
+   // Encryption fails (the peer lost its keys)
+   sv_RestoreBond(ePRL_CENTRAL);
+   sv_BondLinkUp(ePRL_CENTRAL);
+   sv_BondSecurity(BT_SECURITY_L1, BT_SECURITY_ERR_PIN_OR_KEY_MISSING);
+   TEST_ASSERT_EQUAL_PTR(&sst_peer, sstpt_disconnected);
+   TEST_ASSERT_EQUAL_UINT32(0U, su32_ledValue);
+   TEST_ASSERT_EQUAL_UINT32_MESSAGE(0U, su32_abortRx, "the host's transfers go on");
+   TEST_ASSERT_EQUAL_UINT32(0U, su32_abortTx);
+   TEST_ASSERT_NOT_NULL(gcpt_SimLogFind("bonded link not secured: level 1, error 2"));
+
+   // Encrypted below level 4
+   sv_RestoreBond(ePRL_PERIPHERAL);
+   su32_disconnect = 0U;
+   sv_BondLinkUp(ePRL_PERIPHERAL);
+   sv_BondSecurity(BT_SECURITY_L2, BT_SECURITY_ERR_SUCCESS);
+   TEST_ASSERT_EQUAL_UINT32(1U, su32_disconnect);
+   TEST_ASSERT_EQUAL_UINT32(0U, su32_ledValue);
+
+   // Not encrypted in time
+   sv_RestoreBond(ePRL_PERIPHERAL);
+   su32_disconnect = 0U;
+   sv_BondLinkUp(ePRL_PERIPHERAL);
+   sv_AdvanceMs(PAIR_RECONNECT_SECURE_MS - 1);
+   TEST_ASSERT_EQUAL_UINT32(0U, su32_disconnect);
+   sv_AdvanceMs(1);
+   TEST_ASSERT_EQUAL_UINT32(1U, su32_disconnect);
+   TEST_ASSERT_NOT_NULL(gcpt_SimLogFind("bonded link not secured in time"));
+
+   // Encryption cannot start
+   si_setSecRet = -ENOMEM;
+   sv_RestoreBond(ePRL_CENTRAL);
+   su32_disconnect = 0U;
+   sv_BondLinkUp(ePRL_CENTRAL);
+   TEST_ASSERT_EQUAL_UINT32(1U, su32_disconnect);
+   si_setSecRet = 0;
+
+   // Security of other links is not the bond's
+   sv_RestoreBond(ePRL_PERIPHERAL);
+   sv_BondLinkUp(ePRL_PERIPHERAL);
+   gv_Pair_OnSecurityChanged(&sst_host, BT_SECURITY_L4, 0U);
+   gv_Pair_OnSecurityChanged(NULL, BT_SECURITY_L4, 0U);
+   TEST_ASSERT_EQUAL_UINT32(0U, k_msgq_num_used_get(&sst_pairMsgq));
+}
+
+static void test_RunIgnoresSecurityEvents(void)
+{
+   // A pairing run follows SMP; security events of its link change nothing
+   sv_ToPairing(ePRL_PERIPHERAL);
+   sv_BondSecurity(BT_SECURITY_L1, BT_SECURITY_ERR_AUTH_FAIL);
+   TEST_ASSERT_EQUAL_UINT8(ePST_PAIRING, su8_State());
+   TEST_ASSERT_EQUAL_UINT32(0U, su32_disconnect);
+   // Nor once paired over that link: its LED stays steady
+   sv_SmpDone();
+   TEST_ASSERT_EQUAL_INT(0, gt_Pair_OnSecuredWrite(&sst_peer, &(uint8_t){ VEC_PAIR_SECURED_VALUE }, 1U));
+   sv_RunPair();
+   sv_BondSecurity(BT_SECURITY_L4, BT_SECURITY_ERR_SUCCESS);
+   TEST_ASSERT_EQUAL_UINT32(1U, su32_ledValue);
+   sv_AdvanceMs(PAIR_LED_BLINK_MS);
+   TEST_ASSERT_EQUAL_UINT32_MESSAGE(1U, su32_ledValue, "steady, not blinking");
+}
+
+static void test_ReconnectionRetries(void)
+{
+   // The scan cannot start
+   si_scanStartRet = -EAGAIN;
+   sv_RestoreBond(ePRL_CENTRAL);
+   TEST_ASSERT_EQUAL_UINT32(1U, su32_scanStart);
+   si_scanStartRet = 0;
+   sv_AdvanceMs(PAIR_RECONNECT_DELAY_MS);
+   TEST_ASSERT_EQUAL_UINT32(2U, su32_scanStart);
+   TEST_ASSERT_TRUE(sb_scanning);
+
+   // Already scanning: no second scan
+   sv_ReconnectStart();
+   TEST_ASSERT_EQUAL_UINT32(2U, su32_scanStart);
+
+   // The connection cannot be created
+   si_createRet = -ENOMEM;
+   sfpt_scanCb(&sst_addrB, -40, BT_GAP_ADV_TYPE_ADV_IND, NULL);
+   sv_RunPair();
+   TEST_ASSERT_EQUAL_UINT8(ePST_PAIRED, su8_State());
+   si_createRet = 0;
+   sv_AdvanceMs(PAIR_RECONNECT_DELAY_MS);
+   TEST_ASSERT_EQUAL_UINT32(3U, su32_scanStart);
+
+   // The connection fails
+   sfpt_scanCb(&sst_addrB, -40, BT_GAP_ADV_TYPE_ADV_IND, NULL);
+   sv_RunPair();
+   TEST_ASSERT_TRUE(gb_Pair_ClaimConn(&sst_peer, 0x3EU));
+   sv_RunPair();
+   TEST_ASSERT_NULL(sstpt_createConn);
+   TEST_ASSERT_EQUAL_UINT8(ePST_PAIRED, su8_State());
+   TEST_ASSERT_NOT_NULL(gcpt_SimLogFind("bonded peer not reached (0x3e)"));
+   sv_AdvanceMs(PAIR_RECONNECT_DELAY_MS);
+   TEST_ASSERT_EQUAL_UINT32(4U, su32_scanStart);
+   sv_BondLinkUp(ePRL_CENTRAL);
+   TEST_ASSERT_EQUAL_UINT32(1U, su32_setSec);
+}
+
+static void test_UnpairStopsTheReconnection(void)
+{
+   const PairVector_T *v = CONTROL_VEC("unpair");
+
+   // While the central looks for the peer
+   sv_RestoreBond(ePRL_CENTRAL);
+   TEST_ASSERT_EQUAL_INT(0, gt_Pair_OnControlWrite(&sst_host, v->u8ar_wire, v->u8_wireLen));
+   sv_RunPair();
+   TEST_ASSERT_EQUAL_UINT8(ePST_IDLE, su8_State());
+   TEST_ASSERT_EQUAL_UINT32(1U, su32_scanStop);
+   TEST_ASSERT_EQUAL_UINT32(1U, su32_settingsDelete);
+   TEST_ASSERT_FALSE(gb_Pair_ClaimConn(&sst_peer, 0U));
+
+   // While the bonded link blinks: the link goes, BulkXfer of the host is untouched
+   sv_RestoreBond(ePRL_PERIPHERAL);
+   sv_BondLinkUp(ePRL_PERIPHERAL);
+   sv_BondSecurity(BT_SECURITY_L4, BT_SECURITY_ERR_SUCCESS);
+   TEST_ASSERT_EQUAL_INT(0, gt_Pair_OnControlWrite(&sst_host, v->u8ar_wire, v->u8_wireLen));
+   sv_RunPair();
+   TEST_ASSERT_EQUAL_PTR(&sst_peer, sstpt_disconnected);
+   TEST_ASSERT_EQUAL_UINT32(0U, su32_abortRx);
+   TEST_ASSERT_EQUAL_UINT32(0U, su32_ledValue);
+   sv_AdvanceMs(PAIR_LED_BLINK_MS);
+   TEST_ASSERT_EQUAL_UINT32_MESSAGE(0U, su32_ledValue, "blinking stopped");
+   sv_LinkDown(0x16U);
+   TEST_ASSERT_EQUAL_UINT8(ePST_IDLE, su8_State());
+   TEST_ASSERT_FALSE(gb_Pair_AwaitsBondedPeer());
+   TEST_ASSERT_EQUAL_UINT32(0U, su32_filterClear);
+}
+
+static void test_StartStopsTheReconnection(void)
+{
+   // The central's connection attempt to the bonded peer is pending
+   sv_RestoreBond(ePRL_CENTRAL);
+   sfpt_scanCb(&sst_addrB, -40, BT_GAP_ADV_TYPE_ADV_IND, NULL);
+   sv_RunPair();
+   TEST_ASSERT_EQUAL_PTR(&sst_peer, sstpt_createConn);
+
+   // START pairs the same peer afresh: the attempt is cancelled ...
+   sv_StartRun(ePRL_CENTRAL);
+   TEST_ASSERT_EQUAL_PTR(&sst_peer, sstpt_disconnected);
+   TEST_ASSERT_EQUAL_UINT8(ePST_ARMED, su8_State());
+   TEST_ASSERT_EQUAL_UINT32(1U, su32_settingsDelete);
+   // ... and its end is not taken for the run's
+   TEST_ASSERT_TRUE(gb_Pair_ClaimConn(&sst_peer, 0x02U));
+   sv_RunPair();
+   TEST_ASSERT_EQUAL_UINT8(ePST_ARMED, su8_State());
+   TEST_ASSERT_TRUE(sb_scanning);
+   // No reconnection timer is left
+   sv_AdvanceMs(PAIR_RECONNECT_DELAY_MS);
+   TEST_ASSERT_EQUAL_UINT32(2U, su32_scanStart);
+
+   // A late bonded link after the bond was dropped is let go
+   sv_RestoreBond(ePRL_PERIPHERAL);
+   su32_disconnect = 0U;
+   TEST_ASSERT_TRUE(gb_Pair_ClaimConn(&sst_peer, 0U));
+   sv_HandleEvent(&(PairEvent_T){ .u8_type = ePEV_UNPAIR });
+   sv_RunPair();
+   TEST_ASSERT_EQUAL_UINT8(ePST_IDLE, su8_State());
+   TEST_ASSERT_TRUE(su32_disconnect >= 1U);
+}
+
+static void test_PairedLinkLossStartsTheReconnection(void)
+{
+   uint8_t u8_v = VEC_PAIR_SECURED_VALUE;
+
+   // Central: right after the pairing
+   sv_ToPairing(ePRL_CENTRAL);
+   sv_SmpDone();
+   sv_PeerAcceptsSecured(0U);
+   su32_scanStart = 0U;
+   sv_LinkDown(0x08U);
+   sv_AdvanceMs(PAIR_RECONNECT_DELAY_MS);
+   TEST_ASSERT_EQUAL_UINT32(1U, su32_scanStart);
+   sv_BondLinkUp(ePRL_CENTRAL);
+   sv_BondSecurity(BT_SECURITY_L4, BT_SECURITY_ERR_SUCCESS);
+   TEST_ASSERT_EQUAL_UINT32(1U, su32_ledValue);
+
+   // Peripheral: the steady LED goes off with the link, blinks on its return
+   sst_ownId = sst_addrB;
+   sst_addrB = sst_addrA;
+   sv_ResetModule();
+   gv_Pair_OnBtReady();
+   sv_RunPair();
+   sv_ToPairing(ePRL_PERIPHERAL);
+   sv_SmpDone();
+   TEST_ASSERT_EQUAL_INT(0, gt_Pair_OnSecuredWrite(&sst_peer, &u8_v, 1U));
+   sv_RunPair();
+   TEST_ASSERT_EQUAL_UINT32(1U, su32_ledValue);
+   TEST_ASSERT_FALSE(gb_Pair_AwaitsBondedPeer());
+   sv_LinkDown(0x08U);
+   TEST_ASSERT_EQUAL_UINT32(0U, su32_ledValue);
+   TEST_ASSERT_TRUE(gb_Pair_AwaitsBondedPeer());
+   sv_BondLinkUp(ePRL_PERIPHERAL);
+   sv_BondSecurity(BT_SECURITY_L4, BT_SECURITY_ERR_SUCCESS);
+   TEST_ASSERT_EQUAL_UINT32(1U, su32_ledValue);
+   sv_AdvanceMs(PAIR_LED_BLINK_MS);
+   TEST_ASSERT_EQUAL_UINT32(0U, su32_ledValue);
+}
+
+static void test_WipeStopsTheReconnection(void)
+{
+   sv_RestoreBond(ePRL_PERIPHERAL);
+   gv_Pair_ForgetBonds();
+   sv_RunPair();
+   TEST_ASSERT_EQUAL_UINT8(ePST_IDLE, su8_State());
+   TEST_ASSERT_TRUE(sb_unpairAll);
+   TEST_ASSERT_EQUAL_UINT32(1U, su32_settingsDelete);
+   TEST_ASSERT_FALSE(gb_Pair_AwaitsBondedPeer());
+}
+
 int main(void)
 {
    (void)setvbuf(stdout, NULL, _IONBF, 0);
@@ -1639,5 +2155,18 @@ int main(void)
    RUN_TEST(test_UnpairForgetsThePeer);
    RUN_TEST(test_WipeForgetsEveryBond);
    RUN_TEST(test_StatusWithoutHostIsNotNotified);
+   RUN_TEST(test_PairingSavesTheBondRecord);
+   RUN_TEST(test_SettingsHandlerChecksTheRecord);
+   RUN_TEST(test_BtReadyRestoresTheRecordedBond);
+   RUN_TEST(test_StaleRecordIsDeleted);
+   RUN_TEST(test_CentralReconnectsAndBlinks);
+   RUN_TEST(test_PeripheralAwaitsItsCentralAndBlinks);
+   RUN_TEST(test_BondedLinkMustReachLevel4);
+   RUN_TEST(test_RunIgnoresSecurityEvents);
+   RUN_TEST(test_ReconnectionRetries);
+   RUN_TEST(test_UnpairStopsTheReconnection);
+   RUN_TEST(test_StartStopsTheReconnection);
+   RUN_TEST(test_PairedLinkLossStartsTheReconnection);
+   RUN_TEST(test_WipeStopsTheReconnection);
    return UNITY_END();
 }

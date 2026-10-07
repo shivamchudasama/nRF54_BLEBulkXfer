@@ -223,6 +223,16 @@ class PairStatus:
         return text
 
 
+def paired_with_each_other(a: Optional[PairStatus], b: Optional[PairStatus]) -> bool:
+    """Both PAIRED, each with the other as its peer: they hold a bond with each
+    other, and a new run would only replace it. Unpair one of them first."""
+    if a is None or b is None or not (a.paired and b.paired):
+        return False
+    if not (a.own and b.own and a.peer and b.peer):
+        return False
+    return a.peer.upper() == b.own.upper() and b.peer.upper() == a.own.upper()
+
+
 def parse_status(data: bytes) -> PairStatus:
     data = bytes(data)
     if len(data) != STATUS_LEN:
@@ -389,7 +399,8 @@ class PairingOrchestrator:
     async def pair(self, central: tuple, peripheral: tuple) -> PairingOutcome:
         """Pair central=(address, name) with peripheral=(address, name).
 
-        Connects to both, checks they are provisioned and idle, sends START to
+        Connects to both, checks they are provisioned, not in a run and not
+        paired with each other already (paired_with_each_other), sends START to
         the peripheral then to the central, follows both STATUS until both are
         PAIRED or one has FAILED (or the time limit, which cancels both), and
         disconnects. Raises PairingError when the run cannot start."""
@@ -410,6 +421,9 @@ class PairingOrchestrator:
                     raise PairingError(f"the {dev.label} device is pairing already")
                 if not st.own:
                     raise PairingError(f"the {dev.label} device did not report its address")
+            if paired_with_each_other(c.status, p.status):
+                raise PairingError("the devices are paired with each other already: "
+                                   "unpair one of them first")
             await p.command(encode_start(Role.PERIPHERAL, c.status.own, c.status.own_type))
             started = True
             await c.command(encode_start(Role.CENTRAL, p.status.own, p.status.own_type))

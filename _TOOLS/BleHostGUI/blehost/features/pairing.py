@@ -2,10 +2,12 @@
 (_DOC/Pairing/PROTOCOL.md).
 
 The page finds devices that advertise the Pairing service (provisioned ones),
-checks each one's STATUS, lets the user choose which device is the central and
-which the peripheral, and runs the pairing: START to both, then both STATUS
-followed live in a step list per device until both are PAIRED or one FAILED.
-UNPAIR deletes a device's bond. The page uses links of its own (BleLink with
+lets the user choose which device is the central and which the peripheral,
+checks the two chosen devices' STATUS (Check), and runs the pairing: START to
+both, then both STATUS followed live in a step list per device until both are
+PAIRED or one FAILED. Two devices already paired with each other are not paired
+again: UNPAIR one of them first (it deletes that device's bond). A new scan
+clears the progress pane. The page uses links of its own (BleLink with
 primary=False), one per device, so the Device page's link must be idle.
 """
 
@@ -81,6 +83,17 @@ def step_position(text: str, current: int = 0):
     return value - pairing.State.ARMED, "running"
 
 
+def check_text(central, peripheral) -> str:
+    """The progress pane's result line after Check: each chosen device's
+    PairStatus (or exception, or None if not chosen)."""
+    if pairing.paired_with_each_other(central, peripheral):
+        return ("Paired with each other already (bonded). "
+                "Unpair one of them to pair them again.")
+    parts = [f"{label} {row_status(res)}" for label, res in
+             (("central", central), ("peripheral", peripheral)) if res is not None]
+    return "Checked: " + "; ".join(parts)
+
+
 def result_pill(text: str):
     """(pill text, tone) for the run's result line."""
     if not text:
@@ -91,6 +104,8 @@ def result_pill(text: str):
         return "Running", "info"
     if text.startswith("Cancelled"):
         return "Cancelled", "warn"
+    if text.startswith("Checked"):
+        return "Checked", "info"
     return "Failed", "err"
 
 
@@ -145,7 +160,8 @@ class PairingFeature(Feature):
         self.tree.pack(side="left", fill="both", expand=True)
         sb.pack(side="right", fill="y")
         ttk.Label(dev, text="Devices advertising the Pairing service (provisioned). "
-                            "Check reads each one's status.",
+                            "Check reads the pairing status of the chosen central "
+                            "and peripheral.",
                   style="Caption.TLabel", wraplength=theme.px(360), justify="left").pack(
             anchor="w", pady=(theme.px(6), 0))
 
@@ -238,6 +254,27 @@ class PairingFeature(Feature):
             self.central_var.set(choice_text(self._found[addrs[0]].name, addrs[0]))
             self.peripheral_var.set(choice_text(self._found[addrs[1]].name, addrs[1]))
 
+    def _selected(self):
+        """[(role, address, name)] for each role with a device chosen."""
+        out = []
+        for role, var in (("central", self.central_var), ("peripheral", self.peripheral_var)):
+            addr = choice_address(var.get())
+            if addr:
+                out.append((role, addr, choice_name(var.get())))
+        return out
+
+    def _already_paired(self, roles) -> bool:
+        """The chosen devices were last seen paired with each other."""
+        return roles is not None and pairing.paired_with_each_other(
+            self._checked.get(roles[0][0]), self._checked.get(roles[1][0]))
+
+    def _reset_progress(self):
+        """The progress pane back to its state before any run."""
+        self._outcome = None
+        for role in ROLES:
+            self.role_vars[role].set("")
+        self.result_var.set("")
+
     def _roles(self):
         """((address, name) central, (address, name) peripheral), or None if incomplete."""
         c, p = self.central_var.get(), self.peripheral_var.get()
@@ -251,12 +288,12 @@ class PairingFeature(Feature):
         main_busy = self.ctx.link.state != LinkState.IDLE
         roles = self._roles()
         distinct = roles is not None and roles[0][0] != roles[1][0]
+        paired = distinct and self._already_paired(roles)
         idle = not busy and not main_busy
-        for btn in (self.scan_btn, self.check_btn, self.swap_btn):
+        for btn in (self.scan_btn, self.swap_btn):
             btn.state(["!disabled"] if idle else ["disabled"])
-        if not self._found:
-            self.check_btn.state(["disabled"])
-        self.pair_btn.state(["!disabled"] if idle and distinct else ["disabled"])
+        self.check_btn.state(["!disabled"] if idle and self._selected() else ["disabled"])
+        self.pair_btn.state(["!disabled"] if idle and distinct and not paired else ["disabled"])
         self.cancel_btn.state(["!disabled"] if busy else ["disabled"])
         self.unpair_c_btn.state(["!disabled"] if idle and roles else ["disabled"])
         self.unpair_p_btn.state(["!disabled"] if idle and roles else ["disabled"])
@@ -265,6 +302,9 @@ class PairingFeature(Feature):
                                    "own link to each device.")
         elif roles is not None and not distinct:
             set_var(self.hint_var, "Choose two different devices.")
+        elif paired:
+            set_var(self.hint_var, "These devices are paired with each other already. Unpair "
+                                   "one of them (⋯ menu) to pair them again.")
         else:
             set_var(self.hint_var, "")
 
@@ -284,6 +324,7 @@ class PairingFeature(Feature):
             self.role_vars[label].set(st.describe())
 
     def _scan(self):
+        self._reset_progress()
         link = self._make_link("scan")
 
         def done(results):
@@ -295,12 +336,17 @@ class PairingFeature(Feature):
         self._run("scan", link.scan(self.ctx.settings.scan_timeout), done)
 
     def _check(self):
-        devices = [(a, r.name) for a, r in self._found.items()]
+        """Read the pairing status of the chosen central and peripheral, and show
+        it in the progress pane and the devices list."""
+        selected = self._selected()
+        if not selected:
+            return
+        devices = {addr: name for _, addr, name in selected}
 
         async def go():
             orch = self._orchestrator()
             results = {}
-            for addr, name in devices:
+            for addr, name in devices.items():
                 try:
                     results[addr] = await orch.probe(addr, name)
                 except Exception as e:          # noqa: BLE001 - shown per device
@@ -309,9 +355,18 @@ class PairingFeature(Feature):
 
         def done(results):
             self._checked.update(results)
+            self._outcome = None
+            shown = dict.fromkeys(ROLES)
+            for role, addr, _ in selected:
+                shown[role] = results[addr]
+            for role in ROLES:
+                res = shown[role]
+                self.role_vars[role].set(res.describe() if isinstance(res, pairing.PairStatus)
+                                         else "")
+            self.result_var.set(check_text(shown["central"], shown["peripheral"]))
             self._show_found()
-            for addr, res in results.items():
-                self._log(f"{addr}: {row_status(res)}")
+            for role, addr, name in selected:
+                self._log(f"{role} {name or addr}: {row_status(results[addr])}")
         self._run("check", go(), done)
 
     def _swap(self):
@@ -324,10 +379,12 @@ class PairingFeature(Feature):
         if roles is None or roles[0][0] == roles[1][0]:
             messagebox.showerror("Pairing", "Choose two different devices: one central, one peripheral.")
             return
+        if self._already_paired(roles):
+            messagebox.showerror("Pairing", "These devices are paired with each other already. "
+                                            "Unpair one of them first.")
+            return
         central, peripheral = roles
-        self._outcome = None
-        for role in ROLES:
-            self.role_vars[role].set("")
+        self._reset_progress()
         self.result_var.set("Running…")
 
         async def go():
@@ -342,7 +399,7 @@ class PairingFeature(Feature):
             if out.ok:
                 self.result_var.set(f"Paired: {out.message()}")
                 self._log(f"{central[1] or central[0]} and {peripheral[1] or peripheral[0]} paired; "
-                          "the devices keep their encrypted link, the peripheral lights LED 1")
+                          "the devices keep their encrypted link, the peripheral lights LED0")
             else:
                 self.result_var.set(f"Failed: {out.message()}")
                 self._log(f"failed: {out.message()}", "error")

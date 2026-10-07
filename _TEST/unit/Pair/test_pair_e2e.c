@@ -70,6 +70,12 @@ int bt_conn_le_create(const bt_addr_le_t *peer, const struct bt_conn_le_create_p
 static uint32_t su32_disconnects;
 int bt_conn_disconnect(struct bt_conn *conn, uint8_t reason) { (void)conn; (void)reason; su32_disconnects++; return 0; }
 int bt_unpair(uint8_t id, const bt_addr_le_t *addr) { (void)id; (void)addr; return 0; }
+int settings_save_one(const char *name, const void *value, size_t val_len)
+{
+   (void)name; (void)value; (void)val_len;
+   return 0;
+}
+int settings_delete(const char *name) { (void)name; return 0; }
 void bt_foreach_bond(uint8_t id, void (*func)(const struct bt_bond_info *info, void *user_data),
    void *user_data)
 {
@@ -176,6 +182,8 @@ static int si_OtherData(uint8_t t, uint32_t o, const uint8_t *d, uint16_t n)
 static void sv_RunPairThread(void)
 {
    gv_SimRunThread(sv_PairThread);
+   // The work queue shows the LED
+   (void)gb_SimRunDelayedWork(&sst_ledWork);
 }
 
 static uint8_t su8_StateNow(void)

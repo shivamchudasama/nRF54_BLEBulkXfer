@@ -308,6 +308,13 @@ static inline int k_work_schedule(struct k_work_delayable *w, k_timeout_t d)
    w->pending = true;
    return 1;
 }
+/** As Zephyr's: (re)schedule with the new delay, pending or not; gives 1. */
+static inline int k_work_reschedule(struct k_work_delayable *w, k_timeout_t d)
+{
+   w->deadline = gi64_simNowMs + d.ms;
+   w->pending = true;
+   return 1;
+}
 static inline int k_work_cancel_delayable(struct k_work_delayable *w)
 {
    w->pending = false;

@@ -19,6 +19,7 @@ from blehost.protocols import pairing as pp
 
 A = ("C4:5E:2A:11:9F:03", pp.ADDR_RANDOM)
 B = ("E1:02:03:04:05:06", pp.ADDR_RANDOM)
+C_ADDR = "D0:11:22:33:44:55"
 
 
 @pytest.fixture(scope="module")
@@ -308,6 +309,35 @@ def test_refusals_before_start():
         assert not any(link.connected for link in world.links)
     with pytest.raises(pp.PairingError, match="two different"):
         _pair(World(SimDevice(A[0])), central=A[0], peripheral=A[0].lower())
+
+
+def _bonded(address, peer, role=pp.Role.CENTRAL):
+    dev = SimDevice(address, state=pp.State.PAIRED)
+    dev.peer, dev.peer_type, dev.role = peer, 1, role
+    return dev
+
+
+def test_paired_with_each_other():
+    st = lambda d: pp.parse_status(d.status_bytes())
+    a, b = _bonded(A[0], B[0]), _bonded(B[0], A[0].lower(), pp.Role.PERIPHERAL)
+    assert pp.paired_with_each_other(st(a), st(b)) and pp.paired_with_each_other(st(b), st(a))
+    assert not pp.paired_with_each_other(st(a), None)
+    assert not pp.paired_with_each_other(st(a), st(SimDevice(B[0]))), "B unpaired"
+    assert not pp.paired_with_each_other(st(a), st(_bonded(B[0], C_ADDR))), "B bonded elsewhere"
+    assert not pp.paired_with_each_other(st(SimDevice(A[0], state=pp.State.PAIRED)),
+                                         st(SimDevice(B[0], state=pp.State.PAIRED))), "no peers"
+
+
+def test_devices_paired_with_each_other_are_not_paired_again():
+    c, p = _bonded(A[0], B[0]), _bonded(B[0], A[0], pp.Role.PERIPHERAL)
+    world = World(c, p)
+    with pytest.raises(pp.PairingError, match="paired with each other already"):
+        _pair(world)
+    assert not c.controls and not p.controls, "no START"
+    assert not any(link.connected for link in world.links)
+    # Once one of them is unpaired, the other's stale bond does not block a new run
+    asyncio.run(world.orchestrator().unpair(B[0]))
+    assert _pair(World(c, p)).ok
 
 
 def test_unknown_device_raises_and_closes():

@@ -7,7 +7,9 @@
  *                certificates over BulkXfer, exchange their LE Secure Connections
  *                OOB data signed with their device keys, verify the signatures,
  *                and pair with the OOB method (LE Secure Connections, level 4,
- *                bonded). Wire contract: _DOC/Pairing/PROTOCOL.md.
+ *                bonded). Once bonded, the two reconnect by themselves (after a
+ *                reset or a lost link) and encrypt with the stored keys.
+ *                Wire contract: _DOC/Pairing/PROTOCOL.md.
  * @date          06/10/2026
  * @author        Shivam Chudasama [SC]
  * @copyright     Bajaj Auto Technology Limited (BATL)
@@ -101,7 +103,7 @@ typedef enum
 {
    ePRL_NONE = 0,                            /**< No pairing yet                       */
    ePRL_CENTRAL = 1,                         /**< Scans, connects, starts pairing      */
-   ePRL_PERIPHERAL = 2,                      /**< Advertises directed to the peer      */
+   ePRL_PERIPHERAL = 2,                      /**< Advertises to the peer               */
 } PairRole_E;
 
 /**
@@ -176,7 +178,10 @@ extern void gv_Pair_OnBtReady(void);
 /* ---- Link events (_BLE, BT context) -------------------------------------- */
 extern bool gb_Pair_ClaimConn(struct bt_conn *stpt_conn, uint8_t u8_err);
 extern void gv_Pair_OnDisconnected(struct bt_conn *stpt_conn, uint8_t u8_reason);
+extern void gv_Pair_OnSecurityChanged(struct bt_conn *stpt_conn, uint8_t u8_level,
+   uint8_t u8_err);
 extern bool gb_Pair_IsAdvertising(void);
+extern bool gb_Pair_AwaitsBondedPeer(void);
 
 /* ---- Pairing service (PairSvc.c, BT context) ----------------------------- */
 extern ssize_t gt_Pair_OnControlWrite(struct bt_conn *stpt_conn, const uint8_t *u8pt_data,
