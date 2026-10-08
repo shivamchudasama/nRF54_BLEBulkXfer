@@ -26,10 +26,10 @@ The output goes to `build_test/report/`:
 
 | Tier | Local | CI job | What it tests |
 |---|---|---|---|
-| C unit tests (CTest + [Unity](https://github.com/ThrowTheSwitch/Unity)) | yes | `host-tests`, with ASan + UBSan | `_LIB/BulkXfer`, `_LIB/GATT_CB`, `_ASW/_DATA_STORE`, `_ASW/_BLK_SVC` (router), `_ASW/_PROV` (flow and wipe button), `_ASW/_PAIR` (pairing flow, the bond record and the bonded reconnection with its LED, end to end, and the signed OOB data on the real TF-PSA-Crypto), `_ASW/_DEVICE_CERT` (storage, and X.509 verification on the real Mbed TLS), `_ASW/_CSR` (key and CSR life cycle, DER encoder), `_ASW/_GENERIX`, header hygiene |
-| Python tests (pytest) | yes | `python-tests`, under `xvfb-run` | `bulkxfer_client.py` (protocol and command line), `bulkxfer_receiver.py`, `blehost/protocols`, `blehost/pki`, `blehost/core/gatt_server.py` (fake backend, and the WinRT backend against fake `winrt` modules), `blehost/core/decoders.py`, `blehost/core/ble_link.py` (the main link and a feature's own labelled links, fake `bleak`), `blehost/protocols/pairing.py` (codecs against `wire.json`, the orchestrator against simulated devices: success, refusals (including two devices paired with each other already), failures, time limit, cancellation, stale statuses, lost notifications), `blehost/features/provisioning.py` and `blehost/features/pairing.py` (each page's logic, and building the real Tk page), `blehost/ui` (the flat light/dark theme and its drawn check box and switch, one-pass switching, the display widgets and that they do not redraw unchanged state, the More menu, the hex upload's coalesced progress and segment count, the status mappings the pages colour by, the main window: pages built on first show, one mapped at a time, the status line, rail badges, traffic capture, and the window without Pillow or an icon font), `blehost/ui/icons.py` (the Pillow-drawn shapes and indicators, icon glyphs with and without a badge, the window icon, and their fallbacks without Pillow or an icon font), `_TOOLS/MemReport/mem_report.py` (map parsing on a synthetic map with each shape of `zephyr.map`, attribution to modules, load addresses, merged-string pools, gaps, name clashes, the table and the command line) |
-| Firmware build | no (VS Code) | `firmware-build`, in `ghcr.io/nrfconnect/sdk-nrf-toolchain` | The whole app for `nrf54l15dk/nrf54l15/cpuapp`. The ROM/RAM use, and the same per module (`mem_report.txt`), go in the job summary |
-| Hardware in the loop | no | `hil-tests` (placeholder, manual) | Flash, upload `AA00000100.hex` over BLE, provision the board with `--negative` (the device's certificate verification), check the certificate with `openssl verify`, check that a second provisioning is refused, `deprovision` and provision again |
+| C unit tests (CTest + [Unity](https://github.com/ThrowTheSwitch/Unity)) | yes | `host-tests`, with ASan + UBSan | `_LIB/BulkXfer`, `_LIB/GATT_CB`, `_LIB/FileSysManager` (with and without the write buffer, on an in-memory volume), `_ASW/_DATA_STORE` (including uploads stored as files), `_ASW/_FS_CMD` (file commands, with and without `CONFIG_FS_CMD`), `_ASW/_BLK_SVC` (router), `_ASW/_PROV` (flow and wipe button), `_ASW/_PAIR` (pairing flow, the bond record and the bonded reconnection with its LED, end to end, and the signed OOB data on the real TF-PSA-Crypto), `_ASW/_DEVICE_CERT` (storage, and X.509 verification on the real Mbed TLS), `_ASW/_CSR` (key and CSR life cycle, DER encoder), `_ASW/_GENERIX`, header hygiene |
+| Python tests (pytest) | yes | `python-tests`, under `xvfb-run` | `bulkxfer_client.py` (protocol and command line), `bulkxfer_receiver.py`, `blehost/protocols`, `blehost/pki`, `blehost/core/gatt_server.py` (fake backend, and the WinRT backend against fake `winrt` modules), `blehost/core/decoders.py`, `blehost/core/ble_link.py` (the main link and a feature's own labelled links, fake `bleak`), `blehost/protocols/pairing.py` (codecs against `wire.json`, the orchestrator against simulated devices: success, refusals (including two devices paired with each other already), failures, time limit, cancellation, stale statuses, lost notifications), `blehost/protocols/filesystem.py` (the file commands' codecs against `wire.json`, the session, the UART harness's line parser, the `fs` command line and shell, against a scripted device), `blehost/features/provisioning.py`, `blehost/features/pairing.py` and `blehost/features/file_system.py` (each page's logic, and building the real Tk page), the Hex Upload page's Store as (BEGIN / COMMIT, size and CRC check), `blehost/ui` (the flat light/dark theme and its drawn check box and switch, one-pass switching, the display widgets and that they do not redraw unchanged state, the More menu, the hex upload's coalesced progress and segment count, the status mappings the pages colour by, the main window: pages built on first show, one mapped at a time, the status line, rail badges, traffic capture, and the window without Pillow or an icon font), `blehost/ui/icons.py` (the Pillow-drawn shapes and indicators, icon glyphs with and without a badge, the window icon, and their fallbacks without Pillow or an icon font), `_TOOLS/MemReport/mem_report.py` (map parsing on a synthetic map with each shape of `zephyr.map`, attribution to modules, load addresses, merged-string pools, gaps, name clashes, the table and the command line) |
+| Firmware build | no (VS Code) | `firmware-build`, in `ghcr.io/nrfconnect/sdk-nrf-toolchain`, once per flash interface (`FLASH_IF=spi`, `sqspi`) | The whole app for `nrf54l15dk/nrf54l15/cpuapp`. The ROM/RAM use, and the same per module (`mem_report.txt`), go in the job summary. The SPI image is the `firmware` artifact the hardware jobs flash |
+| Hardware in the loop | no | `hil-tests` (placeholder, manual) | Flash, upload `AA00000100.hex` over BLE, upload it again stored as a file (`hex --store`), `fs ls`, read it back with `fs get` before and after a reset and compare it with the hex file's records, provision the board with `--negative` (the device's certificate verification), check the certificate with `openssl verify`, check that a second provisioning is refused, `deprovision` and provision again |
 | Pairing on hardware | no | `hil-pair-tests` (placeholder, manual, two DKs) | Flash and provision both DKs with one CA, `pair` (both must end PAIRED), check that the bond survives a reset (the reconnection and the blinking LED0 are checked by eye), then provision one DK with another CA and check that pairing is refused (PEER_CERT) |
 
 The BLE glue (`_BLE`, `_GAP`, `BulkSvc.c`, `PairSvc.c`, `main.c`) only calls the Zephyr stack, so it is covered by the firmware build rather than by unit tests. Everything else in `_ASW` has a host test:
@@ -38,8 +38,9 @@ The BLE glue (`_BLE`, `_GAP`, `BulkSvc.c`, `PairSvc.c`, `main.c`) only calls the
 - `CSR_Generator.c`, `DeviceCert.c` and `Prov.c` use the PSA stub (`shim/psa_stub`) and an in-memory ITS, so every PSA result can be scripted.
 - `ProvButton.c` uses the DK-library shim and simulated time.
 - `Pair.c` records every BT stack call it makes (advertising, scanning, connections, SMP, OOB, bonds, GATT) through declarations-only shim APIs; `PairOob.c` runs on the real TF-PSA-Crypto.
+- `FileSysManager` runs on Zephyr's file system API as `shim/fs_sim.c` provides it: an in-memory volume that behaves as Zephyr's FAT backend where the manager can tell, with one-shot error injection on every call and a free-space limit. `DataStore.c`, `FsCmd.c` and the hex upload end to end use the real manager on it, so their tests check the files themselves.
 
-What only the board can show (CRACEN, the flash-backed ITS, the radio) is left to `hil-tests`.
+What only the board can show (CRACEN, the flash-backed ITS, the external flash over SPI or sQSPI, the radio) is left to `hil-tests`.
 
 ## Layout
 
@@ -48,7 +49,12 @@ CMakeLists.txt         host test project; add_unit_test() registers one Unity ex
 shim/                  single-threaded stand-in for the Zephyr kernel, logging and BT APIs
   zephyr_shim.h          simulated time, k_sem/k_fifo/k_msgq/k_timer/k_mutex, k_work_delayable,
                          atomics, base64, LOG_* / LOG_HEXDUMP_* capture, __ASSERT trap
-  zephyr_sim.c           log capture, SIM_EXPECT_ASSERT(), gv_SimRunThread()
+  zephyr_sim.c           log capture, SIM_EXPECT_ASSERT(), gv_SimRunThread() (may nest: a block
+                         hook can run another thread), the State Machine Framework (zephyr/smf.h,
+                         flat machines, Zephyr's transition order)
+  zephyr/fs/fs.h, fs_sim.c  Zephyr's file system API on an in-memory FAT-like volume (one mount
+                         point, files and directories, mkfs/mount, error injection: gv_SimFs*);
+                         ff.h: FatFs's FATFS type
                          and the BT host APIs pairing uses (addresses, advertising, scanning,
                          connections, SMP/OOB, bonds, GATT write): declarations only
   zephyr/settings/, hw_unique_key.h, dk_buttons_and_leds.h (buttons and LEDs)
@@ -64,8 +70,15 @@ unit/BulkXfer/         test_frame.c, test_engine.c (built 3x: both / server / cl
   sim_link.h             simulated BLE link + scripted peer (other side of both roles),
                          plus a second live link (sst_conn2) for moving roles between links
 unit/GATT_CB/          test_gatt_cb.c, against _DOC/GATT_CB/API_REFERENCE.md
-unit/DataStore/        test_datastore.c (built with and without CONFIG_DS_HEX_DUMP),
-                       test_upload_e2e.c: real Server engine + router + DataStore + simulated client
+unit/FileSysManager/   test_fsmgr.c (built with and without the write buffer), against
+                       _DOC/FileSysManager/API_REFERENCE.md, on fs_sim.c
+unit/DataStore/        test_datastore.c (built with and without CONFIG_DS_HEX_DUMP; BEGIN /
+                       COMMIT on the real File System Manager),
+                       test_upload_e2e.c: real Server engine + router + DataStore + File System
+                       Manager + simulated client, an upload stored as a file on the air
+unit/FsCmd/            test_fscmd.c: the file commands against every golden frame, the refusals
+                       and limits, on the real router and File System Manager (built with and
+                       without CONFIG_FS_CMD)
 unit/BlkSvc/           test_router.c: appType router registration, dispatch, filter and the
                        shared Client (attach on behalf of a module, results back to it)
 unit/Prov/             test_prov.c: provisioning flow, storage order, boot restore and the wipe,
@@ -91,6 +104,8 @@ known_header_issues.txt  headers with a known, reported problem (see below)
 tools/                 gen_vectors.py, run_unity.py (Unity -> JUnit), check_headers.py, report.py,
                        gen_csr_vector.py (regenerates the CSR vector, below),
                        gen_pair_vector.py (writes the "pairing" section, below),
+                       gen_fs_vector.py (writes the "hex_file" and "file_system" sections),
+                       wire_section.py (replaces one section of wire.json in place),
                        gen_cert_vectors.py (certificates for devicecert_verify, every fresh build)
 ```
 
@@ -100,6 +115,7 @@ tools/                 gen_vectors.py, run_unity.py (Unity -> JUnit), check_head
 - **Real captures as golden data.** `vectors/wire.json` holds frames from `_LOG/`: the START of the real upload of `AA00000100.hex`, the END, RESULT and STORED frames, and the device's `SEG … crc=0xe2e72827` line. The C encoder, the DataStore, the end-to-end upload, `parse_ihex` and the Python client must all reproduce them byte for byte. The GUI traffic capture is replayed through the monitor's decoders.
 - **One wire format, two implementations.** The C firmware and the Python client are checked against the same vectors, so a change on one side without the other fails CI.
 - **The device's CSR, checked with the CA's library.** `wire.json` `provisioning.csr` is the CSR the device's `DER.c` builds, with a real ECDSA signature (the C test's signing stub returns it). `test_der.c` requires `DER.c` to produce it byte for byte; the Python tests require `cryptography` to parse and verify it, and the CA to issue a certificate whose subject and key bytes are what the device compares.
+- **Stored as the device stores it.** `wire.json` `hex_file` holds the BEGIN, COMMIT and FILE frames and the first segment of `AA00000100.hex` as a file record, with the file's size and CRC-32 (`tools/gen_fs_vector.py`, which also writes the `file_system` CMD / REPLY / ENTRY frames). The data store's test checks the bytes of the file it writes against it, and the client and GUI check a device's FILE answer the same way. Rerun the tool after a change to either wire format; it replaces only its two sections.
 - **Signed by one library, verified by the other.** `wire.json` `pairing.oob` is an OOB frame signed by Python's `cryptography` (`tools/gen_pair_vector.py`). `pair_oob` verifies it with the device code on the real TF-PSA-Crypto, and signs and verifies its own frames; the Python tests check the same frame and the CONTROL and STATUS vectors the C tests use. Rerun the tool (it replaces only the `pairing` section) after a change to the pairing wire format.
 - **The device verifies what the PC sends.** `tools/gen_cert_vectors.py` runs on each fresh build: it makes a device key and CSR, has the PC tool's CA (`blehost/pki/authority.py`) issue the device certificate, and takes every certificate the device must reject, with its expected RESULT status, from `blehost/pki/negative.py`. `devicecert_verify` imports that key as the persistent device key and runs the device's verification on all of them, so a change on either side that breaks the profile fails the host tests, not only a hardware run.
 - **The real library where it matters.** Certificate parsing and verification are the security boundary, so their test links Mbed TLS itself. `shim/tfpsa/tf_psa_crypto_host_config.h` removes only what a host cannot provide (AES-NI and asm, the OS entropy source, the file ITS, calendar time, the OS zeroize call). Under ASan/LSan in CI, a certificate context left unfreed on any path fails the test.

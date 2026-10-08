@@ -135,6 +135,51 @@ def emit_pairing(p: dict, o: list) -> None:
                          bytes.fromhex(p["oob"][key])))
 
 
+def emit_shorts(name: str, shorts: list, o: list) -> None:
+    """A table of golden short frames [payload length][appType][payload]."""
+    o.append(f"static const ShortVector_T {name}[] =\n{{")
+    for s in shorts:
+        wire = bytes.fromhex(s["hex"])
+        assert wire[0] == len(wire) - 2 and wire[1] == s["app_type"], s["name"]
+        o.append(f"   {{ \"{s['name']}\", {s['app_type']}U, {len(wire)}U,\n"
+                 f"      {{ {c_bytes(wire)} }} }},")
+    o.append("};\n")
+
+
+def emit_file_system(hf: dict, fs: dict, o: list) -> None:
+    """Hex upload stored as a file, and the BLE file commands."""
+    o.append("/* ---- Short frames of the file features ---- */")
+    o.append("typedef struct\n{\n   const char *cpt_name;\n   uint8_t u8_appType;\n"
+             "   uint8_t u8_wireLen;\n   uint8_t u8ar_wire[244];\n} ShortVector_T;\n")
+
+    o.append("/* ---- Hex upload stored as a file (_DOC/HexUpload/PROTOCOL.md) ---- */")
+    for name, val in hf["app_types"].items():
+        o.append(f"#define VEC_HEXF_APP_{name} ({val}U)")
+    o.append(f"#define VEC_HEXF_DIR \"{hf['dir']}\"")
+    o.append(f"#define VEC_HEXF_TEMP_NAME \"{hf['temp_name']}\"")
+    o.append(f"#define VEC_HEXF_NAME_MAX ({hf['name_max']}U)")
+    o.append(f"#define VEC_HEXF_FILE_REPLY_LEN ({hf['file_reply_len']}U)")
+    r = hf["record"]
+    o.append(f"#define VEC_HEXF_RECORD_ADDR ({r['address']}UL)")
+    o.append(f"#define VEC_HEXF_RECORD_LEN ({r['length']}UL)")
+    o.append(f"#define VEC_HEXF_FILE_SIZE ({r['file_size']}UL)")
+    o.append(f"#define VEC_HEXF_FILE_CRC ({r['file_crc32']}UL)")
+    o.append(f"static const uint8_t gu8ar_vecHexfRecordHdr[] = {{ {c_bytes(bytes.fromhex(r['header_hex']))} }};\n")
+    emit_shorts("gstar_vecHexfShorts", hf["shorts"], o)
+
+    o.append("/* ---- BLE file commands (_DOC/FileSysManager/PROTOCOL.md) ---- */")
+    for group, prefix in (("app_types", "VEC_FS_APP_"), ("ops", "VEC_FS_OP_"),
+                          ("status", "VEC_FS_ST_"), ("entry_types", "VEC_FS_ENTRY_")):
+        for name, val in fs[group].items():
+            o.append(f"#define {prefix}{name} ({val}U)")
+    o.append(f"#define VEC_FS_APP_FIRST ({fs['app_type_range'][0]}U)")
+    o.append(f"#define VEC_FS_APP_LAST ({fs['app_type_range'][1]}U)")
+    for name, val in fs["limits"].items():
+        o.append(f"#define VEC_FS_{name.upper()} ({val}U)")
+    o.append("")
+    emit_shorts("gstar_vecFsShorts", fs["shorts"], o)
+
+
 def main(json_path: str, root: str, out_path: str) -> None:
     with open(json_path) as f:
         v = json.load(f)
@@ -192,6 +237,7 @@ def main(json_path: str, root: str, out_path: str) -> None:
 
     emit_provisioning(v["provisioning"], o)
     emit_pairing(v["pairing"], o)
+    emit_file_system(v["hex_file"], v["file_system"], o)
     o.append("#endif /* WIRE_VECTORS_H */\n")
 
     os.makedirs(os.path.dirname(os.path.abspath(out_path)), exist_ok=True)

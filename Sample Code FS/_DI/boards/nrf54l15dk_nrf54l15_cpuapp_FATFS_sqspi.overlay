@@ -1,0 +1,190 @@
+// Board Overlay file to be used when interfacing the NOR Flash chip via sQSPI Interface
+
+// Chosen node to specify the external flash device.
+/ {
+    chosen {
+        nordic,pm-ext-flash = &mx25r64;
+    };
+};
+
+/** The following node is used to specify the pin control configuration for the
+ * sQSPI interface. It defines two groups of pins: one for the default operation
+ * and another for low-power sleep mode. The default group configures the
+ * necessary pins for the sQSPI interface (SCK, CS0, DQ0-DQ3) with a drive mode
+ * of E0E1, which provides strong drive capability.
+ * The sleep group enables low-power mode for the same pins, which can help
+ * reduce power consumption when the device is in sleep mode. The pin control
+ * settings are applied to the cpuflpr_vpr node, which is responsible for
+ * managing the power and performance of the CPU.
+ */
+&pinctrl {
+    sqspi_default: sqspi_default {
+        group1 {
+            psels = <NRF_PSEL(SDP_MSPI_SCK, 2, 1)>,
+                <NRF_PSEL(SDP_MSPI_CS0, 2, 5)>,
+                <NRF_PSEL(SDP_MSPI_DQ0, 2, 2)>;
+            nordic,drive-mode = <NRF_DRIVE_E0E1>;
+        };
+        group2 {
+            psels = <NRF_PSEL(SDP_MSPI_DQ1, 2, 4)>,
+                <NRF_PSEL(SDP_MSPI_DQ2, 2, 3)>,
+                <NRF_PSEL(SDP_MSPI_DQ3, 2, 0)>;
+            nordic,drive-mode = <NRF_DRIVE_E0E1>;
+            bias-pull-up;
+        };
+    };
+
+    sqspi_sleep: sqspi_sleep {
+        group1 {
+            low-power-enable;
+            psels = <NRF_PSEL(SDP_MSPI_SCK, 2, 1)>,
+                <NRF_PSEL(SDP_MSPI_CS0, 2, 5)>,
+                <NRF_PSEL(SDP_MSPI_DQ0, 2, 2)>,
+                <NRF_PSEL(SDP_MSPI_DQ1, 2, 4)>,
+                <NRF_PSEL(SDP_MSPI_DQ2, 2, 3)>,
+                <NRF_PSEL(SDP_MSPI_DQ3, 2, 0)>;
+        };
+    };
+};
+
+/** Modify the cpuflpr_vpr node to use the defined pin control configurations
+ * for the sQSPI interface and enable it. This node is responsible for managing
+ * the power and performance of the CPU, and by associating it with the sQSPI
+ * pin control settings, we ensure that the appropriate pin configurations are
+ * applied when the CPU is active or in sleep mode. The interrupts property is
+ * set to 76 with a default priority, which allows the CPU to handle interrupts
+ * from the sQSPI interface effectively.
+ */
+&cpuflpr_vpr {
+    pinctrl-0 = <&sqspi_default>;
+    pinctrl-1 = <&sqspi_sleep>;
+    pinctrl-names = "default", "sleep";
+    interrupts = <76 NRF_DEFAULT_IRQ_PRIORITY>;
+    status = "okay";
+};
+
+/** Define the memory region to run the application for the soft peripheralfrom RAM
+ * instead of flash. This is specifically required in case you are emulating or
+ * running a soft peripheral from flpr_vpr, which is the case when using the
+ * sQSPI interface. The QSPI peripheral is available in nRF54L15 soc and is
+ * emulated by the RISV processor available in the SoC. By defining this memory
+ * region, we can ensure that the application code for RISCV core is executed from RAM,
+ * which can provide faster execution and better performance when interfacing
+ * with the external flash chip via sQSPI.
+ */
+/ {
+    reserved-memory {
+        #address-cells = <1>;
+        #size-cells = <1>;
+        ranges;
+
+        softperipheral_ram: memory@2003c000 {
+            reg = <0x2003c000 0x4000>;
+            ranges = <0 0x2003c000 0x4000>;
+            #address-cells = <1>;
+            #size-cells = <1>;
+
+            sqspi: sqspi@3b40 {
+                compatible = "nordic,nrf-sqspi";
+                #address-cells = <1>;
+                #size-cells = <0>;
+                reg = <0x3b40 0x200>;
+                status = "okay";
+                zephyr,pm-device-runtime-auto;
+            };
+        };
+    };
+};
+
+
+/** Delete the existing mx25r64 node as it is being redefined with additional
+ * properties in the sQSPI configuration.
+ */
+/delete-node/ &mx25r64;
+
+// Define the mx25r64 node with additional properties for sQSPI interface.
+&sqspi {
+    /** The mx25r64 node represents the external flash memory device connected
+      * via the sQSPI interface. It is compatible with the "mxicy,mx25r" and
+      * "jedec,mspi-nor" device types, indicating that it is a NOR flash memory
+      * device from the MXIC family. The node is enabled with a status of "okay"
+      * and is assigned a register address of 0. The jedec-id property specifies
+      * the unique identifier for the flash memory chip, which is used for device
+      * recognition and configuration. The quad-enable-requirements property
+      * indicates that the S1B6 bit must be set to enable quad mode operation,
+      * which allows for faster data transfer rates. The sfdp-bfp property
+      * contains the Serial Flash Discoverable Parameters (SFDP) data, which
+      * provides information about the flash memory's capabilities and characteristics.
+      * The size property indicates that the flash memory has a total capacity of
+      * 64MB (67108864 bytes). The has-dpd property indicates that the flash
+      * memory supports deep power-down mode, which can help reduce power
+      * consumption when the device is not in use. The timing properties (t-enter-dpd,
+      * t-exit-dpd, t-reset-pulse, t-reset-recovery) specify the timing requirements
+      * for entering and exiting deep power-down mode, as well as for resetting the device.
+      */
+    mx25r64: mx25r6435f@0 {
+        compatible = "mxicy,mx25r", "jedec,mspi-nor";
+        status = "okay";
+        reg = <0>;
+        jedec-id = [c2 28 17];
+        quad-enable-requirements = "S1B6";
+        sfdp-bfp = [
+            e5 20 f1 ff  ff ff ff 03  44 eb 08 6b  08 3b 04 bb
+            ee ff ff ff  ff ff 00 ff  ff ff 00 ff  0c 20 0f 52
+            10 d8 00 ff  23 72 f5 00  82 ed 04 cc  44 83 68 44
+            30 b0 30 b0  f7 c4 d5 5c  00 be 29 ff  f0 d0 ff ff
+        ];
+        size = <67108864>;
+        has-dpd;
+        t-enter-dpd = <10000>;
+        t-exit-dpd = <35000>;
+        t-reset-pulse = <10000>;
+        t-reset-recovery = <35000>;
+
+        mspi-max-frequency = <DT_FREQ_M(8)>;
+        mspi-io-mode = "MSPI_IO_MODE_QUAD_1_4_4";
+        mspi-data-rate = "MSPI_DATA_RATE_SINGLE";
+        mspi-hardware-ce-num = <1>;
+        mspi-cpp-mode = "MSPI_CPP_MODE_0";
+        mspi-endian = "MSPI_BIG_ENDIAN";
+        mspi-ce-polarity = "MSPI_CE_ACTIVE_LOW";
+
+        partitions {
+            compatible = "fixed-partitions";
+            #address-cells = <1>;
+            #size-cells = <1>;
+
+            ext_storage_partition: partition@0 {
+                label = "ext_storage";
+                reg = <0x00000000 0x00400000>;
+            };
+        };
+    };
+};
+
+/** The fatfs_disk node is being redefined to specify the use of the external
+ * flash memory
+ * for FATFS storage.
+ */
+/ {
+    fatfs_disk: fatfs_disk {
+        compatible = "zephyr,flash-disk";
+        partition = <&ext_storage_partition>;
+        disk-name = "FLASH_DISK";
+        cache-size = <4096>;
+    };
+};
+
+/** Disable Factory Information Configuration Register (FICR) as it is not needed
+ * for this application and can save power by doing so.
+ * This is especially important when using the external flash chip, as it can
+ * help reduce overall power consumption of the system.
+ */
+&ficr {
+    status = "disabled";
+};
+
+// Modify UART20 baudrate
+&uart20 {
+    current-speed = <921600>;
+};

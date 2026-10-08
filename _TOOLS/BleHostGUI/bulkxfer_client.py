@@ -18,6 +18,10 @@ Usage:
     python bulkxfer_client.py caps
     python bulkxfer_client.py hex app.hex --name "BLE Bulk Transfer"
     python bulkxfer_client.py hex app.hex --address AA:BB:CC:DD:EE:FF
+    python bulkxfer_client.py hex app.hex --store APP1.BIN --name "BLE Bulk Transfer"
+    python bulkxfer_client.py fs ls --name "BLE Bulk Transfer"
+    python bulkxfer_client.py fs get /FW/APP1.BIN app1.bin --name "BLE Bulk Transfer"
+    python bulkxfer_client.py fs shell --name "BLE Bulk Transfer"
     python bulkxfer_client.py provision --name "BLE Bulk Transfer" [--ca DIR] [--out dev.pem]
     python bulkxfer_client.py provision --negative --name "BLE Bulk Transfer"
     python bulkxfer_client.py deprovision --name "BLE Bulk Transfer"
@@ -25,7 +29,14 @@ Usage:
     python bulkxfer_client.py pairstatus --address AA:BB:CC:DD:EE:01
     python bulkxfer_client.py unpair --address AA:BB:CC:DD:EE:01
 
-hex is the upload the project firmware in _ASW accepts (_DOC/HexUpload/PROTOCOL.md).
+hex is the upload the project firmware in _ASW accepts (_DOC/HexUpload/PROTOCOL.md);
+with --store NAME the device also stores it as the file /FLASH_DISK:/FW/NAME on its
+external flash (BEGIN / COMMIT), and the file's size and CRC-32 are checked.
+fs runs the device's file commands (_DOC/FileSysManager/PROTOCOL.md), the
+FileSystemPoC's UART test harness over BLE: fs mkdir|cd|openr|openw|delfile|deldir
+PATH, fs write TEXT (or --hex HEX, or --from LOCALFILE), fs read [N], fs ls,
+fs close, fs abort; fs get REMOTE LOCAL and fs put LOCAL REMOTE copy a whole file;
+fs shell reads the UART harness's command lines (type help).
 provision runs device provisioning (_DOC/Provisioning/PROTOCOL.md) with the CA
 in --ca (the GUI's default folder if omitted; created if it does not exist);
 it needs cryptography and Windows (the PC hosts a GATT service to receive the
@@ -76,7 +87,48 @@ ACK_TIMEOUT = 1.0
 MAX_RETRIES = 5
 APP_TYPE_RESULT, APP_TYPE_PING = 0x01, 0x02
 APP_TYPE_SEGMENT, APP_TYPE_STORED = 0x10, 0x11       # hex upload (_DOC/HexUpload/PROTOCOL.md)
+APP_TYPE_BEGIN, APP_TYPE_COMMIT, APP_TYPE_FILE = 0x12, 0x13, 0x14   # ... stored as a file
 SEG_MAX = 65536                                      # server DS_BUF_SIZE
+FILE_NAME_MAX = 32                                   # server DS_NAME_MAX
+FILE_DIR = "/FLASH_DISK:/FW"                         # server DS_FILE_DIR
+# Status codes of the device's file system (FsmgrStatus_E), in FILE and the file commands
+FS_STATUS = {0: "OK", 1: "NOT_FOUND", 2: "EXISTS", 3: "NOT_EMPTY", 4: "NO_SPACE", 5: "BAD_ARG",
+             6: "BAD_STATE", 7: "BUSY", 8: "NOT_MOUNTED", 9: "IO", 10: "NOT_SUPPORTED",
+             11: "WRONG_TYPE", 12: "DENIED"}
+FILE_TIMEOUT = 30.0                                  # BEGIN / COMMIT reply (flash work)
+
+
+class FileReply(tuple):
+    """FILE: (op, status, size, crc) for BEGIN or COMMIT."""
+    __slots__ = ()
+
+    def __new__(cls, op, status, size, crc):
+        return tuple.__new__(cls, (op, status, size, crc))
+
+    op = property(lambda s: s[0])
+    status = property(lambda s: s[1])
+    size = property(lambda s: s[2])
+    crc = property(lambda s: s[3])
+
+    @property
+    def ok(self) -> bool:
+        return self.status == 0
+
+    @property
+    def status_name(self) -> str:
+        return FS_STATUS.get(self.status, f"0x{self.status:02x}")
+
+
+def file_image(segments) -> bytes:
+    """The file the device stores for these segments: [u32 LE address][u32 LE length][data] each."""
+    return b"".join(struct.pack("<II", a, len(d)) + bytes(d) for a, d in segments)
+
+
+def valid_file_name(name: str) -> bool:
+    """A name BEGIN accepts: 1..32 of A-Z a-z 0-9 . _ -, not . / .. / UPLOAD.TMP."""
+    ok = set("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789._-")
+    return (0 < len(name) <= FILE_NAME_MAX and set(name) <= ok and name not in (".", "..")
+            and name.upper() != "UPLOAD.TMP")
 
 
 def parse_ihex(path: str, seg_max: int = SEG_MAX) -> list:
@@ -262,6 +314,28 @@ class BulkXferClient:
             if app_type == APP_TYPE_STORED and len(payload) >= 9:
                 return status, struct.unpack("<BII", payload[:9])
 
+    async def _file_request(self, app_type: int, payload: bytes) -> FileReply:
+        while not self.short_q.empty():
+            self.short_q.get_nowait()
+        await self.send_short(app_type, payload)
+        deadline = time.perf_counter() + FILE_TIMEOUT
+        while True:
+            try:
+                t, p = await asyncio.wait_for(self.short_q.get(),
+                                              max(0.1, deadline - time.perf_counter()))
+            except asyncio.TimeoutError:
+                raise TimeoutError(f"no FILE reply to 0x{app_type:02x}") from None
+            if t == APP_TYPE_FILE and len(p) >= 10 and p[0] == app_type:
+                return FileReply(*struct.unpack("<BBII", p[:10]))
+
+    async def begin_file(self, name: str) -> FileReply:
+        """BEGIN: the following segments are stored as the file FILE_DIR/name."""
+        return await self._file_request(APP_TYPE_BEGIN, name.encode())
+
+    async def commit_file(self) -> FileReply:
+        """COMMIT: close the file and give it its name; FILE carries its size and CRC-32."""
+        return await self._file_request(APP_TYPE_COMMIT, b"")
+
 
 async def find_device(address, name):
     from bleak import BleakScanner
@@ -440,13 +514,47 @@ async def deprovision(args):
           f"key SHA-256 {st.pubkey_sha256.hex()[:16]}...")
 
 
+async def fs_command(args):
+    """The device's file commands (the FileSystemPoC's UART test harness, over BLE)."""
+    from bleak import BleakClient
+
+    from blehost.protocols import filesystem as fsp
+
+    sub = args.arg
+    if sub is None:
+        sys.exit("fs: give a command (" + ", ".join(fsp.CLI_COMMANDS) + ")")
+    if sub not in fsp.CLI_COMMANDS:
+        sys.exit(f"fs: unknown command '{sub}'")
+
+    target = await find_device(args.address, args.name)
+    async with BleakClient(target) as client:
+        blk = BulkXferClient(client, args.base)
+        await client.start_notify(blk.ctrl_uuid, blk.on_notify)
+        session = fsp.FileSystemSession(blk, log=print)
+        try:
+            if sub == "shell":
+                await fsp.shell(session)
+            else:
+                await fsp.run_cli(session, sub, args.rest, hex_data=args.hex_data,
+                                  from_file=args.from_file)
+        except (fsp.FsError, ValueError, OSError, TimeoutError) as e:
+            sys.exit(f"fs {sub}: {e}")
+
+
 async def main():
     from bleak import BleakClient
 
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("command", choices=["ping", "send", "caps", "hex", "provision", "deprovision",
-                                        "pair", "pairstatus", "unpair"])
-    ap.add_argument("arg", nargs="?", help="send: size in bytes (default 20000); hex: .hex file")
+                                        "pair", "pairstatus", "unpair", "fs"])
+    ap.add_argument("arg", nargs="?", help="send: size in bytes (default 20000); hex: .hex file; "
+                                           "fs: mkdir|cd|openr|openw|write|read|ls|delfile|deldir|"
+                                           "close|abort|get|put|shell")
+    ap.add_argument("rest", nargs="*", help="fs: the command's operands")
+    ap.add_argument("--store", metavar="NAME",
+                    help="hex: also store the upload as the file /FLASH_DISK:/FW/NAME")
+    ap.add_argument("--hex", dest="hex_data", metavar="HEX", help="fs write: data as hex")
+    ap.add_argument("--from", dest="from_file", metavar="FILE", help="fs write: data from a file")
     ap.add_argument("--ca", help="provision: CA folder (default: the GUI's)")
     ap.add_argument("--validity", type=int, default=365, help="provision: device certificate days")
     ap.add_argument("--out", help="provision: write the device certificate (PEM) here")
@@ -473,6 +581,9 @@ async def main():
         except (OSError, ValueError) as e:
             sys.exit(str(e))
         print(f"{args.arg}: {len(segments)} segment(s), {sum(len(d) for _, d in segments)} bytes")
+        if args.store is not None and not valid_file_name(args.store):
+            sys.exit(f"--store: '{args.store}' is not a valid file name (1..{FILE_NAME_MAX} of "
+                     "A-Z a-z 0-9 . _ -)")
 
     if args.command == "provision":
         await provision(args)
@@ -485,6 +596,9 @@ async def main():
         return
     if args.command in ("pairstatus", "unpair"):
         await pair_status(args, unpair_it=args.command == "unpair")
+        return
+    if args.command == "fs":
+        await fs_command(args)
         return
 
     target = await find_device(args.address, args.name)
@@ -505,6 +619,11 @@ async def main():
             print(f"echo type 0x{app_type:02x} {payload!r} in {(time.perf_counter() - t0) * 1e3:.1f} ms")
 
         elif args.command == "hex":
+            if args.store is not None:
+                rep = await blk.begin_file(args.store)
+                if not rep.ok:
+                    sys.exit(f"BEGIN {args.store}: {rep.status_name}")
+                print(f"storing as {FILE_DIR}/{args.store}")
             for addr, data in segments:
                 t0 = time.perf_counter()
                 try:
@@ -517,6 +636,17 @@ async def main():
                     sys.exit(1)
                 st, a, n = stored
                 print(f"  stored: 0x{a:08x} {n} B, {STATUS.get(st, hex(st))}")
+                if st != 0:
+                    sys.exit(1)
+            if args.store is not None:
+                rep = await blk.commit_file()
+                image = file_image(segments)
+                if not rep.ok:
+                    sys.exit(f"COMMIT {args.store}: {rep.status_name}")
+                if (rep.size, rep.crc) != (len(image), zlib.crc32(image)):
+                    sys.exit(f"{args.store}: device file {rep.size} B crc 0x{rep.crc:08x}, "
+                             f"expected {len(image)} B crc 0x{zlib.crc32(image):08x}")
+                print(f"file {FILE_DIR}/{args.store}: {rep.size} B, crc 0x{rep.crc:08x} (matches)")
             print("hex upload done")
 
         else:

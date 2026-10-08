@@ -1,0 +1,68 @@
+# It shows the Kconfig file for the nrf54_Zephyr project. We are not creating a
+# new Kconfig file, but rather editing the existing one to include a new configuration option.
+mainmenu "nrf54_Zephyr"
+
+# The Kconfig file includes the Zephyr Kconfig file, which contains the base
+# configuration options for the Zephyr RTOS.
+source "Kconfig.zephyr"
+
+# We are adding a new menu for application-specific options
+menu "Application Options"
+
+# Compile-time selection of external NOR flash interface used by FileSysManager.
+choice FSMGR_FLASH_INTERFACE
+    prompt "External flash interface"
+    default FSMGR_FLASH_IF_SPI
+    help
+      Select the external NOR transport used for FLASH_DISK.
+
+config FSMGR_FLASH_IF_SPI
+    bool "SPI NOR (jedec,spi-nor)"
+    help
+      Use the SPI controller path for external NOR flash.
+
+config FSMGR_FLASH_IF_SQSPI
+    bool "sQSPI over FLPR (jedec,mspi-nor)"
+    help
+      Use the FLPR-backed sQSPI MSPI shim path for external NOR flash.
+
+endchoice
+
+
+# Within 'Application Options' menu, we are defining a new configuration option
+# called UART_TEST_HARNESS. This option is a boolean that allows the user to enable
+# or disable the UART test harness for the FileSysManager. By default, it is set to 'y' (enabled),
+# and it includes a help message that explains what the option does and why it
+# might be disabled for production builds.
+config UART_TEST_HARNESS
+    bool "Enable UART Test Harness for FileSysManager"
+    default y
+    help
+      Enables the FileSysManager UART command test harness thread.
+      Disable this for production builds to exclude the harness code.
+
+# Configuration option for the FileSysManager's buffered write strategy.
+# This option allows the user to enable or disable the buffered write strategy,
+# which aggregates incoming WRITE_DATA chunks in RAM and flushes them in larger
+# fs_write() operations.
+config FSMGR_BUFFERED_WRITE
+    bool "Enable FileSysManager buffered write strategy"
+    default n
+    help
+      Aggregates incoming WRITE_DATA chunks in RAM and flushes them in larger
+      fs_write() operations. Disable this to keep direct per-message writes.
+
+# Configuration option for the size of the RAM buffer used for write aggregation
+# in the FileSysManager. This option is an integer that specifies the buffer
+# size in bytes. It depends on the FSMGR_BUFFERED_WRITE option being enabled.
+# The valid range for this option is from 240 to 4096.
+config FSMGR_WRITE_BUFFER_SIZE
+    int "FileSysManager write aggregation buffer size (bytes)"
+    depends on FSMGR_BUFFERED_WRITE
+    range 240 4096
+    default 512
+    help
+      Size of the RAM buffer used to aggregate writes before calling fs_write().
+      Larger values usually reduce write call count but increase RAM usage.
+
+endmenu

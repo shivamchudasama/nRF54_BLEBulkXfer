@@ -9,7 +9,8 @@
  *                - __ASSERT trapping for SIM_EXPECT_ASSERT(),
  *                - gv_SimRunThread(): runs a K_THREAD_DEFINE body until it
  *                  would block for ever, so one loop iteration of an endless
- *                  thread can be tested.
+ *                  thread can be tested,
+ *                - the State Machine Framework (zephyr/smf.h), flat machines.
  *
  * @date          29/09/2026
  * @author        Shivam Chudasama
@@ -21,6 +22,7 @@
 
 #include <stdarg.h>
 #include "zephyr_shim.h"
+#include "zephyr/smf.h"
 
 /******************************************************************************/
 /*  Time and verbosity                                                        */
@@ -114,11 +116,60 @@ jmp_buf *gpt_simThreadJmp = NULL;
 void gv_SimRunThread(void (*fpt_entry)(void *, void *, void *))
 {
    jmp_buf st_jb;
+   jmp_buf *pt_outer = gpt_simThreadJmp;     /* a thread run from a block hook */
 
    gpt_simThreadJmp = &st_jb;
    if (setjmp(st_jb) == 0)
    {
       fpt_entry(NULL, NULL, NULL);
    }
-   gpt_simThreadJmp = NULL;
+   gpt_simThreadJmp = pt_outer;
+}
+
+/******************************************************************************/
+/*  State Machine Framework (zephyr/smf.h): flat state machines               */
+/******************************************************************************/
+void smf_set_initial(struct smf_ctx *ctx, const struct smf_state *init_state)
+{
+   ctx->previous = NULL;
+   ctx->current = init_state;
+   ctx->terminate_val = 0;
+   if (init_state->entry != NULL)
+   {
+      init_state->entry(ctx);
+   }
+}
+
+/* As Zephyr's for a flat machine: the current state's exit, then the new
+   state's entry, at once. An entry action may set the next state itself. */
+void smf_set_state(struct smf_ctx *ctx, const struct smf_state *new_state)
+{
+   if (ctx->current->exit != NULL)
+   {
+      ctx->current->exit(ctx);
+   }
+   ctx->previous = ctx->current;
+   ctx->current = new_state;
+   if (new_state->entry != NULL)
+   {
+      new_state->entry(ctx);
+   }
+}
+
+void smf_set_terminate(struct smf_ctx *ctx, int32_t val)
+{
+   ctx->terminate_val = val;
+}
+
+int32_t smf_run_state(struct smf_ctx *ctx)
+{
+   if (ctx->terminate_val != 0)
+   {
+      return ctx->terminate_val;
+   }
+   if (ctx->current->run != NULL)
+   {
+      (void)ctx->current->run(ctx);
+   }
+   return ctx->terminate_val;
 }

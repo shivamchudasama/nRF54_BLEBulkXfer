@@ -19,6 +19,28 @@ set(KCONFIG_ROOT ${CMAKE_CURRENT_SOURCE_DIR}/_DI/Kconfig)
 set(CONF_FILE ${CMAKE_CURRENT_SOURCE_DIR}/_DI/prj.conf)
 set(DTC_OVERLAY_FILE ${CMAKE_CURRENT_SOURCE_DIR}/_DI/boards/\${NORMALIZED_BOARD_TARGET}.overlay)
 
+# External flash interface of the FAT volume: FLASH_IF=spi (default) or sqspi
+# (the FLPR soft peripheral), e.g. west build ... -- -DFLASH_IF=sqspi. It adds
+# _DI/conf/flash_<if>.conf and _DI/boards/<board>_flash_<if>.overlay as extra
+# files; Zephyr merges extra files from every scope, so those given on the
+# command line or by the extension still apply. Under sysbuild a -D option
+# reaches this image only through the sysbuild cache, which Zephyr reads in
+# find_package(), so it is read here directly.
+if(NOT DEFINED FLASH_IF AND DEFINED SYSBUILD_CACHE AND EXISTS "${SYSBUILD_CACHE}")
+   file(STRINGS "${SYSBUILD_CACHE}" FLASH_IF_ENTRY REGEX "^FLASH_IF:[^=]*=")
+   string(REGEX REPLACE "^FLASH_IF:[^=]*=" "" FLASH_IF "${FLASH_IF_ENTRY}")
+endif()
+if(NOT FLASH_IF)
+   set(FLASH_IF spi)
+endif()
+if(NOT FLASH_IF MATCHES "^(spi|sqspi)$")
+   message(FATAL_ERROR "FLASH_IF must be spi or sqspi, not '${FLASH_IF}'")
+endif()
+message(STATUS "External flash interface: ${FLASH_IF}")
+set(EXTRA_CONF_FILE ${CMAKE_CURRENT_SOURCE_DIR}/_DI/conf/flash_${FLASH_IF}.conf)
+set(EXTRA_DTC_OVERLAY_FILE
+   ${CMAKE_CURRENT_SOURCE_DIR}/_DI/boards/\${NORMALIZED_BOARD_TARGET}_flash_${FLASH_IF}.overlay)
+
 find_package(Zephyr REQUIRED HINTS $ENV{ZEPHYR_BASE})
 project(nRF54_BLEBulkXfer)
 

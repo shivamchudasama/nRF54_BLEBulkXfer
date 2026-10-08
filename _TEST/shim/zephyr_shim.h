@@ -189,6 +189,12 @@ static inline int k_sem_take(struct k_sem *s, k_timeout_t t)
 }
 static inline void k_sem_give(struct k_sem *s) { if (s->count < s->limit) { s->count++; } }
 static inline void k_sem_reset(struct k_sem *s) { s->count = 0U; }
+static inline int k_sem_init(struct k_sem *s, unsigned int init, unsigned int lim)
+{
+   s->count = init;
+   s->limit = lim;
+   return 0;
+}
 
 /* ---- FIFO ---------------------------------------------------------------- */
 struct k_fifo { void *head; void *tail; };
@@ -335,7 +341,8 @@ static inline bool gb_SimRunDelayedWork(struct k_work_delayable *w)
    const int name = 0; \
    void (*const name##_entry)(void *, void *, void *) = (entry)
 #define k_thread_start(t)     ((void)(t))
-/** Run a thread body until it would block for ever on a k_sem (zephyr_sim.c). */
+/** Run a thread body until it would block for ever on a k_sem or k_msgq
+    (zephyr_sim.c). Calls may nest: a block hook may run another thread. */
 extern void gv_SimRunThread(void (*fpt_entry)(void *, void *, void *));
 
 /* ---- Atomics (single-threaded) ------------------------------------------- */

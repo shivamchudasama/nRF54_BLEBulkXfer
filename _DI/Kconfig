@@ -27,6 +27,69 @@ config PROV_WIPE_HOLD_MS
 	  key and CSR, as the DEPROVISION message does. Releasing the button
 	  earlier does nothing.
 
+menu "File system manager"
+
+choice FSMGR_FLASH_INTERFACE
+	prompt "External flash interface"
+	default FSMGR_FLASH_IF_SPI
+	help
+	  The interface of the external NOR flash that holds the FAT volume
+	  (FLASH_DISK). Selected by _DI/conf/flash_<if>.conf together with its
+	  devicetree overlay (root CMakeLists.txt, FLASH_IF); used for the mount
+	  log line.
+
+config FSMGR_FLASH_IF_SPI
+	bool "SPI NOR (jedec,spi-nor on spi00)"
+
+config FSMGR_FLASH_IF_SQSPI
+	bool "sQSPI soft peripheral on the FLPR core (jedec,mspi-nor)"
+
+endchoice
+
+config FSMGR_BUFFERED_WRITE
+	bool "Collect written data into larger flash writes"
+	help
+	  The File System Manager collects the data of successive write
+	  commands in a RAM buffer and writes it to the file in
+	  FSMGR_WRITE_BUFFER_SIZE pieces. Disable it to write every command's
+	  data directly.
+
+config FSMGR_WRITE_BUFFER_SIZE
+	int "Write buffer size (bytes)"
+	depends on FSMGR_BUFFERED_WRITE
+	range 240 4096
+	default 512
+	help
+	  Size of the RAM buffer used by FSMGR_BUFFERED_WRITE. Larger values
+	  mean fewer flash writes and more RAM.
+
+config FSMGR_STACK_SIZE
+	int "File System Manager thread stack size"
+	default 4096
+
+config FSMGR_PRIORITY
+	int "File System Manager thread priority"
+	default 10
+	help
+	  Keep it below the BulkXfer engine (priority 5), so flash writes
+	  never delay the link.
+
+config FSMGR_QUEUE_DEPTH
+	int "File System Manager message queue depth"
+	default 8
+	range 2 64
+
+config FS_CMD
+	bool "File commands over BLE (appTypes 0x40-0x4F)"
+	default y
+	help
+	  Lets the host (GUI Files page, bulkxfer_client.py fs) create, list,
+	  read, write and delete files on the external flash. Like the hex
+	  upload, it runs on the unauthenticated host link, so turn it off in
+	  production builds.
+
+endmenu
+
 menu "Device pairing"
 
 config PAIR_TIMEOUT_MS

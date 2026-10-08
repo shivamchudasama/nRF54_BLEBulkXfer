@@ -1,0 +1,36 @@
+# Partition map for the project.
+# This file defines the memory layout for the project, including the regions and
+# partitions. The regions define the memory areas available in the system,
+# while the partitions define how these regions are used for different purposes.
+# Regions can be defined with specific attributes such as size, alignment,
+# and access permissions.
+
+# FATFS partition for external flash storage
+fatfs_ext:
+  # The region where the FATFS partition will be placed. This should correspond
+  # to the region defined in the 'regions' section.
+  region: external_flash
+
+  # The placement of the partition within the region. In this case, it is placed
+  # before the 'end' of the region, meaning it will occupy the space from the
+  # beginning of the region up to the end.
+  placement:
+    before:
+      - end
+  # The size of the partition. This should be less than or equal to the size of
+  # the region it is placed in. In this case, it is set to 4 MB (0x400000 bytes).
+  # The maximum size of drive available on board is 8MB, remaining 4MB is currently unused.
+  size: 0x400000
+  # The affiliation of the partition. This is a label that can be used to
+  # identify the purpose of the partition. In this case, it is labeled as 'disk',
+  # indicating that it is used for disk storage.
+  affiliation: disk
+  # The extra parameters for the partition. These parameters can be used to
+  # provide additional information about the partition, such as the disk name,
+  # cache size, sector size, and read-only status. These parameters can be used
+  # by the system to configure the partition appropriately.
+  extra_params:
+    disk_name: "FLASH_DISK"
+    disk_cache_size: 4096
+    disk_sector_size: 512
+    disk_read_only: 0
