@@ -103,7 +103,8 @@ typedef enum
    eSFS_COUNT
 } SimFsOp_E;
 
-/** Empty, unformatted volume; no injected errors; counters cleared. */
+/** Empty, unformatted volume; no injected errors; counters cleared; handles
+    still open are dropped (at most 16 open at a time: -ENFILE beyond). */
 extern void gv_SimFsReset(void);
 /** Format (and optionally mount) the volume, as after a successful mkfs. */
 extern void gv_SimFsFormat(bool b_mount);

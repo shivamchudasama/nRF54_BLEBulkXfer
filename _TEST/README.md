@@ -38,7 +38,7 @@ The BLE glue (`_BLE`, `_GAP`, `BulkSvc.c`, `PairSvc.c`, `main.c`) only calls the
 - `CSR_Generator.c`, `DeviceCert.c` and `Prov.c` use the PSA stub (`shim/psa_stub`) and an in-memory ITS, so every PSA result can be scripted.
 - `ProvButton.c` uses the DK-library shim and simulated time.
 - `Pair.c` records every BT stack call it makes (advertising, scanning, connections, SMP, OOB, bonds, GATT) through declarations-only shim APIs; `PairOob.c` runs on the real TF-PSA-Crypto.
-- `FileSysManager` runs on Zephyr's file system API as `shim/fs_sim.c` provides it: an in-memory volume that behaves as Zephyr's FAT backend where the manager can tell, with one-shot error injection on every call and a free-space limit. `DataStore.c`, `FsCmd.c` and the hex upload end to end use the real manager on it, so their tests check the files themselves.
+- `FileSysManager` runs on Zephyr's file system API as `shim/fs_sim.c` provides it: an in-memory volume that behaves as Zephyr's FAT backend where the manager can tell, with one-shot error injection on every call and a free-space limit. File and directory handles come from a fixed pool that each reset clears, so a test may end with a file still open without LeakSanitizer reporting it. `DataStore.c`, `FsCmd.c` and the hex upload end to end use the real manager on it, so their tests check the files themselves.
 
 What only the board can show (CRACEN, the flash-backed ITS, the external flash over SPI or sQSPI, the radio) is left to `hil-tests`.
 

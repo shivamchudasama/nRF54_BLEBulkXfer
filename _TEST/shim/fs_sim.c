@@ -11,7 +11,9 @@
  *                fs_unlink() of a non-empty directory fails with -EACCES;
  *                fs_rename() replaces an existing target; fs_readdir() ends
  *                with an empty name. Any call can be made to fail once
- *                (gv_SimFsFailOnce).
+ *                (gv_SimFsFailOnce). Handles come from a fixed pool that
+ *                gv_SimFsReset() clears, so a test may end with a file still
+ *                open without leaking memory.
  *
  * @date          07/10/2026
  * @author        Shivam Chudasama
@@ -26,6 +28,7 @@
 
 #define SIM_FS_MAX_NODES      (128U)
 #define SIM_FS_PATH_LEN       (300U)
+#define SIM_FS_MAX_HANDLES    (16U)
 
 typedef struct
 {
@@ -38,12 +41,14 @@ typedef struct
 
 typedef struct
 {
+   bool b_used;
    int i_node;
    uint32_t u32_pos;                        /* file: position; dir: next node index */
    fs_mode_t t_flags;
 } SimFsHandle_T;
 
 static SimFsNode_T sstar_nodes[SIM_FS_MAX_NODES];
+static SimFsHandle_T sstar_handles[SIM_FS_MAX_HANDLES];
 static bool sb_formatted;
 static bool sb_mounted;
 static char scar_mount[SIM_FS_PATH_LEN];
@@ -170,6 +175,30 @@ static void sv_FreeNode(int i_node)
    (void)memset(&sstar_nodes[i_node], 0, sizeof(sstar_nodes[i_node]));
 }
 
+/** A free handle from the pool, cleared and marked used; NULL when all are open. */
+static SimFsHandle_T *sstpt_NewHandle(void)
+{
+   uint32_t i;
+
+   for (i = 0U; i < SIM_FS_MAX_HANDLES; i++)
+   {
+      if (!sstar_handles[i].b_used)
+      {
+         (void)memset(&sstar_handles[i], 0, sizeof(sstar_handles[i]));
+         sstar_handles[i].b_used = true;
+         su32_openHandles++;
+         return &sstar_handles[i];
+      }
+   }
+   return NULL;
+}
+
+static void sv_FreeHandle(SimFsHandle_T *stpt_h)
+{
+   stpt_h->b_used = false;
+   su32_openHandles--;
+}
+
 static bool sb_HasChildren(const char *cpt_dir)
 {
    uint32_t i;
@@ -193,6 +222,7 @@ void gv_SimFsReset(void)
       if (sstar_nodes[i].b_used) { free(sstar_nodes[i].u8pt_data); }
    }
    (void)memset(sstar_nodes, 0, sizeof(sstar_nodes));
+   (void)memset(sstar_handles, 0, sizeof(sstar_handles));
    sb_formatted = false;
    sb_mounted = false;
    scar_mount[0] = '\0';
@@ -327,13 +357,13 @@ int fs_open(struct fs_file_t *zfp, const char *file_name, fs_mode_t flags)
       sstar_nodes[i_node].u32_size = 0U;
    }
 
-   stpt_h = calloc(1U, sizeof(*stpt_h));
+   stpt_h = sstpt_NewHandle();
+   if (stpt_h == NULL) { return -ENFILE; }
    stpt_h->i_node = i_node;
    stpt_h->u32_pos = ((flags & FS_O_APPEND) != 0U) ? sstar_nodes[i_node].u32_size : 0U;
    stpt_h->t_flags = flags;
    zfp->filep = stpt_h;
    zfp->flags = flags;
-   su32_openHandles++;
    return 0;
 }
 
@@ -343,9 +373,8 @@ int fs_close(struct fs_file_t *zfp)
 
    if (zfp->filep != NULL)
    {
-      free(zfp->filep);
+      sv_FreeHandle((SimFsHandle_T *)zfp->filep);
       zfp->filep = NULL;
-      su32_openHandles--;
    }
    return i_err;
 }
@@ -509,11 +538,11 @@ int fs_opendir(struct fs_dir_t *zdp, const char *path)
 
    if (i_err != 0) { return i_err; }
    if (!sb_OnVolume(path) || !sb_DirExists(path)) { return -ENOENT; }
-   stpt_h = calloc(1U, sizeof(*stpt_h));
+   stpt_h = sstpt_NewHandle();
+   if (stpt_h == NULL) { return -ENFILE; }
    stpt_h->i_node = sb_IsRoot(path) ? -1 : si_Find(path);
    stpt_h->u32_pos = 0U;
    zdp->dirp = stpt_h;
-   su32_openHandles++;
    return 0;
 }
 
@@ -545,9 +574,8 @@ int fs_closedir(struct fs_dir_t *zdp)
 {
    if (zdp->dirp != NULL)
    {
-      free(zdp->dirp);
+      sv_FreeHandle((SimFsHandle_T *)zdp->dirp);
       zdp->dirp = NULL;
-      su32_openHandles--;
    }
    return 0;
 }
