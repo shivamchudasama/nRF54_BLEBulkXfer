@@ -83,7 +83,11 @@ west build -b nrf54l15dk/nrf54l15/cpuapp --sysbuild -d build .                  
 west build -b nrf54l15dk/nrf54l15/cpuapp --sysbuild -d build . -- -DFLASH_IF=sqspi  # sQSPI
 ```
 
-In VS Code, add `-DFLASH_IF=sqspi` to the build configuration's extra CMake arguments.
+In VS Code, use the `build_sqspi` preset in the root `CMakePresets.json` (or add
+`-DFLASH_IF=sqspi` to the build configuration's extra CMake arguments), and do not pick the `flash_<if>` files in its overlay or Kconfig fragment lists: added twice, the
+overlay makes ninja fail ("defined as an output multiple times"), and as the base overlay it
+replaces the board overlay. The root `CMakeLists.txt` stops the build with a message when
+they are given.
 
 ## Provenance
 

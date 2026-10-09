@@ -94,7 +94,9 @@ west build -b nrf54l15dk/nrf54l15/cpuapp --sysbuild -d build .                  
 west build -b nrf54l15dk/nrf54l15/cpuapp --sysbuild -d build . -- -DFLASH_IF=sqspi  # over sQSPI (FLPR soft peripheral)
 ```
 
-`FLASH_IF` (root `CMakeLists.txt`) picks the external flash interface: it adds `_DI/conf/flash_<if>.conf` and `_DI/boards/<board>_flash_<if>.overlay`. In VS Code, put `-DFLASH_IF=sqspi` in the build configuration's extra CMake arguments.
+`FLASH_IF` (root `CMakeLists.txt`) picks the external flash interface: it adds `_DI/conf/flash_<if>.conf` and `_DI/boards/<board>_flash_<if>.overlay`.
+
+The build configurations are under version control in [CMakePresets.json](CMakePresets.json): `build` (SPI) and `build_sqspi` (sQSPI). In VS Code, choose **Add build configuration** and pick one under **CMake Preset**. A new configuration goes there too (the extension's **Save Configuration as Preset** writes it), with `FLASH_IF` as a cache variable and the flash files left out of its overlay and Kconfig fragment lists; listed there, the build stops with a message saying so.
 
 Below the linker's FLASH/RAM summary, the build prints the same figures per module of `_ASW` and `_LIB` (with Zephyr, NCS and libc as one "Other" row) and writes them to `zephyr/mem_report.txt` in the image's build folder; see [MemReport](_TOOLS/MemReport/README.md).
 
@@ -151,6 +153,7 @@ This needs a host `gcc` and Python 3.8+. The report is written to `build_test/re
 - [Device pairing protocol](_DOC/Pairing/PROTOCOL.md)
 - [Device pairing design](_DOC/Pairing/README.md)
 - [CBAP application notes (AN1396, AN1268)](_DOC/CBAP/)
+- [Bootloader User Guide (GBL file format)](<_DOC/GBL Format/>)
 - [BLE Host GUI](_TOOLS/BleHostGUI/README.md)
 - [Memory report per module](_TOOLS/MemReport/README.md)
 - [Tests and CI](_TEST/README.md)
