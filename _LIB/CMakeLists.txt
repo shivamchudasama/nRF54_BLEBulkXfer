@@ -10,3 +10,5 @@ zephyr_compile_definitions(BLK_ENABLE_SERVER=1 BLK_ENABLE_CLIENT=1
 # GATT_CB first: the BulkXfer Server sits on top of the generic GATT callbacks
 add_subdirectory(GATT_CB)
 add_subdirectory(BulkXfer)
+# The FAT file system on the external flash (hex uploads are stored there)
+add_subdirectory(FileSysManager)

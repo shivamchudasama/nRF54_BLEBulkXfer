@@ -1,0 +1,31 @@
+/*
+ * External flash over SPI (FLASH_IF=spi, the default): the DK's MX25R6435F
+ * (mx25r64, 8 MiB) on spi00, as the board defines it. Its first 4 MiB are the
+ * FAT volume FLASH_DISK; the rest is unused.
+ *
+ * Added after the board overlay by the root CMakeLists.txt. FICR stays
+ * enabled (Sample Code FS disabled it): HWINFO reads the device ID from it
+ * for the CSR's CN.
+ */
+
+&mx25r64 {
+	partitions {
+		compatible = "fixed-partitions";
+		#address-cells = <1>;
+		#size-cells = <1>;
+
+		ext_storage_partition: partition@0 {
+			label = "ext_storage";
+			reg = <0x00000000 0x00400000>;
+		};
+	};
+};
+
+/ {
+	fatfs_disk: fatfs_disk {
+		compatible = "zephyr,flash-disk";
+		partition = <&ext_storage_partition>;
+		disk-name = "FLASH_DISK";
+		cache-size = <4096>;
+	};
+};

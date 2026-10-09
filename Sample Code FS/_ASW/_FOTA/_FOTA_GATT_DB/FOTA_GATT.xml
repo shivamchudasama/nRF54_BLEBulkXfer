@@ -1,0 +1,89 @@
+<?xml version="1.0" encoding="UTF-8" standalone="no"?>
+
+<!-- ===================================================== -->
+<!-- BLE ECU FOTA GATT DATABASE                            -->
+<!-- Target: Zephyr RTOS                                   -->
+<!-- ===================================================== -->
+
+<gatt
+    name="FOTA">
+
+  <!-- =================================================== -->
+  <!-- FOTA SERVICE                                        -->
+  <!-- =================================================== -->
+  <service
+      name="FOTA_Service"
+      uuid="00000001-16A1-4812-AF35-F3F29A92F6CA"
+      advertise="true">
+
+    <!-- ================================================= -->
+    <!-- FOTA CONTROL CHARACTERISTIC                       -->
+    <!-- ================================================= -->
+    <characteristic
+        name="FOTA_Control"
+        uuid="00000002-16A1-4812-AF35-F3F29A92F6CA"
+        properties="write"
+        permissions="write">
+
+      <value
+          type="uint8"
+          length="244"
+          variable_length="true"/>
+    </characteristic>
+
+    <!-- ================================================= -->
+    <!-- FOTA DATA TRANSFER CHARACTERISTIC                 -->
+    <!-- ================================================= -->
+    <characteristic
+        name="FOTA_Data_Transfer"
+        uuid="00000003-16A1-4812-AF35-F3F29A92F6CA"
+        properties="write"
+        permissions="write">
+
+      <value
+          type="uint8"
+          max_length="244"
+          variable_length="true"/>
+    </characteristic>
+
+    <!-- ================================================= -->
+    <!-- FOTA STATUS CHARACTERISTIC                        -->
+    <!-- ================================================= -->
+    <characteristic
+        name="FOTA_Status"
+        uuid="00000004-16A1-4812-AF35-F3F29A92F6CA"
+        properties="notify indicate"
+        permissions="none">
+
+      <value
+          type="uint8"
+          length="4"
+          variable_length="false"/>
+
+      <cccd
+          read="true"
+          write="false"/>
+    </characteristic>
+
+    <!-- ================================================= -->
+    <!-- FOTA PROGRESS CHARACTERISTIC                      -->
+    <!-- ================================================= -->
+    <characteristic
+        name="FOTA_Progress"
+        uuid="00000005-16A1-4812-AF35-F3F29A92F6CA"
+        properties="notify indicate"
+        permissions="none">
+
+      <value
+          type="uint8"
+          length="4"
+          variable_length="false"/>
+
+      <cccd
+          read="true"
+          write="false"/>
+    </characteristic>
+
+  </service>
+
+</gatt>

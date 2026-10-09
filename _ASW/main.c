@@ -14,6 +14,8 @@
 /******************************************************************************/
 #include "ConnectionHandling.h"
 #include "DataStore.h"
+#include "FsCmd.h"
+#include "FileSysManager.h"
 #include "Prov.h"
 #include "ProvButton.h"
 #include "Pair.h"
@@ -44,16 +46,22 @@
 /******************************************************************************/
 /**
  * @public        main
- * @brief         Initializes the BulkXfer users (hex upload, provisioning, pairing), the
- *                BulkXfer Server and Client, the BLE stack and starts advertising.
+ * @brief         Starts the File System Manager, initializes the BulkXfer users (hex
+ *                upload, file commands, provisioning, pairing), the BulkXfer Server and
+ *                Client, the BLE stack and starts advertising.
  * @return        0 upon successful execution.
  */
 int main(void)
 {
-   // Register the BulkXfer appType ranges: hex upload, then provisioning. The
-   // provisioning init also restores the stored certificates, or generates (first
-   // boot) or loads the device key and CSR.
+   // Mount the FAT volume on the external flash (on its own thread; commands
+   // submitted before it is mounted wait in its queue)
+   (void)gi_FSMGR_Start();
+
+   // Register the BulkXfer appType ranges: hex upload, file commands, then
+   // provisioning. The provisioning init also restores the stored certificates,
+   // or generates (first boot) or loads the device key and CSR.
    (void)gi_DataStore_Init();
+   (void)gi_FsCmd_Init();
    (void)gi_Prov_Init();
 
    // Holding DK Button 0 wipes the provisioning credentials

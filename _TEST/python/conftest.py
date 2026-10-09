@@ -172,3 +172,188 @@ def client(server):
 def fast_timeouts(monkeypatch):
     """Shrink the client's 1 s ACK timeout so timeout paths run quickly."""
     monkeypatch.setattr(bx, "ACK_TIMEOUT", 0.02)
+
+
+class FakeFsDevice:
+    """The device's file commands (_DOC/FileSysManager/PROTOCOL.md) and the
+    hex upload's BEGIN / COMMIT, scripted in Python with the firmware's rules:
+    paths ("/FLASH_DISK:/x" as is, "/x" from the root, a relative directory
+    from the root and a relative file from the current directory), one open
+    file, opening for writing does not truncate, LS lists the root and one
+    level, DELDIR deletes files but refuses subdirectories, an ABORT without an
+    open file resets the current directory. handle() returns the notifications
+    as (appType, payload). Knobs: busy, silent, fail (op name -> status)."""
+
+    ROOT = "/FLASH_DISK:"
+    OPS = {"MKDIR": 1, "CD": 2, "OPENR": 3, "OPENW": 4, "WRITE": 5, "READ": 6, "LS": 7,
+           "DELFILE": 8, "DELDIR": 9, "CLOSE": 10, "ABORT": 11}
+    OK, NOT_FOUND, BAD_ARG, BAD_STATE, BUSY, NOT_SUPPORTED, WRONG_TYPE = 0, 1, 5, 6, 7, 10, 11
+
+    def __init__(self):
+        self.files = {}                       # path -> bytearray
+        self.dirs = set()
+        self.cwd = self.ROOT
+        self.open = None                      # [path, mode, position, written]
+        self.busy = False
+        self.silent = False
+        self.fail = {}
+        self.commands = []                    # (seq, op, arg) received
+        self.upload = None                    # bytearray between BEGIN and COMMIT
+        self.upload_name = None
+
+    def _path(self, arg: bytes, is_dir: bool) -> str:
+        name = arg.decode()
+        if name.startswith("/") and ":" in name:
+            return name
+        if name.startswith("/"):
+            return f"{self.ROOT}/{name[1:]}"
+        return f"{self.ROOT if is_dir else self.cwd}/{name}"
+
+    def _parent_ok(self, path: str) -> bool:
+        parent = path.rsplit("/", 1)[0]
+        return parent == self.ROOT or parent in self.dirs
+
+    def _children(self, d: str):
+        for p in sorted(self.dirs | set(self.files)):
+            if p.rsplit("/", 1)[0] == d:
+                yield p
+
+    def handle(self, payload: bytes) -> list:
+        seq, op, arg = payload[0], payload[1], bytes(payload[2:])
+        self.commands.append((seq, op, arg))
+
+        def reply(st, data=b""):
+            return [(0x41, bytes([seq, op, st]) + data)]
+
+        if self.silent:
+            return []
+        if self.busy:
+            return reply(self.BUSY)
+        name = next((k for k, v in self.OPS.items() if v == op), None)
+        if name is None:
+            return reply(self.BAD_ARG)
+        if name in self.fail:
+            if name in ("WRITE", "READ", "CLOSE"):
+                self.open = None
+            return reply(self.fail[name])
+        o = self.open
+        if name in ("WRITE", "READ") and o is None:
+            return reply(self.BAD_STATE)
+        if o is not None and name not in ("WRITE", "READ", "CLOSE", "ABORT"):
+            return reply(self.BAD_STATE)
+        if name in ("MKDIR", "CD", "OPENR", "OPENW", "DELFILE", "DELDIR") and arg.lstrip(b"/") == b"":
+            return reply(self.BAD_ARG)
+        if name in ("MKDIR", "CD"):
+            p = self._path(arg, True)
+            if name == "MKDIR":
+                if not self._parent_ok(p):
+                    return reply(self.NOT_FOUND)
+                self.dirs.add(p)
+            elif p not in self.dirs and p != self.ROOT:
+                return reply(self.NOT_FOUND if p not in self.files else self.WRONG_TYPE)
+            self.cwd = p
+            return reply(self.OK, p.encode())
+        if name in ("OPENR", "OPENW"):
+            p = self._path(arg, False)
+            if name == "OPENR" and p not in self.files:
+                return reply(self.NOT_FOUND)
+            if name == "OPENW":
+                if not self._parent_ok(p):
+                    return reply(self.NOT_FOUND)
+                self.files.setdefault(p, bytearray())
+            self.open = [p, name, 0, 0]
+            return reply(self.OK, p.encode())
+        if name == "WRITE":
+            if o[1] != "OPENW":
+                return reply(self.BAD_STATE)
+            if not arg:
+                return reply(self.BAD_ARG)
+            f = self.files[o[0]]
+            f[o[2]:o[2] + len(arg)] = arg
+            o[2] += len(arg)
+            o[3] += len(arg)
+            return reply(self.OK, struct.pack("<I", o[3]))
+        if name == "READ":
+            if o[1] != "OPENR":
+                return reply(self.BAD_STATE)
+            n = struct.unpack("<H", arg)[0] if len(arg) == 2 else 239
+            n = 239 if n == 0 or n > 239 else n
+            data = bytes(self.files[o[0]][o[2]:o[2] + n])
+            o[2] += len(data)
+            return reply(self.OK, data)
+        if name == "LS":
+            out, n = [], 0
+            for p in self._children(self.ROOT):
+                for q in [p] + (list(self._children(p)) if p in self.dirs else []):
+                    is_dir = q in self.dirs
+                    size = 0 if is_dir else len(self.files[q])
+                    out.append((0x42, struct.pack("<BBI", seq, 1 if is_dir else 0, size) + q.encode()))
+                    n += 1
+            return out + reply(self.OK, struct.pack("<H", n))
+        if name in ("DELFILE", "DELDIR"):
+            p = self._path(arg, name == "DELDIR")
+            if name == "DELFILE":
+                if p in self.dirs:
+                    return reply(self.WRONG_TYPE)
+                if p not in self.files:
+                    return reply(self.NOT_FOUND)
+                del self.files[p]
+                return reply(self.OK)
+            if p not in self.dirs:
+                return reply(self.NOT_FOUND if p not in self.files else self.WRONG_TYPE)
+            kids = list(self._children(p))
+            if any(k in self.dirs for k in kids):
+                return reply(self.NOT_SUPPORTED)
+            for k in kids:
+                del self.files[k]
+            self.dirs.discard(p)
+            return reply(self.OK)
+        if name == "CLOSE":
+            total = o[3] if o is not None else 0
+            self.open = None
+            return reply(self.OK, struct.pack("<I", total))
+        # ABORT
+        if o is None:
+            self.cwd = self.ROOT
+        self.open = None
+        return reply(self.OK)
+
+    # ---- hex upload stored as a file ------------------------------------------------
+    def begin(self, name: bytes) -> tuple:
+        if self.busy:
+            return (0x14, struct.pack("<BBII", 0x12, self.BUSY, 0, 0))
+        self.upload, self.upload_name = bytearray(), name.decode()
+        return (0x14, struct.pack("<BBII", 0x12, self.OK, 0, 0))
+
+    def segment(self, obj: bytes):
+        if self.upload is not None:
+            self.upload += struct.pack("<II", struct.unpack("<I", obj[:4])[0], len(obj) - 4) + obj[4:]
+
+    def commit(self) -> tuple:
+        if self.upload is None:
+            return (0x14, struct.pack("<BBII", 0x13, self.BAD_STATE, 0, 0))
+        data, self.upload = bytes(self.upload), None
+        self.files[f"{self.ROOT}/FW/{self.upload_name}"] = bytearray(data)
+        return (0x14, struct.pack("<BBII", 0x13, self.OK, len(data), zlib.crc32(data)))
+
+
+class FakeBlk:
+    """What FileSystemSession needs from a BulkXferClient: send_short and
+    short_q, wired to a FakeFsDevice."""
+
+    def __init__(self, device: FakeFsDevice):
+        self.device = device
+        self.short_q = asyncio.Queue()
+        self.sent = []
+
+    async def send_short(self, app_type: int, payload: bytes):
+        self.sent.append((app_type, bytes(payload)))
+        if app_type == 0x40:
+            for t, p in self.device.handle(bytes(payload)):
+                self.short_q.put_nowait((t, p))
+        await asyncio.sleep(0)
+
+
+@pytest.fixture
+def fsdev():
+    return FakeFsDevice()

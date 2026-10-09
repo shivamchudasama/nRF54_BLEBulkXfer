@@ -5,6 +5,8 @@ workspace.code-workspace
 .codex/config.toml
 __pycache__/
 .coverage
+# Office lock files (e.g. Sample Code FS/_DOC/Flow Diagrams)
+~$*
 
 # Local certificate authority (holds the CA private key)
 _CA/

@@ -137,24 +137,51 @@ add_unit_test(gatt_cb
    SOURCES unit/GATT_CB/test_gatt_cb.c ${GATT_CB_DIR}/GATT_GenericCallbacks.c
    INCLUDES ${GATT_CB_DIR})
 
+# ---- _LIB/FileSysManager -----------------------------------------------------
+# Manager + FSM (#included) on the in-memory volume of shim/fs_sim.c; built
+# with the write buffer (as CONFIG_FSMGR_BUFFERED_WRITE) and without
+set(FSMGR_DIR ${REPO_ROOT}/_LIB/FileSysManager)
+add_unit_test(fsmgr
+   SOURCES unit/FileSysManager/test_fsmgr.c ${SHIM_DIR}/fs_sim.c
+   INCLUDES ${FSMGR_DIR}
+   DEFINES FSMGR_WRITE_BUFFER_SIZE=512)
+add_unit_test(fsmgr_direct
+   SOURCES unit/FileSysManager/test_fsmgr.c ${SHIM_DIR}/fs_sim.c
+   INCLUDES ${FSMGR_DIR}
+   DEFINES FSMGR_WRITE_BUFFER_SIZE=0)
+
 # ---- _ASW/_DATA_STORE --------------------------------------------------------
 # test_datastore.c #includes DataStore.c with the BulkXfer Server stubbed out;
 # built with the summary line (default) and with the full hex dump.
-set(DS_INCLUDES ${ASW_DIR}/_DATA_STORE ${ASW_DIR}/_BLK_SVC ${BLK_INCLUDES})
+# BEGIN / COMMIT run on the real File System Manager (#included) over fs_sim.c.
+set(DS_INCLUDES ${ASW_DIR}/_DATA_STORE ${ASW_DIR}/_BLK_SVC ${FSMGR_DIR} ${BLK_INCLUDES})
 add_unit_test(datastore
-   SOURCES unit/DataStore/test_datastore.c
+   SOURCES unit/DataStore/test_datastore.c ${SHIM_DIR}/fs_sim.c
    INCLUDES ${DS_INCLUDES})
 add_unit_test(datastore_hexdump
-   SOURCES unit/DataStore/test_datastore.c
+   SOURCES unit/DataStore/test_datastore.c ${SHIM_DIR}/fs_sim.c
    INCLUDES ${DS_INCLUDES}
    DEFINES CONFIG_DS_HEX_DUMP=1)
 
-# Hex upload end to end: real BulkXfer Server + DataStore, simulated link and
-# peer client, fed with the first segment of AA00000100.hex
+# Hex upload end to end: real BulkXfer Server + DataStore + File System
+# Manager, simulated link and peer client, fed with the first segment of
+# AA00000100.hex
 add_unit_test(hex_upload_e2e
-   SOURCES unit/DataStore/test_upload_e2e.c ${BLK_DIR}/BulkXfer_Frame.c
+   SOURCES unit/DataStore/test_upload_e2e.c ${BLK_DIR}/BulkXfer_Frame.c ${SHIM_DIR}/fs_sim.c
    INCLUDES ${DS_INCLUDES}
    DEFINES CONFIG_BT_GATT_CLIENT BLK_ENABLE_CLIENT=0)
+
+# ---- _ASW/_FS_CMD ------------------------------------------------------------
+# File commands over BLE: router + File System Manager (#included) on fs_sim.c,
+# BulkXfer Server and data store stubbed; with CONFIG_FS_CMD and without
+set(FSCMD_INCLUDES ${ASW_DIR}/_FS_CMD ${DS_INCLUDES})
+add_unit_test(fscmd
+   SOURCES unit/FsCmd/test_fscmd.c ${SHIM_DIR}/fs_sim.c
+   INCLUDES ${FSCMD_INCLUDES}
+   DEFINES CONFIG_FS_CMD=1)
+add_unit_test(fscmd_disabled
+   SOURCES unit/FsCmd/test_fscmd.c ${SHIM_DIR}/fs_sim.c
+   INCLUDES ${FSCMD_INCLUDES})
 
 # ---- _ASW/_BLK_SVC -----------------------------------------------------------
 # The appType router, with the GATT service and both BulkXfer roles stubbed
@@ -264,6 +291,9 @@ set(CHECKED_HEADERS
    ${BLK_DIR}/BulkXfer.h ${BLK_DIR}/BulkXfer_Client.h ${BLK_DIR}/BulkXfer_Config.h
    ${BLK_DIR}/BulkXfer_Frame.h ${BLK_DIR}/BulkXfer_Server.h ${BLK_DIR}/BulkXfer_Types.h
    ${BLK_DIR}/BulkXfer_Uuid.h
+   ${FSMGR_DIR}/FileSysManager.h ${FSMGR_DIR}/FileSysManagerFSM.h
+   ${FSMGR_DIR}/FileSysManager_Types.h ${FSMGR_DIR}/FileSysManager_Config.h
+   ${ASW_DIR}/_FS_CMD/FsCmd.h
    ${GATT_CB_DIR}/GATT_CB_Types.h ${GATT_CB_DIR}/GATT_GenericCallbacks.h
    ${ASW_DIR}/_BLK_SVC/BulkSvc.h ${ASW_DIR}/_BLK_SVC/BulkRouter.h ${ASW_DIR}/_DATA_STORE/DataStore.h
    ${ASW_DIR}/_PROV/Prov.h ${ASW_DIR}/_PROV/ProvButton.h
@@ -274,7 +304,7 @@ set(CHECKED_HEADERS
    ${ASW_DIR}/_CSR/CSR_Generator_Config.h ${ASW_DIR}/_CSR/DER.h
    ${ASW_DIR}/_GENERIX/Helpers.h)
 set(HDR_INCLUDES "")
-foreach(DIR ${SHIM_DIR} ${BLK_INCLUDES} ${GATT_CB_DIR} ${DS_INCLUDES} ${PROV_INCLUDES} ${ASW_DIR}/_GENERIX)
+foreach(DIR ${SHIM_DIR} ${BLK_INCLUDES} ${GATT_CB_DIR} ${FSCMD_INCLUDES} ${PROV_INCLUDES} ${ASW_DIR}/_GENERIX)
    list(APPEND HDR_INCLUDES -I${DIR})
 endforeach()
 add_test(NAME header_hygiene

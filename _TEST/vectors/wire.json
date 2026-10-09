@@ -420,5 +420,390 @@
       "signature_raw": "ee0507110f231f41c6339775f70b7977ab615c7eee5afb88a18bb2ea5ce02077148670490a809f6f8187a0a0fe51fb48e3dfc463667d9b2b2cee59466a3e127d",
       "frame": "aea38443af6fc5ff07ec9ab023ec6fd9bd7e7236272610bfc2bf156d7073b7a1ee0507110f231f41c6339775f70b7977ab615c7eee5afb88a18bb2ea5ce02077148670490a809f6f8187a0a0fe51fb48e3dfc463667d9b2b2cee59466a3e127d"
     }
+  },
+  "hex_file": {
+    "_comment": [
+      "Storing a hex upload as a file (_DOC/HexUpload/PROTOCOL.md). BEGIN carries the",
+      "file name, COMMIT nothing; FILE answers both: [u8 op][u8 status][u32 LE file",
+      "size][u32 LE CRC-32 of the file], status as in file_system.status. The file",
+      "holds one record [u32 LE address][u32 LE length][data] per segment; 'record' is",
+      "the first segment of AA00000100.hex. Written by _TEST/tools/gen_fs_vector.py."
+    ],
+    "app_types": {
+      "BEGIN": 18,
+      "COMMIT": 19,
+      "FILE": 20
+    },
+    "dir": "/FLASH_DISK:/FW",
+    "temp_name": "UPLOAD.TMP",
+    "name_max": 32,
+    "file_reply_len": 10,
+    "record": {
+      "address": 0,
+      "length": 6560,
+      "header_hex": "00000000a0190000",
+      "file_size": 6568,
+      "file_crc32": 1348235140
+    },
+    "shorts": [
+      {
+        "name": "begin_fw1",
+        "app_type": 18,
+        "file": "FW1",
+        "hex": "0312465731"
+      },
+      {
+        "name": "begin_long_name",
+        "app_type": 18,
+        "file": "ECU_App-v1.2.3.bin",
+        "hex": "12124543555f4170702d76312e322e332e62696e"
+      },
+      {
+        "name": "commit",
+        "app_type": 19,
+        "hex": "0013"
+      },
+      {
+        "name": "file_begin_ok",
+        "app_type": 20,
+        "op": 18,
+        "status": 0,
+        "size": 0,
+        "crc32": 0,
+        "hex": "0a1412000000000000000000"
+      },
+      {
+        "name": "file_begin_busy",
+        "app_type": 20,
+        "op": 18,
+        "status": 7,
+        "size": 0,
+        "crc32": 0,
+        "hex": "0a1412070000000000000000"
+      },
+      {
+        "name": "file_begin_bad_name",
+        "app_type": 20,
+        "op": 18,
+        "status": 5,
+        "size": 0,
+        "crc32": 0,
+        "hex": "0a1412050000000000000000"
+      },
+      {
+        "name": "file_commit_ok",
+        "app_type": 20,
+        "op": 19,
+        "status": 0,
+        "size": 6568,
+        "crc32": 1348235140,
+        "hex": "0a141300a8190000846f5c50"
+      },
+      {
+        "name": "file_commit_no_begin",
+        "app_type": 20,
+        "op": 19,
+        "status": 6,
+        "size": 0,
+        "crc32": 0,
+        "hex": "0a1413060000000000000000"
+      },
+      {
+        "name": "file_commit_io",
+        "app_type": 20,
+        "op": 19,
+        "status": 9,
+        "size": 0,
+        "crc32": 0,
+        "hex": "0a1413090000000000000000"
+      }
+    ]
+  },
+  "file_system": {
+    "_comment": [
+      "BLE file commands (_DOC/FileSysManager/PROTOCOL.md). CMD [seq][op][arg];",
+      "REPLY [seq][op][status][data]; ENTRY [seq][type][u32 LE size][path], one per",
+      "listed entry before the REPLY of LS. Status codes are FsmgrStatus_E.",
+      "Written by _TEST/tools/gen_fs_vector.py."
+    ],
+    "app_types": {
+      "CMD": 64,
+      "REPLY": 65,
+      "ENTRY": 66
+    },
+    "app_type_range": [
+      64,
+      79
+    ],
+    "ops": {
+      "MKDIR": 1,
+      "CD": 2,
+      "OPENR": 3,
+      "OPENW": 4,
+      "WRITE": 5,
+      "READ": 6,
+      "LS": 7,
+      "DELFILE": 8,
+      "DELDIR": 9,
+      "CLOSE": 10,
+      "ABORT": 11
+    },
+    "status": {
+      "OK": 0,
+      "NOT_FOUND": 1,
+      "EXISTS": 2,
+      "NOT_EMPTY": 3,
+      "NO_SPACE": 4,
+      "BAD_ARG": 5,
+      "BAD_STATE": 6,
+      "BUSY": 7,
+      "NOT_MOUNTED": 8,
+      "IO": 9,
+      "NOT_SUPPORTED": 10,
+      "WRONG_TYPE": 11,
+      "DENIED": 12
+    },
+    "entry_types": {
+      "FILE": 0,
+      "DIR": 1
+    },
+    "limits": {
+      "arg_max": 240,
+      "read_max": 239,
+      "entry_path_max": 236
+    },
+    "shorts": [
+      {
+        "name": "cmd_mkdir",
+        "app_type": 64,
+        "seq": 1,
+        "op": 1,
+        "arg_hex": "4657",
+        "hex": "044001014657"
+      },
+      {
+        "name": "reply_mkdir_ok",
+        "app_type": 65,
+        "seq": 1,
+        "op": 1,
+        "status": 0,
+        "data_hex": "2f464c4153485f4449534b3a2f4657",
+        "hex": "12410101002f464c4153485f4449534b3a2f4657"
+      },
+      {
+        "name": "cmd_cd_abs",
+        "app_type": 64,
+        "seq": 2,
+        "op": 2,
+        "arg_hex": "2f464c4153485f4449534b3a2f4657",
+        "hex": "114002022f464c4153485f4449534b3a2f4657"
+      },
+      {
+        "name": "reply_cd_not_found",
+        "app_type": 65,
+        "seq": 2,
+        "op": 2,
+        "status": 1,
+        "data_hex": "",
+        "hex": "0341020201"
+      },
+      {
+        "name": "cmd_openw",
+        "app_type": 64,
+        "seq": 3,
+        "op": 4,
+        "arg_hex": "612e747874",
+        "hex": "07400304612e747874"
+      },
+      {
+        "name": "reply_openw_ok",
+        "app_type": 65,
+        "seq": 3,
+        "op": 4,
+        "status": 0,
+        "data_hex": "2f464c4153485f4449534b3a2f46572f612e747874",
+        "hex": "18410304002f464c4153485f4449534b3a2f46572f612e747874"
+      },
+      {
+        "name": "cmd_write",
+        "app_type": 64,
+        "seq": 4,
+        "op": 5,
+        "arg_hex": "68656c6c6f",
+        "hex": "0740040568656c6c6f"
+      },
+      {
+        "name": "reply_write_ok",
+        "app_type": 65,
+        "seq": 4,
+        "op": 5,
+        "status": 0,
+        "data_hex": "05000000",
+        "hex": "074104050005000000"
+      },
+      {
+        "name": "cmd_close",
+        "app_type": 64,
+        "seq": 5,
+        "op": 10,
+        "arg_hex": "",
+        "hex": "0240050a"
+      },
+      {
+        "name": "reply_close_ok",
+        "app_type": 65,
+        "seq": 5,
+        "op": 10,
+        "status": 0,
+        "data_hex": "05000000",
+        "hex": "0741050a0005000000"
+      },
+      {
+        "name": "cmd_openr",
+        "app_type": 64,
+        "seq": 6,
+        "op": 3,
+        "arg_hex": "612e747874",
+        "hex": "07400603612e747874"
+      },
+      {
+        "name": "cmd_read_default",
+        "app_type": 64,
+        "seq": 7,
+        "op": 6,
+        "arg_hex": "",
+        "hex": "02400706"
+      },
+      {
+        "name": "cmd_read_16",
+        "app_type": 64,
+        "seq": 8,
+        "op": 6,
+        "arg_hex": "1000",
+        "hex": "044008061000"
+      },
+      {
+        "name": "reply_read_data",
+        "app_type": 65,
+        "seq": 8,
+        "op": 6,
+        "status": 0,
+        "data_hex": "68656c6c6f",
+        "hex": "084108060068656c6c6f"
+      },
+      {
+        "name": "reply_read_eof",
+        "app_type": 65,
+        "seq": 9,
+        "op": 6,
+        "status": 0,
+        "data_hex": "",
+        "hex": "0341090600"
+      },
+      {
+        "name": "cmd_ls",
+        "app_type": 64,
+        "seq": 10,
+        "op": 7,
+        "arg_hex": "",
+        "hex": "02400a07"
+      },
+      {
+        "name": "entry_dir_fw",
+        "app_type": 66,
+        "seq": 10,
+        "type": 1,
+        "size": 0,
+        "path": "/FLASH_DISK:/FW",
+        "hex": "15420a01000000002f464c4153485f4449534b3a2f4657"
+      },
+      {
+        "name": "entry_file_fw1",
+        "app_type": 66,
+        "seq": 10,
+        "type": 0,
+        "size": 6568,
+        "path": "/FLASH_DISK:/FW/FW1",
+        "hex": "19420a00a81900002f464c4153485f4449534b3a2f46572f465731"
+      },
+      {
+        "name": "reply_ls_ok",
+        "app_type": 65,
+        "seq": 10,
+        "op": 7,
+        "status": 0,
+        "data_hex": "0200",
+        "hex": "05410a07000200"
+      },
+      {
+        "name": "cmd_delfile",
+        "app_type": 64,
+        "seq": 11,
+        "op": 8,
+        "arg_hex": "2f46572f612e747874",
+        "hex": "0b400b082f46572f612e747874"
+      },
+      {
+        "name": "cmd_deldir",
+        "app_type": 64,
+        "seq": 12,
+        "op": 9,
+        "arg_hex": "4657",
+        "hex": "04400c094657"
+      },
+      {
+        "name": "reply_deldir_not_supported",
+        "app_type": 65,
+        "seq": 12,
+        "op": 9,
+        "status": 10,
+        "data_hex": "",
+        "hex": "03410c090a"
+      },
+      {
+        "name": "cmd_abort",
+        "app_type": 64,
+        "seq": 13,
+        "op": 11,
+        "arg_hex": "",
+        "hex": "02400d0b"
+      },
+      {
+        "name": "reply_write_bad_state",
+        "app_type": 65,
+        "seq": 14,
+        "op": 5,
+        "status": 6,
+        "data_hex": "",
+        "hex": "03410e0506"
+      },
+      {
+        "name": "reply_busy",
+        "app_type": 65,
+        "seq": 15,
+        "op": 4,
+        "status": 7,
+        "data_hex": "",
+        "hex": "03410f0407"
+      },
+      {
+        "name": "reply_not_mounted",
+        "app_type": 65,
+        "seq": 16,
+        "op": 7,
+        "status": 8,
+        "data_hex": "",
+        "hex": "0341100708"
+      },
+      {
+        "name": "reply_bad_op",
+        "app_type": 65,
+        "seq": 17,
+        "op": 1,
+        "status": 5,
+        "data_hex": "",
+        "hex": "0341110105"
+      }
+    ]
   }
 }

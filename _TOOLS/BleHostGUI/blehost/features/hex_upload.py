@@ -1,8 +1,14 @@
-"""Hex Upload: send an Intel HEX file segment by segment (_DOC/HexUpload/PROTOCOL.md)."""
+"""Hex Upload: send an Intel HEX file segment by segment (_DOC/HexUpload/PROTOCOL.md).
+
+With a name in "Store as", the device also stores the upload as the file
+/FLASH_DISK:/FW/<name> on its external flash: BEGIN before the segments,
+COMMIT after them, and the file's size and CRC-32 must match what was sent.
+"""
 
 import os
 import struct
 import time
+import zlib
 import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
 
@@ -20,9 +26,20 @@ def _result(p: bytes) -> str:
     return f"{bx.STATUS.get(st, hex(st))} addr=0x{addr:08x} len={n}"
 
 
+def _file(p: bytes) -> str:
+    if len(p) < 10:
+        return p.hex(" ")
+    op, st, size, crc = struct.unpack("<BBII", p[:10])
+    what = {bx.APP_TYPE_BEGIN: "BEGIN", bx.APP_TYPE_COMMIT: "COMMIT"}.get(op, f"0x{op:02x}")
+    return f"{what} {bx.FS_STATUS.get(st, st)} size={size} crc=0x{crc:08x}"
+
+
 bulkxfer.register_app_type(bx.APP_TYPE_SEGMENT, "SEGMENT")
 bulkxfer.register_app_type(bx.APP_TYPE_RESULT, "RESULT", _result)
 bulkxfer.register_app_type(bx.APP_TYPE_STORED, "STORED", _result)
+bulkxfer.register_app_type(bx.APP_TYPE_BEGIN, "BEGIN", lambda p: p.decode("utf-8", "replace"))
+bulkxfer.register_app_type(bx.APP_TYPE_COMMIT, "COMMIT", lambda p: "")
+bulkxfer.register_app_type(bx.APP_TYPE_FILE, "FILE", _file)
 
 # Progress reaches the tab once per ACK window; it is shown at most this often
 PROGRESS_MS = 66
@@ -91,6 +108,14 @@ class HexUploadFeature(Feature):
         self.seg_max_entry.bind("<FocusOut>", lambda e: self._load(quiet=True))
         self.summary_var = tk.StringVar(value="No file loaded")
         ttk.Label(opt, textvariable=self.summary_var, style="Caption.TLabel").pack(side="left", padx=sp("m"))
+        store = ttk.Frame(filec)
+        store.pack(fill="x", pady=(sp("s"), 0))
+        ttk.Label(store, text="Store as").pack(side="left")
+        self.store_var = tk.StringVar()
+        self.store_entry = ttk.Entry(store, textvariable=self.store_var, width=24)
+        self.store_entry.pack(side="left", padx=sp("s"))
+        ttk.Label(store, text=f"file in {bx.FILE_DIR} on the device's flash (empty: not stored)",
+                  style="Caption.TLabel").pack(side="left")
 
         tiles = ttk.Frame(f)
         tiles.pack(fill="x", pady=sp("m"))
@@ -150,8 +175,9 @@ class HexUploadFeature(Feature):
         can_start = self.ctx.link.connected and bool(self.segments) and not busy
         self.start_btn.state(["!disabled"] if can_start else ["disabled"])
         self.abort_btn.state(["!disabled"] if busy else ["disabled"])
-        for w in (self.browse_btn, self.seg_max_entry):
-            w.state(["disabled"] if busy else ["!disabled"])
+        for w in (self.browse_btn, self.seg_max_entry, getattr(self, "store_entry", None)):
+            if w is not None:
+                w.state(["disabled"] if busy else ["!disabled"])
         self._show_phase()
 
     # ---- display (tiles, pill) ----------------------------------------------
@@ -233,25 +259,46 @@ class HexUploadFeature(Feature):
             self.tree.see(str(i))
 
     # ---- upload ------------------------------------------------------------
+    def _store_name(self):
+        """The "Store as" name, None if empty; ValueError if the device would refuse it."""
+        name = self.store_var.get().strip() if hasattr(self, "store_var") else ""
+        if not name:
+            return None
+        if not bx.valid_file_name(name):
+            raise ValueError(f"'{name}' is not a file name the device accepts: 1…{bx.FILE_NAME_MAX} "
+                             "of A-Z a-z 0-9 . _ -")
+        return name
+
     def _start(self):
         if self.busy or not self._load():
+            return
+        try:
+            store = self._store_name()
+        except ValueError as e:
+            messagebox.showerror("Store as", str(e))
             return
         for i in range(len(self.segments)):
             self._set_status(i, "pending")
         self.progress.configure(value=0)
         self._t_start = time.perf_counter()
         self._phase = "uploading"
-        self._future = self.ctx.run(self._upload(list(self.segments)),
+        self._future = self.ctx.run(self._upload(list(self.segments), store),
                                     on_done=self._finished, on_error=self._failed,
                                     on_cancel=self._aborted)
         self._update_buttons()
 
-    async def _upload(self, segments) -> int:
-        """Runs on the BLE loop. Returns the number of segments stored."""
+    async def _upload(self, segments, store=None) -> int:
+        """Runs on the BLE loop. Returns the number of segments stored. With
+        store, the device keeps them as the file FILE_DIR/store."""
         call = self.ctx.bus.call
         blk = self.ctx.services[bulkxfer.BulkXferService.NAME].new_client()
         self.ctx.log(f"hex: upload started, ATT MTU {self.ctx.link.mtu_size}, "
                      f"{blk.frame_cap - 4} B per DATA frame")
+        if store:
+            rep = await blk.begin_file(store)
+            if not rep.ok:
+                raise RuntimeError(f"storing as {store} refused: {rep.status_name}")
+            self.ctx.log(f"hex: storing as {bx.FILE_DIR}/{store}")
         total = sum(len(d) for _, d in segments)
         done = 0
         for i, (addr, data) in enumerate(segments):
@@ -282,6 +329,15 @@ class HexUploadFeature(Feature):
             done += len(data)
             call(self._progress, i, done, total, None)
         self._current = None
+        if store:
+            rep = await blk.commit_file()
+            if not rep.ok:
+                raise RuntimeError(f"file {store} not stored: {rep.status_name}")
+            image = bx.file_image(segments)
+            if (rep.size, rep.crc) != (len(image), zlib.crc32(image)):
+                raise RuntimeError(f"file {store}: device has {rep.size} B crc 0x{rep.crc:08X}, "
+                                   f"expected {len(image)} B crc 0x{zlib.crc32(image):08X}")
+            self.ctx.log(f"hex: stored as {bx.FILE_DIR}/{store}, {rep.size} B, crc 0x{rep.crc:08X}")
         return len(segments)
 
     def _progress(self, i, done, total, rate):

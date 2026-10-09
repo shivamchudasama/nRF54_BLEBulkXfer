@@ -5,11 +5,19 @@
  *                Each hex segment arrives as one BulkXfer transfer of type
  *                DS_APP_TYPE_SEGMENT whose object is [u32 LE start address][data].
  *                The data is collected in su8ar_segBuf. Once the transfer ends with
- *                eBS_OK (CRC-32 verified), the dump thread logs it and then tells the
- *                client with a DS_APP_TYPE_STORED short message. New transfers are
- *                rejected until the dump has finished. With CONFIG_DS_HEX_DUMP the
- *                dump prints every byte as "0xAAAAAAAA: xx xx ..." lines (slow, for
- *                debugging); without it, a single summary line with the CRC-32.
+ *                eBS_OK (CRC-32 verified), the dump thread logs it, stores it in the
+ *                upload file if one is open, and then tells the client with a
+ *                DS_APP_TYPE_STORED short message. New transfers are rejected until
+ *                then. With CONFIG_DS_HEX_DUMP the dump prints every byte as
+ *                "0xAAAAAAAA: xx xx ..." lines (slow, for debugging); without it, a
+ *                single summary line with the CRC-32.
+ *
+ *                An upload is stored as a file when the client frames it with BEGIN
+ *                (file name) and COMMIT: the segments are written, as records
+ *                [u32 LE address][u32 LE length][data], to DS_FILE_DIR/DS_TEMP_NAME,
+ *                which COMMIT renames to DS_FILE_DIR/<name>. Both are answered with
+ *                DS_APP_TYPE_FILE. File system work runs on the dump thread through
+ *                the File System Manager (_LIB/FileSysManager).
  * @date          25/09/2026
  * @author        Shivam Chudasama [SC]
  * @copyright     Bajaj Auto Technology Limited (BATL)
@@ -22,6 +30,7 @@
 /******************************************************************************/
 #include "DataStore.h"
 #include <errno.h>
+#include <stdio.h>
 #include <string.h>
 #include <zephyr/sys/atomic.h>
 #include <zephyr/sys/byteorder.h>
@@ -29,6 +38,7 @@
 #include <zephyr/logging/log_ctrl.h>
 #include "BulkXfer.h"
 #include "BulkRouter.h"
+#include "FileSysManager.h"
 #include "AppLog.h"
 
 /******************************************************************************/
@@ -64,9 +74,9 @@
 
 /**
  * @def           DS_DUMP_STACK_SIZE
- * @brief         Stack size of the dump thread.
+ * @brief         Stack size of the dump thread (it also submits file system messages).
  */
-#define DS_DUMP_STACK_SIZE                   (1024)
+#define DS_DUMP_STACK_SIZE                   (2048)
 
 /**
  * @def           DS_DUMP_PRIORITY
@@ -75,17 +85,49 @@
  */
 #define DS_DUMP_PRIORITY                     (10)
 
+/**
+ * @def           DS_EVENT_QUEUE_DEPTH
+ * @brief         Events (segment, BEGIN, COMMIT) waiting for the dump thread.
+ */
+#define DS_EVENT_QUEUE_DEPTH                 (4)
+
+/**
+ * @def           DS_TEMP_PATH
+ * @brief         Path of the file an upload is written to until COMMIT.
+ */
+#define DS_TEMP_PATH                         DS_FILE_DIR "/" DS_TEMP_NAME
+
 /******************************************************************************/
 /*                                                                            */
 /*                                   ENUMS                                    */
 /*                                                                            */
 /******************************************************************************/
+/**
+ * @enum          DsEventType_E
+ * @brief         Work for the dump thread.
+ */
+typedef enum
+{
+   eDSE_SEGMENT,                             /**< A verified segment is in su8ar_segBuf. */
+   eDSE_BEGIN,                               /**< BEGIN with a file name.              */
+   eDSE_COMMIT,                              /**< COMMIT.                              */
+} DsEventType_E;
 
 /******************************************************************************/
 /*                                                                            */
 /*                                 STRUCTURES                                 */
 /*                                                                            */
 /******************************************************************************/
+/**
+ * @struct        DsEvent_T
+ * @brief         One event for the dump thread.
+ */
+typedef struct
+{
+   uint8_t u8_type;                          /**< DsEventType_E.                       */
+   uint8_t u8_nameLen;                       /**< BEGIN: name length.                  */
+   char car_name[DS_NAME_MAX + 1U];          /**< BEGIN: file name.                    */
+} DsEvent_T;
 
 /******************************************************************************/
 /*                                                                            */
@@ -102,9 +144,18 @@ static int si_OnRxStart(uint8_t u8_appType, uint32_t u32_totalLen);
 static int si_OnRxData(uint8_t u8_appType, uint32_t u32_offset,
    const uint8_t *u8pt_data, uint16_t u16_len);
 static void sv_OnRxDone(uint8_t u8_appType, BlkStatus_E e_status, uint32_t u32_totalLen);
+static void sv_OnRxShort(uint8_t u8_appType, const uint8_t *u8pt_data, uint8_t u8_len);
 static void sv_SendReport(uint8_t u8_appType, uint8_t u8_status, uint32_t u32_addr,
    uint32_t u32_len);
+static void sv_SendFile(uint8_t u8_op, int i_status, uint32_t u32_size, uint32_t u32_crc);
+static bool sb_ValidName(const char *cpt_name, uint32_t u32_len);
+static int si_Fs(FileSysCommand_E e_cmd, const void *vpt_data, uint32_t u32_len, uint8_t u8_flags);
+static int si_FsPath(FileSysCommand_E e_cmd, const char *cpt_path, uint8_t u8_flags);
+static int si_WriteToFile(const uint8_t *u8pt_data, uint32_t u32_len);
 static void sv_DumpSegment(void);
+static void sv_StoreSegment(void);
+static void sv_Begin(const DsEvent_T *stpt_event);
+static void sv_Commit(void);
 static void sv_DumpThread(void *vpt_p1, void *vpt_p2, void *vpt_p3);
 
 /******************************************************************************/
@@ -144,20 +195,59 @@ static uint32_t su32_segLen = 0U;
 
 /**
  * @var           st_dumpBusy
- * @brief         Set from a verified segment until its dump has finished. While set,
- *                su8ar_segBuf belongs to the dump thread and new transfers are rejected.
+ * @brief         Set from a verified segment until it has been dumped and stored. While
+ *                set, su8ar_segBuf belongs to the dump thread and new transfers are
+ *                rejected.
  */
 static atomic_t st_dumpBusy = ATOMIC_INIT(0);
 
 /**
- * @var           sst_dumpSem
- * @brief         Wakes the dump thread when a verified segment is ready.
+ * @var           st_uploadOpen
+ * @brief         Set from a successful BEGIN until COMMIT (or the next BEGIN): the
+ *                upload file is open and segments are written to it.
  */
-static K_SEM_DEFINE(sst_dumpSem, 0, 1);
+static atomic_t st_uploadOpen = ATOMIC_INIT(0);
+
+/**
+ * @var           si_uploadErr
+ * @brief         First error while writing the open upload, 0 if none. COMMIT then
+ *                discards the file and reports it. Dump thread only.
+ */
+static int si_uploadErr = 0;
+
+/**
+ * @var           su32_fileSize
+ * @brief         Bytes written to the open upload file. Dump thread only.
+ */
+static uint32_t su32_fileSize = 0U;
+
+/**
+ * @var           su32_fileCrc
+ * @brief         CRC-32 (IEEE) of the bytes written to the open upload file.
+ */
+static uint32_t su32_fileCrc = 0U;
+
+/**
+ * @var           scar_uploadName
+ * @brief         File name given by BEGIN.
+ */
+static char scar_uploadName[DS_NAME_MAX + 1U];
+
+/**
+ * @var           sst_fsMsg
+ * @brief         File system message built by the dump thread (kept off its stack).
+ */
+static FileSysMessage_T sst_fsMsg;
+
+/**
+ * @var           sst_dsEventQ
+ * @brief         Wakes the dump thread with a verified segment, BEGIN or COMMIT.
+ */
+K_MSGQ_DEFINE(sst_dsEventQ, sizeof(DsEvent_T), DS_EVENT_QUEUE_DEPTH, 4);
 
 /**
  * @var           sst_dumpThread
- * @brief         Low-priority thread that prints received segments.
+ * @brief         Low-priority thread that prints and stores received segments.
  */
 K_THREAD_DEFINE(sst_dumpThread, DS_DUMP_STACK_SIZE, sv_DumpThread, NULL, NULL, NULL,
    DS_DUMP_PRIORITY, 0, 0);
@@ -199,7 +289,7 @@ static int si_OnRxStart(uint8_t u8_appType, uint32_t u32_totalLen)
          DS_ADDR_HDR_LEN + 1U, DS_ADDR_HDR_LEN + DS_BUF_SIZE);
       i_ret = -EMSGSIZE;
    }
-   // Check if the previous segment is still being dumped
+   // Check if the previous segment is still being dumped or stored
    else if (atomic_get(&st_dumpBusy) != 0)
    {
       APP_LOG_WRN("rejected: previous segment still being dumped");
@@ -273,6 +363,7 @@ static int si_OnRxData(uint8_t u8_appType, uint32_t u32_offset,
  */
 static void sv_OnRxDone(uint8_t u8_appType, BlkStatus_E e_status, uint32_t u32_totalLen)
 {
+   DsEvent_T st_event = { 0 };
    uint32_t u32_addr = 0U;
    uint32_t u32_len = 0U;
 
@@ -287,7 +378,17 @@ static void sv_OnRxDone(uint8_t u8_appType, BlkStatus_E e_status, uint32_t u32_t
       su32_segAddr = u32_addr;
       su32_segLen = u32_len;
       atomic_set(&st_dumpBusy, 1);
-      k_sem_give(&sst_dumpSem);
+
+      st_event.u8_type = (uint8_t)eDSE_SEGMENT;
+      // Check if the dump thread could not take it (cannot happen: only one segment
+      // is in flight and the queue has room for it and a BEGIN/COMMIT pair)
+      if (k_msgq_put(&sst_dsEventQ, &st_event, K_NO_WAIT) != 0)
+      {
+         APP_LOG_ERR("event queue full, segment dropped");
+         atomic_set(&st_dumpBusy, 0);
+         sv_SendReport(DS_APP_TYPE_RESULT, (uint8_t)eBS_SINK_ERROR, 0U, 0U);
+         return;
+      }
    }
    else
    {
@@ -297,6 +398,51 @@ static void sv_OnRxDone(uint8_t u8_appType, BlkStatus_E e_status, uint32_t u32_t
 
    // Best effort: the link may already be gone (eBS_DISCONNECTED)
    sv_SendReport(DS_APP_TYPE_RESULT, (uint8_t)e_status, u32_addr, u32_len);
+}
+
+/**
+ * @private       sv_OnRxShort
+ * @brief         BlkRxShort_F: queue BEGIN (with its file name) and COMMIT for the dump
+ *                thread. A BEGIN without a name or with a longer one than DS_NAME_MAX is
+ *                answered at once; other types of the range are ignored.
+ * @param[in]     u8_appType Application type.
+ * @param[in]     u8pt_data Payload (valid only during the call).
+ * @param[in]     u8_len Payload length.
+ * @return        None.
+ */
+static void sv_OnRxShort(uint8_t u8_appType, const uint8_t *u8pt_data, uint8_t u8_len)
+{
+   DsEvent_T st_event = { 0 };
+
+   if (u8_appType == DS_APP_TYPE_BEGIN)
+   {
+      // Check if the name length is valid (its characters are checked by the thread)
+      if ((u8_len == 0U) || (u8_len > DS_NAME_MAX))
+      {
+         APP_LOG_WRN("BEGIN refused: name length %u", u8_len);
+         sv_SendFile(DS_APP_TYPE_BEGIN, -EINVAL, 0U, 0U);
+         return;
+      }
+      st_event.u8_type = (uint8_t)eDSE_BEGIN;
+      st_event.u8_nameLen = u8_len;
+      memcpy(st_event.car_name, u8pt_data, u8_len);
+   }
+   else if (u8_appType == DS_APP_TYPE_COMMIT)
+   {
+      st_event.u8_type = (uint8_t)eDSE_COMMIT;
+   }
+   else
+   {
+      APP_LOG_WRN("short message 0x%02x ignored", u8_appType);
+      return;
+   }
+
+   // Check if the dump thread can take it
+   if (k_msgq_put(&sst_dsEventQ, &st_event, K_NO_WAIT) != 0)
+   {
+      APP_LOG_WRN("0x%02x refused: busy", u8_appType);
+      sv_SendFile(u8_appType, -EBUSY, 0U, 0U);
+   }
 }
 
 /**
@@ -326,6 +472,141 @@ static void sv_SendReport(uint8_t u8_appType, uint8_t u8_status, uint32_t u32_ad
    {
       APP_LOG_DBG("report 0x%02x not sent (%d)", u8_appType, i_ret);
    }
+}
+
+/**
+ * @private       sv_SendFile
+ * @brief         Send FILE: [u8 op][u8 status][u32 LE file size][u32 LE file CRC-32].
+ * @param[in]     u8_op DS_APP_TYPE_BEGIN or DS_APP_TYPE_COMMIT.
+ * @param[in]     i_status 0 or a negative errno (sent as an FsmgrStatus_E code).
+ * @param[in]     u32_size File size.
+ * @param[in]     u32_crc File CRC-32.
+ * @return        None.
+ */
+static void sv_SendFile(uint8_t u8_op, int i_status, uint32_t u32_size, uint32_t u32_crc)
+{
+   uint8_t u8ar_reply[DS_FILE_REPLY_LEN];
+   int i_ret = 0;
+
+   u8ar_reply[0] = u8_op;
+   u8ar_reply[1] = gu8_FSMGR_StatusCode(i_status);
+   sys_put_le32(u32_size, &u8ar_reply[2]);
+   sys_put_le32(u32_crc, &u8ar_reply[6]);
+
+   i_ret = gi_BLKS_SendShort(DS_APP_TYPE_FILE, u8ar_reply, sizeof(u8ar_reply),
+      K_MSEC(DS_SHORT_TIMEOUT_MS));
+
+   // Check if the reply could not be sent (no link, not subscribed, no credit)
+   if (i_ret != 0)
+   {
+      APP_LOG_DBG("FILE not sent (%d)", i_ret);
+   }
+}
+
+/**
+ * @private       sb_ValidName
+ * @brief         Whether a BEGIN name is a plain file name: 1..DS_NAME_MAX characters
+ *                from A-Z a-z 0-9 . _ -, not "." or "..", and not the temporary name.
+ * @param[in]     cpt_name Name (terminated).
+ * @param[in]     u32_len Name length.
+ * @return        true if valid.
+ */
+static bool sb_ValidName(const char *cpt_name, uint32_t u32_len)
+{
+   static const char sscar_temp[] = DS_TEMP_NAME;
+   bool b_isTemp = (u32_len == (sizeof(sscar_temp) - 1U));
+   uint32_t u32_idx;
+   char c_ch;
+
+   // Check if the length is valid and the name is not a directory reference
+   if ((u32_len == 0U) || (u32_len > DS_NAME_MAX) || (strcmp(cpt_name, ".") == 0) ||
+      (strcmp(cpt_name, "..") == 0))
+   {
+      return false;
+   }
+
+   for (u32_idx = 0U; u32_idx < u32_len; u32_idx++)
+   {
+      c_ch = cpt_name[u32_idx];
+      // Check if the character is allowed
+      if (!(((c_ch >= 'A') && (c_ch <= 'Z')) || ((c_ch >= 'a') && (c_ch <= 'z')) ||
+         ((c_ch >= '0') && (c_ch <= '9')) || (c_ch == '.') || (c_ch == '_') || (c_ch == '-')))
+      {
+         return false;
+      }
+      // FAT names compare without case: compare upper case with the temporary name
+      if (b_isTemp && ((((c_ch >= 'a') && (c_ch <= 'z')) ? (char)(c_ch - 32) : c_ch) !=
+         sscar_temp[u32_idx]))
+      {
+         b_isTemp = false;
+      }
+   }
+
+   return !b_isTemp;
+}
+
+/**
+ * @private       si_Fs
+ * @brief         Execute one file system command and wait for its result.
+ * @param[in]     e_cmd Command.
+ * @param[in]     vpt_data Payload, or NULL.
+ * @param[in]     u32_len Payload length (at most FS_MAX_CHUNK_SIZE).
+ * @param[in]     u8_flags FSMGR_MSG_* flags.
+ * @return        0 or a negative errno.
+ */
+static int si_Fs(FileSysCommand_E e_cmd, const void *vpt_data, uint32_t u32_len, uint8_t u8_flags)
+{
+   sst_fsMsg.e_command = e_cmd;
+   sst_fsMsg.u8_flags = u8_flags;
+   sst_fsMsg.u32_sizeOfData = u32_len;
+   if (u32_len > 0U)
+   {
+      memcpy(sst_fsMsg.u8_data, vpt_data, u32_len);
+   }
+
+   return gi_FSMGR_Call(&sst_fsMsg);
+}
+
+/**
+ * @private       si_FsPath
+ * @brief         si_Fs() with a path as payload.
+ * @param[in]     e_cmd Command.
+ * @param[in]     cpt_path Path.
+ * @param[in]     u8_flags FSMGR_MSG_* flags.
+ * @return        0 or a negative errno.
+ */
+static int si_FsPath(FileSysCommand_E e_cmd, const char *cpt_path, uint8_t u8_flags)
+{
+   return si_Fs(e_cmd, cpt_path, (uint32_t)strlen(cpt_path), u8_flags);
+}
+
+/**
+ * @private       si_WriteToFile
+ * @brief         Append bytes to the open upload file, FS_MAX_CHUNK_SIZE at a time,
+ *                and add them to its size and CRC-32.
+ * @param[in]     u8pt_data Data.
+ * @param[in]     u32_len Data length.
+ * @return        0 or the first write error.
+ */
+static int si_WriteToFile(const uint8_t *u8pt_data, uint32_t u32_len)
+{
+   uint32_t u32_chunk;
+   int i_ret = 0;
+
+   while ((u32_len > 0U) && (i_ret == 0))
+   {
+      u32_chunk = MIN(u32_len, FS_MAX_CHUNK_SIZE);
+      i_ret = si_Fs(eFSC_WRITE_DATA, u8pt_data, u32_chunk, 0U);
+      if (i_ret == 0)
+      {
+         su32_fileCrc = crc32_ieee_update(su32_fileCrc, u8pt_data, u32_chunk);
+         su32_fileSize += u32_chunk;
+      }
+      u8pt_data += u32_chunk;
+      u32_len -= u32_chunk;
+   }
+
+   return i_ret;
 }
 
 /**
@@ -384,9 +665,193 @@ static void sv_DumpSegment(void)
 }
 
 /**
+ * @private       sv_StoreSegment
+ * @brief         Dump the segment, write it as a record to the open upload file (if
+ *                any), then free the buffer and send STORED: status OK, or
+ *                eBS_SINK_ERROR once writing the upload file has failed.
+ * @return        None.
+ */
+static void sv_StoreSegment(void)
+{
+   uint8_t u8ar_hdr[DS_RECORD_HDR_LEN];
+   uint8_t u8_status = (uint8_t)eBS_OK;
+   uint32_t u32_addr = 0U;
+   uint32_t u32_len = 0U;
+   int i_ret = 0;
+
+   sv_DumpSegment();
+
+   // Check if the upload is being stored in a file
+   if (atomic_get(&st_uploadOpen) != 0)
+   {
+      // Check if the file is still good: once a write failed, the rest is not written
+      if (si_uploadErr == 0)
+      {
+         sys_put_le32(su32_segAddr, &u8ar_hdr[0]);
+         sys_put_le32(su32_segLen, &u8ar_hdr[4]);
+         i_ret = si_WriteToFile(u8ar_hdr, sizeof(u8ar_hdr));
+         if (i_ret == 0)
+         {
+            i_ret = si_WriteToFile(su8ar_segBuf, su32_segLen);
+         }
+         if (i_ret != 0)
+         {
+            APP_LOG_ERR("writing %s failed (%d)", DS_TEMP_PATH, i_ret);
+            si_uploadErr = i_ret;
+         }
+      }
+      if (si_uploadErr != 0)
+      {
+         u8_status = (uint8_t)eBS_SINK_ERROR;
+      }
+   }
+
+   // Copy before freeing the buffer: the next segment overwrites these
+   u32_addr = su32_segAddr;
+   u32_len = su32_segLen;
+   atomic_set(&st_dumpBusy, 0);
+
+   sv_SendReport(DS_APP_TYPE_STORED, u8_status, u32_addr, u32_len);
+}
+
+/**
+ * @private       sv_Begin
+ * @brief         BEGIN: discard an unfinished upload, create DS_FILE_DIR, and open a
+ *                fresh DS_TEMP_PATH for the segments. Refused while another user of
+ *                the file system has a file open. Answers FILE.
+ * @param[in]     stpt_event The BEGIN event with the file name.
+ * @return        None.
+ */
+static void sv_Begin(const DsEvent_T *stpt_event)
+{
+   int i_ret = 0;
+
+   // Check if the name is a plain file name
+   if (!sb_ValidName(stpt_event->car_name, stpt_event->u8_nameLen))
+   {
+      APP_LOG_WRN("BEGIN refused: bad name");
+      sv_SendFile(DS_APP_TYPE_BEGIN, -EINVAL, 0U, 0U);
+      return;
+   }
+
+   // Check if an upload is still open (its COMMIT never came): discard it
+   if (atomic_get(&st_uploadOpen) != 0)
+   {
+      APP_LOG_WRN("unfinished upload %s discarded", scar_uploadName);
+      (void)si_Fs(eFSC_ABORT, NULL, 0U, 0U);
+      atomic_set(&st_uploadOpen, 0);
+   }
+   // Check if someone else holds the file system's one open file
+   else if (gb_FSMGR_IsFileOpen())
+   {
+      APP_LOG_WRN("BEGIN refused: a file is open");
+      sv_SendFile(DS_APP_TYPE_BEGIN, -EBUSY, 0U, 0U);
+      return;
+   }
+
+   i_ret = si_FsPath(eFSC_MAKE_DIR, DS_FILE_DIR, FSMGR_MSG_KEEP_DIR);
+
+   // A temporary file left by a lost upload goes first: opening does not truncate
+   if (i_ret == 0)
+   {
+      i_ret = si_FsPath(eFSC_DELETE_FILE, DS_TEMP_PATH, 0U);
+      if (i_ret == -ENOENT)
+      {
+         i_ret = 0;
+      }
+   }
+   if (i_ret == 0)
+   {
+      i_ret = si_FsPath(eFSC_OPEN_FILE_WRITE, DS_TEMP_PATH, 0U);
+   }
+
+   if (i_ret != 0)
+   {
+      APP_LOG_ERR("BEGIN %s failed (%d)", stpt_event->car_name, i_ret);
+      sv_SendFile(DS_APP_TYPE_BEGIN, i_ret, 0U, 0U);
+      return;
+   }
+
+   memcpy(scar_uploadName, stpt_event->car_name, (size_t)stpt_event->u8_nameLen + 1U);
+   si_uploadErr = 0;
+   su32_fileSize = 0U;
+   su32_fileCrc = 0U;
+   atomic_set(&st_uploadOpen, 1);
+
+   APP_LOG_INF("storing upload as %s/%s", DS_FILE_DIR, scar_uploadName);
+   sv_SendFile(DS_APP_TYPE_BEGIN, 0, 0U, 0U);
+}
+
+/**
+ * @private       sv_Commit
+ * @brief         COMMIT: close the upload file and rename it to its name, replacing
+ *                an older file of that name. A failed upload is deleted instead.
+ *                Answers FILE with the file's size and CRC-32.
+ * @return        None.
+ */
+static void sv_Commit(void)
+{
+   char car_path[sizeof(DS_FILE_DIR) + DS_NAME_MAX + 1U];
+   uint8_t u8ar_rename[sizeof(DS_TEMP_PATH) + sizeof(car_path)];
+   uint32_t u32_tempLen = sizeof(DS_TEMP_PATH);
+   int i_ret = 0;
+
+   // Check if an upload is open
+   if (atomic_get(&st_uploadOpen) == 0)
+   {
+      APP_LOG_WRN("COMMIT without BEGIN");
+      sv_SendFile(DS_APP_TYPE_COMMIT, -EPERM, 0U, 0U);
+      return;
+   }
+   atomic_set(&st_uploadOpen, 0);
+
+   // Check if writing failed: the file is dropped and the first error reported
+   if (si_uploadErr != 0)
+   {
+      i_ret = si_uploadErr;
+      (void)si_Fs(eFSC_ABORT, NULL, 0U, 0U);
+   }
+   else
+   {
+      i_ret = si_Fs(eFSC_CLOSE_FILE, NULL, 0U, 0U);
+   }
+
+   (void)snprintf(car_path, sizeof(car_path), "%s/%s", DS_FILE_DIR, scar_uploadName);
+
+   // An older file of the same name is replaced
+   if (i_ret == 0)
+   {
+      i_ret = si_FsPath(eFSC_DELETE_FILE, car_path, 0U);
+      if (i_ret == -ENOENT)
+      {
+         i_ret = 0;
+      }
+   }
+
+   // Rename "temp\0name"
+   if (i_ret == 0)
+   {
+      memcpy(u8ar_rename, DS_TEMP_PATH, u32_tempLen);
+      memcpy(&u8ar_rename[u32_tempLen], car_path, strlen(car_path));
+      i_ret = si_Fs(eFSC_RENAME, u8ar_rename, u32_tempLen + (uint32_t)strlen(car_path), 0U);
+   }
+
+   if (i_ret != 0)
+   {
+      APP_LOG_ERR("upload %s failed (%d), discarded", scar_uploadName, i_ret);
+      (void)si_FsPath(eFSC_DELETE_FILE, DS_TEMP_PATH, 0U);
+      sv_SendFile(DS_APP_TYPE_COMMIT, i_ret, 0U, 0U);
+      return;
+   }
+
+   LOG_INF("FILE %s size=%u crc=0x%08x", car_path, su32_fileSize, su32_fileCrc);
+   sv_SendFile(DS_APP_TYPE_COMMIT, 0, su32_fileSize, su32_fileCrc);
+}
+
+/**
  * @private       sv_DumpThread
- * @brief         Wait for verified segments, dump each one, then free the buffer and
- *                tell the client with DS_APP_TYPE_STORED.
+ * @brief         Execute the events in order: dump and store verified segments
+ *                (then STORED), BEGIN and COMMIT.
  * @param[in]     vpt_p1 Unused.
  * @param[in]     vpt_p2 Unused.
  * @param[in]     vpt_p3 Unused.
@@ -394,8 +859,7 @@ static void sv_DumpSegment(void)
  */
 static void sv_DumpThread(void *vpt_p1, void *vpt_p2, void *vpt_p3)
 {
-   uint32_t u32_addr = 0U;
-   uint32_t u32_len = 0U;
+   DsEvent_T st_event;
 
    ARG_UNUSED(vpt_p1);
    ARG_UNUSED(vpt_p2);
@@ -403,16 +867,25 @@ static void sv_DumpThread(void *vpt_p1, void *vpt_p2, void *vpt_p3)
 
    while (true)
    {
-      k_sem_take(&sst_dumpSem, K_FOREVER);
+      (void)k_msgq_get(&sst_dsEventQ, &st_event, K_FOREVER);
 
-      sv_DumpSegment();
+      switch (st_event.u8_type)
+      {
+         case eDSE_SEGMENT:
+            sv_StoreSegment();
+            break;
 
-      // Copy before freeing the buffer: the next segment overwrites these
-      u32_addr = su32_segAddr;
-      u32_len = su32_segLen;
-      atomic_set(&st_dumpBusy, 0);
+         case eDSE_BEGIN:
+            sv_Begin(&st_event);
+            break;
 
-      sv_SendReport(DS_APP_TYPE_STORED, (uint8_t)eBS_OK, u32_addr, u32_len);
+         case eDSE_COMMIT:
+            sv_Commit();
+            break;
+
+         default:
+            break;
+      }
    }
 }
 
@@ -423,10 +896,9 @@ static void sv_DumpThread(void *vpt_p1, void *vpt_p2, void *vpt_p3)
 /******************************************************************************/
 /**
  * @public        gi_DataStore_Init
- * @brief         Register the data store's appType (DS_APP_TYPE_SEGMENT) and its
- *                receive callbacks with the BulkXfer router. Call once, before
- *                gi_BulkRouter_Start(). Short messages from the client are left to
- *                the router, which logs and ignores them.
+ * @brief         Register the data store's appType range (DS_APP_TYPE_SEGMENT to
+ *                DS_APP_TYPE_LAST) and its callbacks with the BulkXfer router. Call
+ *                once, before gi_BulkRouter_Start().
  * @return        0 on success, otherwise the error from gi_BulkRouter_Register().
  */
 int gi_DataStore_Init(void)
@@ -435,10 +907,11 @@ int gi_DataStore_Init(void)
    int i_ret = 0;
 
    st_route.u8_firstAppType = DS_APP_TYPE_SEGMENT;
-   st_route.u8_lastAppType = DS_APP_TYPE_SEGMENT;
+   st_route.u8_lastAppType = DS_APP_TYPE_LAST;
    st_route.fpt_onRxStart = si_OnRxStart;
    st_route.fpt_onRxData = si_OnRxData;
    st_route.fpt_onRxDone = sv_OnRxDone;
+   st_route.fpt_onRxShort = sv_OnRxShort;
 
    i_ret = gi_BulkRouter_Register(&st_route);
 
@@ -453,6 +926,17 @@ int gi_DataStore_Init(void)
    }
 
    return i_ret;
+}
+
+/**
+ * @public        gb_DataStore_UploadOpen
+ * @brief         Whether an upload is being stored (from a successful BEGIN until
+ *                COMMIT or the next BEGIN): it holds the file system's open file.
+ * @return        true while an upload file is open.
+ */
+bool gb_DataStore_UploadOpen(void)
+{
+   return atomic_get(&st_uploadOpen) != 0;
 }
 
 /**

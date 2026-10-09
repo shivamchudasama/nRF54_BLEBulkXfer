@@ -1,0 +1,58 @@
+// Board Overlay file to be used when interfacing the NOR Flash chip via SPI Interface
+
+// Chosen node to specify the external flash device.
+/ {
+    chosen {
+        nordic,pm-ext-flash = &mx25r64;
+    };
+};
+
+/** The following node is used to specify the partitions on the external flash device.
+ * In this case, we are defining a single partition that spans the entire flash memory,
+ * which will be used for FATFS storage. The compatible property "fixed-partitions"
+ * indicates that the partitions are of fixed size and location. The #address-cells
+ * and #size-cells properties specify the number of cells used to represent the address
+ * and size of each partition, respectively. The ext_storage_partition node defines a
+ * partition with a label "ext_storage" and a size of 4MB (0x00400000 bytes) starting
+ * at address 0x00000000.
+ */
+&mx25r64 {
+    partitions {
+        compatible = "fixed-partitions";
+        #address-cells = <1>;
+        #size-cells = <1>;
+
+        ext_storage_partition: partition@0 {
+            label = "ext_storage";
+            reg = <0x00000000 0x00400000>;
+        };
+    };
+};
+
+/** The fatfs_disk node is being redefined to specify the use of the external
+ * flash memory
+ * for FATFS storage.
+ */
+/ {
+    fatfs_disk: fatfs_disk {
+        compatible = "zephyr,flash-disk";
+        partition = <&ext_storage_partition>;
+        disk-name = "FLASH_DISK";
+        cache-size = <4096>;
+    };
+};
+
+/** Disable Factory Information Configuration Register (FICR) as it is not needed
+ * for this application and can save power by doing so.
+ * This is especially important when using the external flash chip, as it can
+ * help reduce overall power consumption of the system.
+ */
+&ficr {
+    status = "disabled";
+};
+
+// Modify UART20 baudrate
+&uart20 {
+    current-speed = <921600>;
+};
+

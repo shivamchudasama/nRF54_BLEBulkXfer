@@ -236,9 +236,17 @@ static void sv_LinkEvent(void)
    sv_SimFireTimers();
 }
 
+/** Optional: run another simulated thread when a wait blocks (e.g. the File
+    System Manager, for a gi_FSMGR_Call() on the waiting thread). */
+static void (*sfpt_simBlockHook)(void) = NULL;
+
 void gv_SimOnBlock(struct k_sem *stpt_sem)
 {
    (void)stpt_sem;
+   if (sfpt_simBlockHook != NULL)
+   {
+      sfpt_simBlockHook();
+   }
    // A blocked credit wait means the engine waits for the link to drain
    if (su32_linkCount > 0U)
    {

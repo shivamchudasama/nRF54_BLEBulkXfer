@@ -1,0 +1,139 @@
+/*
+ * External flash over sQSPI (FLASH_IF=sqspi): the QSPI controller is a soft
+ * peripheral that runs on the FLPR (RISC-V) core, from 16 KiB of RAM at
+ * 0x2003c000 reserved for it. The DK's MX25R6435F (mx25r64, 8 MiB) moves from
+ * spi00 onto that sqspi node as a jedec,mspi-nor device in quad mode. Its
+ * first 4 MiB are the FAT volume FLASH_DISK.
+ *
+ * From Sample Code FS (nrf54l15dk_nrf54l15_cpuapp_FATFS_sqspi.overlay), which
+ * matches NCS's samples/zephyr/drivers/spi_flash/boards/nrf54l_sqspi.dtsi.
+ * Added after the board overlay by the root CMakeLists.txt. FICR stays
+ * enabled (the sample disabled it): HWINFO reads the device ID from it for
+ * the CSR's CN.
+ */
+
+&pinctrl {
+	sqspi_default: sqspi_default {
+		group1 {
+			psels = <NRF_PSEL(SDP_MSPI_SCK, 2, 1)>,
+				<NRF_PSEL(SDP_MSPI_CS0, 2, 5)>,
+				<NRF_PSEL(SDP_MSPI_DQ0, 2, 2)>;
+			nordic,drive-mode = <NRF_DRIVE_E0E1>;
+		};
+
+		group2 {
+			psels = <NRF_PSEL(SDP_MSPI_DQ1, 2, 4)>,
+				<NRF_PSEL(SDP_MSPI_DQ2, 2, 3)>,
+				<NRF_PSEL(SDP_MSPI_DQ3, 2, 0)>;
+			nordic,drive-mode = <NRF_DRIVE_E0E1>;
+			bias-pull-up;
+		};
+	};
+
+	sqspi_sleep: sqspi_sleep {
+		group1 {
+			low-power-enable;
+			psels = <NRF_PSEL(SDP_MSPI_SCK, 2, 1)>,
+				<NRF_PSEL(SDP_MSPI_CS0, 2, 5)>,
+				<NRF_PSEL(SDP_MSPI_DQ0, 2, 2)>,
+				<NRF_PSEL(SDP_MSPI_DQ1, 2, 4)>,
+				<NRF_PSEL(SDP_MSPI_DQ2, 2, 3)>,
+				<NRF_PSEL(SDP_MSPI_DQ3, 2, 0)>;
+		};
+	};
+};
+
+/* The FLPR core runs the sQSPI soft peripheral with these pins */
+&cpuflpr_vpr {
+	pinctrl-0 = <&sqspi_default>;
+	pinctrl-1 = <&sqspi_sleep>;
+	pinctrl-names = "default", "sleep";
+	interrupts = <76 NRF_DEFAULT_IRQ_PRIORITY>;
+	status = "okay";
+};
+
+/ {
+	reserved-memory {
+		#address-cells = <1>;
+		#size-cells = <1>;
+		ranges;
+
+		softperipheral_ram: memory@2003c000 {
+			reg = <0x2003c000 0x4000>;
+			ranges = <0 0x2003c000 0x4000>;
+			#address-cells = <1>;
+			#size-cells = <1>;
+
+			sqspi: sqspi@3b40 {
+				compatible = "nordic,nrf-sqspi";
+				#address-cells = <1>;
+				#size-cells = <0>;
+				reg = <0x3b40 0x200>;
+				status = "okay";
+				zephyr,pm-device-runtime-auto;
+			};
+		};
+	};
+};
+
+/*
+ * The application core's RAM ends where the soft peripheral's begins, so the
+ * linker refuses an image that would grow into it (the samples leave the
+ * region at 256 KiB and rely on the image staying small).
+ */
+&cpuapp_sram {
+	reg = <0x20000000 DT_SIZE_K(240)>;
+	ranges = <0x0 0x20000000 DT_SIZE_K(240)>;
+};
+
+/* The flash leaves spi00 ... */
+/delete-node/ &mx25r64;
+
+/* ... for the sqspi node */
+&sqspi {
+	mx25r64: mx25r6435f@0 {
+		compatible = "mxicy,mx25r", "jedec,mspi-nor";
+		status = "okay";
+		reg = <0>;
+		jedec-id = [c2 28 17];
+		quad-enable-requirements = "S1B6";
+		sfdp-bfp = [e5 20 f1 ff ff ff ff 03 44 eb 08 6b 08 3b 04 bb
+			    ee ff ff ff ff ff 00 ff ff ff 00 ff 0c 20 0f 52
+			    10 d8 00 ff 23 72 f5 00 82 ed 04 cc 44 83 68 44
+			    30 b0 30 b0 f7 c4 d5 5c 00 be 29 ff f0 d0 ff ff];
+		size = <67108864>;
+		has-dpd;
+		t-enter-dpd = <10000>;
+		t-exit-dpd = <35000>;
+		t-reset-pulse = <10000>;
+		t-reset-recovery = <35000>;
+
+		mspi-max-frequency = <DT_FREQ_M(8)>;
+		mspi-io-mode = "MSPI_IO_MODE_QUAD_1_4_4";
+		mspi-data-rate = "MSPI_DATA_RATE_SINGLE";
+		mspi-hardware-ce-num = <1>;
+		mspi-cpp-mode = "MSPI_CPP_MODE_0";
+		mspi-endian = "MSPI_BIG_ENDIAN";
+		mspi-ce-polarity = "MSPI_CE_ACTIVE_LOW";
+
+		partitions {
+			compatible = "fixed-partitions";
+			#address-cells = <1>;
+			#size-cells = <1>;
+
+			ext_storage_partition: partition@0 {
+				label = "ext_storage";
+				reg = <0x00000000 0x00400000>;
+			};
+		};
+	};
+};
+
+/ {
+	fatfs_disk: fatfs_disk {
+		compatible = "zephyr,flash-disk";
+		partition = <&ext_storage_partition>;
+		disk-name = "FLASH_DISK";
+		cache-size = <4096>;
+	};
+};

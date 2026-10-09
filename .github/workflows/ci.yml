@@ -85,7 +85,13 @@ jobs:
           path: report/
 
   # ---- Tier 3: the real firmware, in Nordic's toolchain container -------------
+  # Once per external flash interface (FLASH_IF in the root CMakeLists.txt): SPI
+  # (the default, flashed by the hardware jobs) and the sQSPI soft peripheral
   firmware-build:
+    strategy:
+      fail-fast: false
+      matrix:
+        flash_if: [spi, sqspi]
     runs-on: ubuntu-24.04
     container:
       image: ghcr.io/nrfconnect/sdk-nrf-toolchain:v3.4.1   # keep in step with NCS_VERSION
@@ -114,12 +120,12 @@ jobs:
         working-directory: ncs
         run: |
           west build -p -b "$BOARD" --sysbuild -d "$GITHUB_WORKSPACE/build_ci" "$GITHUB_WORKSPACE/app" \
-            2>&1 | tee "$GITHUB_WORKSPACE/build.log"
+            -- -DFLASH_IF=${{ matrix.flash_if }} 2>&1 | tee "$GITHUB_WORKSPACE/build.log"
           test "${PIPESTATUS[0]}" -eq 0
       - name: Memory usage
         run: |
           {
-            echo "## Firmware ($BOARD, NCS $NCS_VERSION)"
+            echo "## Firmware ($BOARD, NCS $NCS_VERSION, flash over ${{ matrix.flash_if }})"
             echo '```'
             grep -A6 'Memory region' build.log | tail -n 7
             echo '```'
@@ -129,7 +135,8 @@ jobs:
           } | tee firmware-size.md >> "$GITHUB_STEP_SUMMARY"
       - uses: actions/upload-artifact@v7
         with:
-          name: firmware
+          # "firmware" (SPI) is what the hardware jobs flash
+          name: ${{ matrix.flash_if == 'spi' && 'firmware' || format('firmware-{0}', matrix.flash_if) }}
           path: |
             build_ci/merged.hex
             build_ci/app/zephyr/zephyr.elf
@@ -202,6 +209,24 @@ jobs:
         run: nrfutil device program --firmware fw/build_ci/merged.hex --options chip_erase_mode=ERASE_ALL
       - name: Upload AA00000100.hex over BLE
         run: python _TOOLS/BleHostGUI/bulkxfer_client.py hex AA00000100.hex --name "BLE Bulk Transfer"
+      # The file system on the external flash (_DOC/FileSysManager): the upload
+      # stored as a file (the client checks the size and CRC-32 COMMIT reports),
+      # listed, read back over the file commands, and compared byte for byte
+      # with the records the hex file gives; then again after a reset.
+      - name: Store the upload as a file and read it back
+        shell: pwsh
+        run: |
+          $cli = "_TOOLS/BleHostGUI/bulkxfer_client.py"
+          python $cli hex AA00000100.hex --store HIL.BIN --name "BLE Bulk Transfer"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python $cli fs ls --name "BLE Bulk Transfer"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python $cli fs get /FW/HIL.BIN ${{ runner.temp }}/hil.bin --name "BLE Bulk Transfer"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          nrfutil device reset
+          python $cli fs get /FW/HIL.BIN ${{ runner.temp }}/hil_after_reset.bin --name "BLE Bulk Transfer"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python -c "import sys; sys.path.insert(0, '_TOOLS/BleHostGUI'); import bulkxfer_client as bx; want = bx.file_image(bx.parse_ihex('AA00000100.hex')); got = [open(f, 'rb').read() for f in sys.argv[1:]]; sys.exit(0 if all(g == want for g in got) else 'stored file differs')" ${{ runner.temp }}/hil.bin ${{ runner.temp }}/hil_after_reset.bin
       # Device provisioning (_DOC/Provisioning/PROTOCOL.md): the runner hosts the
       # PC-side BulkXfer service (Windows), acts as the CA and provisions the DK.
       # The chip erase above makes the device generate a fresh key and CSR.

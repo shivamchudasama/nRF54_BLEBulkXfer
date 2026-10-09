@@ -12,6 +12,7 @@ import os
 import struct
 import sys
 import types
+import zlib
 
 import pytest
 from cryptography import x509
@@ -428,3 +429,123 @@ def test_pairstatus_and_unpair(pair_bleak, monkeypatch, capsys):
     cli(monkeypatch, "unpair", "--address", A[0])
     assert c.controls == [pp.encode_unpair()]
     assert f"{A[0]}: IDLE" in capsys.readouterr().out
+
+
+# ---- hex --store and fs: the device's file system ------------------------------------------
+class FsCliServer(CliServer):
+    """CliServer whose device also stores uploads as files and answers file
+    commands (FakeFsDevice of conftest.py)."""
+
+    device = None
+
+    def _on_frame(self, f):
+        t, p = f[1], f[2:]
+        if t == bx.APP_TYPE_BEGIN:
+            self._notify(bx.frame(*FsCliServer.device.begin(p)))
+        elif t == bx.APP_TYPE_COMMIT:
+            self._notify(bx.frame(*FsCliServer.device.commit()))
+        elif t == 0x40:
+            for rt, rp in FsCliServer.device.handle(p):
+                self._notify(bx.frame(rt, rp))
+        else:
+            super()._on_frame(f)
+
+    def _end(self):
+        n = len(self.objects)
+        super()._end()
+        if len(self.objects) > n and self.objects[-1][0] == bx.APP_TYPE_SEGMENT:
+            obj = self.objects[-1][1]
+            FsCliServer.device.segment(obj)
+            self._notify(bx.frame(bx.APP_TYPE_STORED, struct.pack("<BII", 0, *struct.unpack("<I", obj[:4]),
+                                                                  len(obj) - 4)))
+
+
+@pytest.fixture
+def fsbleak(bleak, monkeypatch, fsdev):
+    FsCliServer.device = fsdev
+    real_init = FakeBleakClient.__init__
+
+    def init(self, *a, **kw):
+        real_init(self, *a, **kw)
+        self.server = FsCliServer()
+    monkeypatch.setattr(FakeBleakClient, "__init__", init)
+    return fsdev
+
+
+def test_hex_store(fsbleak, monkeypatch, capsys, tmp_path):
+    cli(monkeypatch, "hex", _hex_file(tmp_path), "--store", "APP1.BIN", "--name", "dev")
+    out = capsys.readouterr().out
+    image = bx.file_image([(0, bytes(range(32))), (0x1000, bytes(range(100, 116)))])
+    assert "storing as /FLASH_DISK:/FW/APP1.BIN" in out
+    assert f"file /FLASH_DISK:/FW/APP1.BIN: {len(image)} B, crc 0x{zlib.crc32(image):08x} (matches)" in out
+    assert fsbleak.files["/FLASH_DISK:/FW/APP1.BIN"] == image
+
+
+def test_hex_store_refused_or_mismatched(fsbleak, monkeypatch, tmp_path):
+    with pytest.raises(SystemExit, match="not a valid file name"):
+        cli(monkeypatch, "hex", _hex_file(tmp_path), "--store", "a/b", "--name", "dev")
+    fsbleak.busy = True
+    with pytest.raises(SystemExit, match="BEGIN APP: BUSY"):
+        cli(monkeypatch, "hex", _hex_file(tmp_path), "--store", "APP", "--name", "dev")
+    fsbleak.busy = False
+    real_commit = fsbleak.commit
+    fsbleak.commit = lambda: (0x14, struct.pack("<BBII", 0x13, 9, 0, 0))
+    with pytest.raises(SystemExit, match="COMMIT APP: IO"):
+        cli(monkeypatch, "hex", _hex_file(tmp_path), "--store", "APP", "--name", "dev")
+    fsbleak.commit = lambda: (real_commit(), (0x14, struct.pack("<BBII", 0x13, 0, 7, 7)))[1]
+    with pytest.raises(SystemExit, match="device file 7 B crc 0x00000007"):
+        cli(monkeypatch, "hex", _hex_file(tmp_path), "--store", "APP", "--name", "dev")
+
+
+def test_hex_stops_when_stored_reports_an_error(bleak, monkeypatch, tmp_path):
+    real_init = CliServer.__init__
+
+    def init(self, *a, **kw):
+        real_init(self, *a, **kw)
+        self.after_end = [(bx.APP_TYPE_STORED, struct.pack("<BII", 8, 0, 32))]
+    monkeypatch.setattr(CliServer, "__init__", init)
+    with pytest.raises(SystemExit) as e:
+        cli(monkeypatch, "hex", _hex_file(tmp_path), "--name", "dev")
+    assert e.value.code == 1
+
+
+def test_fs_commands(fsbleak, monkeypatch, capsys, tmp_path):
+    cli(monkeypatch, "fs", "mkdir", "FW", "--name", "dev")
+    cli(monkeypatch, "fs", "openw", "/FW/a.txt", "--name", "dev")
+    cli(monkeypatch, "fs", "write", "hello", "world", "--name", "dev")
+    cli(monkeypatch, "fs", "write", "--hex", "0d0a", "--name", "dev")
+    cli(monkeypatch, "fs", "close", "--name", "dev")
+    cli(monkeypatch, "fs", "ls", "--name", "dev")
+    dst = tmp_path / "a.txt"
+    cli(monkeypatch, "fs", "get", "/FW/a.txt", str(dst), "--name", "dev")
+    out = capsys.readouterr().out
+    assert dst.read_bytes() == b"hello world\r\n"
+    assert "Directory active: /FLASH_DISK:/FW" in out and "Written, total 13 bytes" in out
+    assert "[FILE] /FLASH_DISK:/FW/a.txt (13 bytes)" in out and "File closed, 13 bytes written" in out
+
+
+def test_fs_errors(fsbleak, monkeypatch):
+    with pytest.raises(SystemExit, match="fs: give a command"):
+        cli(monkeypatch, "fs", "--name", "dev")
+    with pytest.raises(SystemExit, match="unknown command 'format'"):
+        cli(monkeypatch, "fs", "format", "--name", "dev")
+    with pytest.raises(SystemExit, match="fs cd: CD: NOT_FOUND"):
+        cli(monkeypatch, "fs", "cd", "NONE", "--name", "dev")
+    with pytest.raises(SystemExit, match="fs mkdir: mkdir requires a path"):
+        cli(monkeypatch, "fs", "mkdir", "--name", "dev")
+    with pytest.raises(SystemExit, match="fs put"):
+        cli(monkeypatch, "fs", "put", "missing.bin", "/x", "--name", "dev")
+
+
+def test_fs_shell(fsbleak, monkeypatch, capsys):
+    lines = iter(["mkdir FW", "openw x", "write abc", "close", "ls"])
+
+    def fake_input(prompt=""):
+        try:
+            return next(lines)
+        except StopIteration:
+            raise EOFError from None
+    monkeypatch.setattr("builtins.input", fake_input)
+    cli(monkeypatch, "fs", "shell", "--name", "dev")
+    out = capsys.readouterr().out
+    assert "Type 'help'" in out and "[FILE] /FLASH_DISK:/FW/x (3 bytes)" in out

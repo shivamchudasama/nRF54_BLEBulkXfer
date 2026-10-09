@@ -16,20 +16,18 @@ Run after a change to the pairing wire format, then rebuild the tests:
 
     python _TEST/tools/gen_pair_vector.py
 
-Only the "pairing" section is replaced (or appended); the rest of wire.json
-keeps its hand formatting. Needs cryptography (in _TEST/requirements-test.txt).
+Only the "pairing" section is replaced (or appended, see wire_section.py);
+the rest of wire.json keeps its hand formatting. Needs cryptography (in _TEST/requirements-test.txt).
 """
 
-import json
 import os
-import re
 
 from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import ec
 from cryptography.hazmat.primitives.asymmetric.utils import decode_dss_signature
 
-HERE = os.path.dirname(os.path.abspath(__file__))
-WIRE = os.path.join(HERE, "..", "vectors", "wire.json")
+from wire_section import replace_section
+
 BASE = "-16a1-4812-af35-f3f29a92f6ca"
 
 STATES = {"IDLE": 0, "ARMED": 1, "CONNECTED": 2, "CERT_EXCHANGE": 3, "CERT_VERIFIED": 4,
@@ -129,19 +127,7 @@ def section() -> dict:
 
 
 def main() -> None:
-    with open(WIRE, encoding="utf-8") as f:
-        text = f.read()
-    body = json.dumps(section(), indent=2)
-    body = "\n".join("  " + line for line in body.splitlines()).lstrip()
-    m = re.search(r',\n  "pairing": ', text)
-    if m:
-        text = text[:m.start()] + "\n}\n"
-    assert text.rstrip().endswith("}"), "wire.json must end with its closing brace"
-    head = text.rstrip()[:-1].rstrip()
-    text = head + ',\n  "pairing": ' + body + "\n}\n"
-    json.loads(text)                          # still valid JSON
-    with open(WIRE, "w", encoding="utf-8", newline="\n") as f:
-        f.write(text)
+    replace_section("pairing", section())
     print("pairing vectors written")
 
 

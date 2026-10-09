@@ -5,7 +5,9 @@
  *                sim_link.h, with its scripted peer as the upload client.
  *                The segment is the first one of AA00000100.hex, and the
  *                expected device output and CTRL frames are the ones captured
- *                from a real upload (_LOG/). Contract: _DOC/HexUpload/PROTOCOL.md.
+ *                from a real upload (_LOG/). Storing the upload as a file runs on
+ *                the real File System Manager over the in-memory volume of
+ *                shim/fs_sim.c. Contract: _DOC/HexUpload/PROTOCOL.md.
  *
  * @date          29/09/2026
  * @author        Shivam Chudasama [SC]
@@ -19,6 +21,8 @@
 #include "sim_link.h"
 #include "DataStore.c"
 #include "BulkRouter.c"
+#include "FileSysManager.c"
+#include "FileSysManagerFSM.c"
 #include "wire_vectors.h"
 
 /* _BLK_SVC stand-in: the CTRL attribute is the one the simulated link knows */
@@ -66,11 +70,28 @@ static void sv_Upload(uint32_t u32_objLen)
    TEST_ASSERT_TRUE_MESSAGE(sb_RunUntil(sb_PeerTxDone, 60000), "no END from the server");
 }
 
+/* The dump thread's file system calls block: run the File System Manager */
+static void sv_RunFsmgr(void)
+{
+   while (sb_ProcessNext(K_NO_WAIT)) {}
+}
+
 void setUp(void)
 {
    atomic_set(&st_dumpBusy, 0);
-   sst_dumpSem.count = 0U;
+   k_msgq_purge(&sst_dsEventQ);
+   atomic_set(&st_uploadOpen, 0);
    gv_SimLogClear();
+
+   // A formatted volume, mounted by the File System Manager as at boot
+   gv_SimFsReset();
+   gv_SimFsFormat(false);
+   k_msgq_purge(&sst_fsmgrMsgQ);
+   sb_mounted = false;
+   (void)memset(&sst_FSMGRContext, 0, sizeof(sst_FSMGRContext));
+   gv_SimRunThread(sv_FSMGR_Thread);
+   sfpt_simBlockHook = sv_RunFsmgr;
+
    sv_SimConnect(247U);
 }
 
@@ -180,6 +201,74 @@ static void test_FullSizeSegment(void)
    TEST_ASSERT_EQUAL_MEMORY(su8ar_big, su8ar_segBuf, DS_BUF_SIZE);
 }
 
+/** The client sends one of the golden hex_file short frames. */
+static void sv_PeerSendHexf(const char *cpt_name)
+{
+   uint32_t i;
+
+   for (i = 0U; i < ARRAY_SIZE(gstar_vecHexfShorts); i++)
+   {
+      if (strcmp(gstar_vecHexfShorts[i].cpt_name, cpt_name) == 0)
+      {
+         sv_PeerWrite(gstar_vecHexfShorts[i].u8ar_wire, gstar_vecHexfShorts[i].u8_wireLen);
+         return;
+      }
+   }
+   TEST_FAIL_MESSAGE(cpt_name);
+}
+
+/** The last short message the peer received must be this golden hex_file frame. */
+static void sv_AssertPeerGotHexf(const char *cpt_name)
+{
+   uint32_t i;
+
+   for (i = 0U; i < ARRAY_SIZE(gstar_vecHexfShorts); i++)
+   {
+      if (strcmp(gstar_vecHexfShorts[i].cpt_name, cpt_name) == 0)
+      {
+         TEST_ASSERT_EQUAL_UINT16_MESSAGE(gstar_vecHexfShorts[i].u8_wireLen,
+            sst_peer.u16_shortFrameLen, cpt_name);
+         TEST_ASSERT_EQUAL_HEX8_ARRAY_MESSAGE(gstar_vecHexfShorts[i].u8ar_wire,
+            sst_peer.u8ar_shortFrame, gstar_vecHexfShorts[i].u8_wireLen, cpt_name);
+         return;
+      }
+   }
+   TEST_FAIL_MESSAGE(cpt_name);
+}
+
+/** §7: BEGIN, the segment, COMMIT on the air; the file holds the segment's record. */
+static void test_StoreUploadAsFileOnTheAir(void)
+{
+   uint32_t u32_size = 0U;
+   const uint8_t *u8pt;
+
+   sst_peer.i_shortNotifies = 0;
+   sv_PeerSendHexf("begin_fw1");
+   sv_Settle(5);                              /* the engine hands BEGIN to the data store */
+   gv_SimRunThread(sv_DumpThread);
+   TEST_ASSERT_TRUE(sb_RunUntil(sb_PeerShortNotify, 200));
+   sv_AssertPeerGotHexf("file_begin_ok");
+
+   sv_Upload(su32_MakeObject(VEC_HEX_SEG_ADDR, gu8ar_vecHexSeg, VEC_HEX_SEG_LEN));
+   TEST_ASSERT_EQUAL_INT(eBS_OK, sst_peer.i_txDone);
+   sst_peer.i_shortNotifies = 0;
+   gv_SimRunThread(sv_DumpThread);
+   TEST_ASSERT_TRUE(sb_RunUntil(sb_PeerShortNotify, 200));
+   sv_AssertPeerGotReport("stored_ok_from_log");
+
+   sst_peer.i_shortNotifies = 0;
+   sv_PeerSendHexf("commit");
+   sv_Settle(5);
+   gv_SimRunThread(sv_DumpThread);
+   TEST_ASSERT_TRUE(sb_RunUntil(sb_PeerShortNotify, 200));
+   sv_AssertPeerGotHexf("file_commit_ok");
+
+   u8pt = gu8pt_SimFsData(VEC_HEXF_DIR "/FW1", &u32_size);
+   TEST_ASSERT_NOT_NULL(u8pt);
+   TEST_ASSERT_EQUAL_UINT32(VEC_HEXF_FILE_SIZE, u32_size);
+   TEST_ASSERT_EQUAL_HEX32(VEC_HEXF_FILE_CRC, crc32_ieee(u8pt, u32_size));
+}
+
 int main(int argc, char **argv)
 {
    (void)setvbuf(stdout, NULL, _IONBF, 0);
@@ -198,5 +287,6 @@ int main(int argc, char **argv)
    RUN_TEST(test_RejectionsOnTheAir);
    RUN_TEST(test_CrcErrorIsDiscarded);
    RUN_TEST(test_FullSizeSegment);
+   RUN_TEST(test_StoreUploadAsFileOnTheAir);
    return UNITY_END();
 }
