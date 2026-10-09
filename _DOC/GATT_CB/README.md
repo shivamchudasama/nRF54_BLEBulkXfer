@@ -74,7 +74,7 @@ shrink the length, offset gaps are not zero-filled, the prepare-write flag is ig
 ## Integration
 
 1. Add the library to the build. [`_LIB/CMakeLists.txt`](../../_LIB/CMakeLists.txt) adds
-   `GATT_CB` before `BulkXfer`, which builds on it.
+   `GATT_CB` before `SETU`, which builds on it.
 2. In the service `.c` file, define one `static` (non-`const`) `GATTCharDescriptor_T` per
    characteristic next to its value. For a fixed-length value set
    `u16_actualLen = u16_dataLen`; for a variable-length one set it to `0` or the preloaded length.
@@ -84,12 +84,12 @@ shrink the length, offset gaps are not zero-filled, the prepare-write flag is ig
    thread uses the local API on that value.
 
 [API_REFERENCE.md §1](API_REFERENCE.md#1-quick-start) has a complete example. In this project,
-[BulkSvc.c](../../_ASW/_BLK_SVC/BulkSvc.c) uses it for the BulkXfer service:
+[SETUSvc.c](../../_ASW/_SETU_SVC/SETUSvc.c) uses it for the SETU service:
 
 | Characteristic | Descriptor | Why |
 |---|---|---|
-| DATA (Write / Write Without Response) | variable length up to one frame, no mutex, write hook `st_OnBulkDataWrite` | Each written frame goes to the BulkXfer Server engine in the BLE RX context |
-| Caps (Read) | fixed length `BlkCaps_T`, no mutex, no hooks | Filled once with `gv_GATT_LocalWrite` before advertising, then served by `gt_GATT_GenericRead` |
+| DATA (Write / Write Without Response) | variable length up to one frame, no mutex, write hook `st_OnSETUDataWrite` | Each written frame goes to the SETU Server engine in the BLE RX context |
+| Caps (Read) | fixed length `SETUCaps_T`, no mutex, no hooks | Filled once with `gv_GATT_LocalWrite` before advertising, then served by `gt_GATT_GenericRead` |
 
 CTRL is notify-only, so it does not use the library.
 

@@ -1,10 +1,10 @@
 /**
  * @file          test_prov_e2e.c
- * @brief         Device provisioning end to end on the host: the real BulkXfer
+ * @brief         Device provisioning end to end on the host: the real SETU
  *                engine in both roles, the real appType router and the real
  *                Prov.c, over the simulated link in sim_link.h. Its scripted
  *                peer plays the provisioner (the PC): it writes the golden
- *                GET_STATUS / CSR_REQ frames from wire.json, hosts the BulkXfer
+ *                GET_STATUS / CSR_REQ frames from wire.json, hosts the SETU
  *                service the device Client discovers and receives the CSR on,
  *                sends the certificates, and finally wipes the device with
  *                DEPROVISION. Certificate verification, certificate storage and
@@ -17,19 +17,19 @@
  */
 
 /* Both roles, as in the firmware */
-#include "BulkXfer_Core.c"
-#include "BulkXfer_Server.c"
-#include "BulkXfer_Client.c"
+#include "SETU_Core.c"
+#include "SETU_Server.c"
+#include "SETU_Client.c"
 #include "sim_link.h"
-#include "BulkRouter.c"
+#include "SETURouter.c"
 #include "Prov.c"
 #include "wire_vectors.h"
 
 /******************************************************************************/
 /*  Device-side stand-ins                                                     */
 /******************************************************************************/
-/* _BLK_SVC: the CTRL attribute is the one the simulated link knows */
-const struct bt_gatt_attr *gstpt_BulkSvc_Init(void)
+/* _SETU_SVC: the CTRL attribute is the one the simulated link knows */
+const struct bt_gatt_attr *gstpt_SETUSvc_Init(void)
 {
    return &sst_ctrlAttr;
 }
@@ -371,9 +371,9 @@ int main(int argc, char **argv)
    gb_simVerbose = (argc > 1) && (strcmp(argv[1], "-v") == 0);
 
    // As main() does in the firmware, before any connection
-   if ((gi_Prov_Init() != 0) || (gi_BulkRouter_Start() != 0))
+   if ((gi_Prov_Init() != 0) || (gi_SETURouter_Start() != 0))
    {
-      printf("gi_Prov_Init / gi_BulkRouter_Start failed\n");
+      printf("gi_Prov_Init / gi_SETURouter_Start failed\n");
       return 1;
    }
 

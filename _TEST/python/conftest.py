@@ -1,10 +1,10 @@
 # SPDX-License-Identifier: MIT
 """Shared fixtures for the PC-tool tests.
 
-Puts _TOOLS/BleHostGUI on sys.path (bulkxfer_client.py and the blehost
+Puts _TOOLS/BleHostGUI on sys.path (setu_client.py and the blehost
 package live there) and provides the golden wire vectors shared with the C
-tests, plus a fake GATT transport and a scripted BulkXfer server so that
-BulkXferClient can be tested without a BLE adapter, and one shared Tk root
+tests, plus a fake GATT transport and a scripted SETU server so that
+SETUClient can be tested without a BLE adapter, and one shared Tk root
 for the tests that build widgets.
 """
 
@@ -22,7 +22,7 @@ GUI_DIR = os.path.join(REPO, "_TOOLS", "BleHostGUI")
 if GUI_DIR not in sys.path:
     sys.path.insert(0, GUI_DIR)
 
-import bulkxfer_client as bx  # noqa: E402
+import setu_client  # noqa: E402
 
 
 @pytest.fixture(scope="session")
@@ -63,7 +63,7 @@ def tk_root(_tk_session):
 
 
 class FakeServer:
-    """Scripted BulkXfer Server on the far side of a fake GATT link.
+    """Scripted SETU Server on the far side of a fake GATT link.
 
     Implements the receiver half of the protocol (ACK every window/2 frames,
     NACK on a gap, END with a CRC check) closely enough to exercise the client,
@@ -74,7 +74,7 @@ class FakeServer:
         self.mtu_size = mtu
         self.window = window
         self.writes = []
-        self.client = None                      # BulkXferClient, set by the test
+        self.client = None                      # SETUClient, set by the test
         self.caps = bytes([2, 244, 16, 0])
         # knobs
         self.silent = False                     # never answer
@@ -93,7 +93,7 @@ class FakeServer:
         self.objects = []                       # (app_type, bytes) received OK
         self.aborted = None                     # (xid, reason, dir) of the client's ABORT
 
-    # --- the three things BulkXferClient needs from bleak's BleakClient ----
+    # --- the three things SETUClient needs from bleak's BleakClient ----
     async def write_gatt_char(self, uuid, data, response=False):
         assert uuid == self.client.data_uuid, "client must write DATA"
         assert response is False, "client must use Write Without Response"
@@ -115,18 +115,18 @@ class FakeServer:
         if self.silent:
             return
         ftype, p = f[1], f[2:]
-        if ftype == bx.T_START:
+        if ftype == setu_client.T_START:
             xid, app, total, chunk, win, crc = struct.unpack("<BBIBBI", p)
             self.xid, self.app, self.total, self.chunk, self.crc = xid, app, total, chunk, crc
             self.buf, self.nxt, self.since_ack, self.nack_sent = bytearray(), 0, 0, False
             if self.reject is not None:
-                self._notify(bx.frame(bx.T_ABORT, bytes([xid, self.reject, bx.ABORT_BY_RECEIVER])))
+                self._notify(setu_client.frame(setu_client.T_ABORT, bytes([xid, self.reject, setu_client.ABORT_BY_RECEIVER])))
                 return
             if total == 0:
                 self._end()
                 return
-            self._notify(bx.frame(bx.T_ACK, bytes([xid, 0, min(win, self.window)])))
-        elif ftype == bx.T_DATA and p[0] == self.xid:
+            self._notify(setu_client.frame(setu_client.T_ACK, bytes([xid, 0, min(win, self.window)])))
+        elif ftype == setu_client.T_DATA and p[0] == self.xid:
             seq, data = p[1], p[2:]
             if seq == (self.nxt & 0xFF):
                 if self.drop_once == self.nxt:
@@ -140,20 +140,20 @@ class FakeServer:
                     self._end()
                 elif self.since_ack >= self.window // 2:
                     self.since_ack = 0
-                    self._notify(bx.frame(bx.T_ACK, bytes([self.xid, self.nxt & 0xFF, self.window])))
+                    self._notify(setu_client.frame(setu_client.T_ACK, bytes([self.xid, self.nxt & 0xFF, self.window])))
             elif not self.nack_sent:
                 self.nack_sent = True
-                self._notify(bx.frame(bx.T_NACK, bytes([self.xid, self.nxt & 0xFF, 11])))
-        elif ftype == bx.T_ABORT:
+                self._notify(setu_client.frame(setu_client.T_NACK, bytes([self.xid, self.nxt & 0xFF, 11])))
+        elif ftype == setu_client.T_ABORT:
             self.aborted = (p[0], p[1], p[2])
 
     def _end(self):
         ok = zlib.crc32(bytes(self.buf)) == self.crc and not self.corrupt
-        self._notify(bx.frame(bx.T_END, bytes([self.xid, 0 if ok else 1])))
+        self._notify(setu_client.frame(setu_client.T_END, bytes([self.xid, 0 if ok else 1])))
         if ok:
             self.objects.append((self.app, bytes(self.buf)))
             for t, payload in self.after_end:
-                self._notify(bx.frame(t, payload))
+                self._notify(setu_client.frame(t, payload))
 
 
 @pytest.fixture
@@ -163,7 +163,7 @@ def server():
 
 @pytest.fixture
 def client(server):
-    c = bx.BulkXferClient(server, log=lambda *_: None)
+    c = setu_client.SETUClient(server, log=lambda *_: None)
     server.client = c
     return c
 
@@ -171,7 +171,7 @@ def client(server):
 @pytest.fixture
 def fast_timeouts(monkeypatch):
     """Shrink the client's 1 s ACK timeout so timeout paths run quickly."""
-    monkeypatch.setattr(bx, "ACK_TIMEOUT", 0.02)
+    monkeypatch.setattr(setu_client, "ACK_TIMEOUT", 0.02)
 
 
 class FakeFsDevice:
@@ -337,8 +337,8 @@ class FakeFsDevice:
         return (0x14, struct.pack("<BBII", 0x13, self.OK, len(data), zlib.crc32(data)))
 
 
-class FakeBlk:
-    """What FileSystemSession needs from a BulkXferClient: send_short and
+class FakeSETU:
+    """What FileSystemSession needs from a SETUClient: send_short and
     short_q, wired to a FakeFsDevice."""
 
     def __init__(self, device: FakeFsDevice):

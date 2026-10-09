@@ -96,7 +96,7 @@ if ($Coverage) {
       --html-details "$Report\coverage\c\index.html" --print-summary
 }
 & $Py (Join-Path $PSScriptRoot 'tools\report.py') "$Report\junit" --md "$Report\summary.md" `
-   --html "$Report\report.html" --title 'nRF54_BLEBulkXfer host tests' | Out-Null
+   --html "$Report\report.html" --title 'Project Hanuman host tests' | Out-Null
 
 Write-Host ''
 Write-Host "C tests:      $(if ($cResult -eq 0) { 'PASS' } else { 'FAIL' })"

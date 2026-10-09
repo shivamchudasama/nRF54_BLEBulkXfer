@@ -71,7 +71,7 @@ config FSMGR_PRIORITY
 	int "File System Manager thread priority"
 	default 10
 	help
-	  Keep it below the BulkXfer engine (priority 5), so flash writes
+	  Keep it below the SETU engine (priority 5), so flash writes
 	  never delay the link.
 
 config FSMGR_QUEUE_DEPTH
@@ -83,7 +83,7 @@ config FS_CMD
 	bool "File commands over BLE (appTypes 0x40-0x4F)"
 	default y
 	help
-	  Lets the host (GUI Files page, bulkxfer_client.py fs) create, list,
+	  Lets the host (GUI Files page, setu_client.py fs) create, list,
 	  read, write and delete files on the external flash. Like the hex
 	  upload, it runs on the unauthenticated host link, so turn it off in
 	  production builds.

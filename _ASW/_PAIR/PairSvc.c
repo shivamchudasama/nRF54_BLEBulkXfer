@@ -10,7 +10,7 @@
  *                  SECURED (Write, LESC encryption required): the stack refuses
  *                       a write on a link below level 4 itself;
  *                       gt_Pair_OnSecuredWrite() checks it comes from the peer.
- *                Like BulkSvc.c, it calls nothing but the BT stack and is left to
+ *                Like SETUSvc.c, it calls nothing but the BT stack and is left to
  *                the firmware build.
  * @date          06/10/2026
  * @author        Shivam Chudasama [SC]

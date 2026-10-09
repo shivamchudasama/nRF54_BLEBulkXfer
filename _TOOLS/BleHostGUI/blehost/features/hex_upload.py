@@ -12,8 +12,8 @@ import zlib
 import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
 
-from ..protocols import bulkxfer
-from ..protocols.bulkxfer import bx
+from ..protocols import setu
+from ..protocols.setu import setu_client
 from ..ui import theme as th
 from ..ui.widgets import Disclosure, Pill, StatTile, card, set_icon, set_var
 from .base import Feature
@@ -23,23 +23,23 @@ def _result(p: bytes) -> str:
     if len(p) < 9:
         return p.hex(" ")
     st, addr, n = struct.unpack("<BII", p[:9])
-    return f"{bx.STATUS.get(st, hex(st))} addr=0x{addr:08x} len={n}"
+    return f"{setu_client.STATUS.get(st, hex(st))} addr=0x{addr:08x} len={n}"
 
 
 def _file(p: bytes) -> str:
     if len(p) < 10:
         return p.hex(" ")
     op, st, size, crc = struct.unpack("<BBII", p[:10])
-    what = {bx.APP_TYPE_BEGIN: "BEGIN", bx.APP_TYPE_COMMIT: "COMMIT"}.get(op, f"0x{op:02x}")
-    return f"{what} {bx.FS_STATUS.get(st, st)} size={size} crc=0x{crc:08x}"
+    what = {setu_client.APP_TYPE_BEGIN: "BEGIN", setu_client.APP_TYPE_COMMIT: "COMMIT"}.get(op, f"0x{op:02x}")
+    return f"{what} {setu_client.FS_STATUS.get(st, st)} size={size} crc=0x{crc:08x}"
 
 
-bulkxfer.register_app_type(bx.APP_TYPE_SEGMENT, "SEGMENT")
-bulkxfer.register_app_type(bx.APP_TYPE_RESULT, "RESULT", _result)
-bulkxfer.register_app_type(bx.APP_TYPE_STORED, "STORED", _result)
-bulkxfer.register_app_type(bx.APP_TYPE_BEGIN, "BEGIN", lambda p: p.decode("utf-8", "replace"))
-bulkxfer.register_app_type(bx.APP_TYPE_COMMIT, "COMMIT", lambda p: "")
-bulkxfer.register_app_type(bx.APP_TYPE_FILE, "FILE", _file)
+setu.register_app_type(setu_client.APP_TYPE_SEGMENT, "SEGMENT")
+setu.register_app_type(setu_client.APP_TYPE_RESULT, "RESULT", _result)
+setu.register_app_type(setu_client.APP_TYPE_STORED, "STORED", _result)
+setu.register_app_type(setu_client.APP_TYPE_BEGIN, "BEGIN", lambda p: p.decode("utf-8", "replace"))
+setu.register_app_type(setu_client.APP_TYPE_COMMIT, "COMMIT", lambda p: "")
+setu.register_app_type(setu_client.APP_TYPE_FILE, "FILE", _file)
 
 # Progress reaches the tab once per ACK window; it is shown at most this often
 PROGRESS_MS = 66
@@ -101,7 +101,7 @@ class HexUploadFeature(Feature):
         opt = ttk.Frame(filec)
         opt.pack(fill="x", pady=(sp("s"), 0))
         ttk.Label(opt, text="Max segment (bytes)").pack(side="left")
-        self.seg_max_var = tk.StringVar(value=str(bx.SEG_MAX))
+        self.seg_max_var = tk.StringVar(value=str(setu_client.SEG_MAX))
         self.seg_max_entry = ttk.Entry(opt, textvariable=self.seg_max_var, width=8)
         self.seg_max_entry.pack(side="left", padx=sp("s"))
         self.seg_max_entry.bind("<Return>", lambda e: self._load())
@@ -114,7 +114,7 @@ class HexUploadFeature(Feature):
         self.store_var = tk.StringVar()
         self.store_entry = ttk.Entry(store, textvariable=self.store_var, width=24)
         self.store_entry.pack(side="left", padx=sp("s"))
-        ttk.Label(store, text=f"file in {bx.FILE_DIR} on the device's flash (empty: not stored)",
+        ttk.Label(store, text=f"file in {setu_client.FILE_DIR} on the device's flash (empty: not stored)",
                   style="Caption.TLabel").pack(side="left")
 
         tiles = ttk.Frame(f)
@@ -211,8 +211,8 @@ class HexUploadFeature(Feature):
             v = int(self.seg_max_var.get(), 0)
         except ValueError:
             v = 0
-        if not 1 <= v <= bx.SEG_MAX:
-            raise ValueError(f"max segment must be 1…{bx.SEG_MAX}")
+        if not 1 <= v <= setu_client.SEG_MAX:
+            raise ValueError(f"max segment must be 1…{setu_client.SEG_MAX}")
         return v
 
     def _load(self, quiet=False) -> bool:
@@ -223,7 +223,7 @@ class HexUploadFeature(Feature):
             seg_max = self._seg_max()
             if self._parsed == (path, seg_max):
                 return True
-            self.segments = bx.parse_ihex(path, seg_max)
+            self.segments = setu_client.parse_ihex(path, seg_max)
         except (OSError, ValueError) as e:
             self.segments, self._parsed = [], None
             self.summary_var.set("Parse error")
@@ -264,8 +264,8 @@ class HexUploadFeature(Feature):
         name = self.store_var.get().strip() if hasattr(self, "store_var") else ""
         if not name:
             return None
-        if not bx.valid_file_name(name):
-            raise ValueError(f"'{name}' is not a file name the device accepts: 1…{bx.FILE_NAME_MAX} "
+        if not setu_client.valid_file_name(name):
+            raise ValueError(f"'{name}' is not a file name the device accepts: 1…{setu_client.FILE_NAME_MAX} "
                              "of A-Z a-z 0-9 . _ -")
         return name
 
@@ -291,14 +291,14 @@ class HexUploadFeature(Feature):
         """Runs on the BLE loop. Returns the number of segments stored. With
         store, the device keeps them as the file FILE_DIR/store."""
         call = self.ctx.bus.call
-        blk = self.ctx.services[bulkxfer.BulkXferService.NAME].new_client()
+        setu_cli = self.ctx.services[setu.SETUService.NAME].new_client()
         self.ctx.log(f"hex: upload started, ATT MTU {self.ctx.link.mtu_size}, "
-                     f"{blk.frame_cap - 4} B per DATA frame")
+                     f"{setu_cli.frame_cap - 4} B per DATA frame")
         if store:
-            rep = await blk.begin_file(store)
+            rep = await setu_cli.begin_file(store)
             if not rep.ok:
                 raise RuntimeError(f"storing as {store} refused: {rep.status_name}")
-            self.ctx.log(f"hex: storing as {bx.FILE_DIR}/{store}")
+            self.ctx.log(f"hex: storing as {setu_client.FILE_DIR}/{store}")
         total = sum(len(d) for _, d in segments)
         done = 0
         for i, (addr, data) in enumerate(segments):
@@ -313,7 +313,7 @@ class HexUploadFeature(Feature):
                     t_xfer[0] = time.perf_counter() - t0
                 call(self._progress, i, base + sent, total, sent / max(time.perf_counter() - t0, 1e-3))
 
-            status, stored = await blk.upload_segment(addr, data, progress)
+            status, stored = await setu_cli.upload_segment(addr, data, progress)
             if status != "OK":
                 call(self._set_status, i, f"failed: {status}")
                 raise RuntimeError(f"segment 0x{addr:08X}: {status}")
@@ -321,7 +321,7 @@ class HexUploadFeature(Feature):
             dt = t_xfer[0] or (time.perf_counter() - t0)
             ok = st == 0 and s_addr == addr and s_len == len(data)
             text = (f"stored, {len(data) * 8 / dt / 1000:.0f} kbit/s" if ok else
-                    f"STORED mismatch: {bx.STATUS.get(st, st)} 0x{s_addr:08X} {s_len} B")
+                    f"STORED mismatch: {setu_client.STATUS.get(st, st)} 0x{s_addr:08X} {s_len} B")
             call(self._set_status, i, text)
             self.ctx.log(f"hex: 0x{addr:08X} {len(data)} B {text}", "info" if ok else "warn")
             if not ok:
@@ -330,14 +330,14 @@ class HexUploadFeature(Feature):
             call(self._progress, i, done, total, None)
         self._current = None
         if store:
-            rep = await blk.commit_file()
+            rep = await setu_cli.commit_file()
             if not rep.ok:
                 raise RuntimeError(f"file {store} not stored: {rep.status_name}")
-            image = bx.file_image(segments)
+            image = setu_client.file_image(segments)
             if (rep.size, rep.crc) != (len(image), zlib.crc32(image)):
                 raise RuntimeError(f"file {store}: device has {rep.size} B crc 0x{rep.crc:08X}, "
                                    f"expected {len(image)} B crc 0x{zlib.crc32(image):08X}")
-            self.ctx.log(f"hex: stored as {bx.FILE_DIR}/{store}, {rep.size} B, crc 0x{rep.crc:08X}")
+            self.ctx.log(f"hex: stored as {setu_client.FILE_DIR}/{store}, {rep.size} B, crc 0x{rep.crc:08X}")
         return len(segments)
 
     def _progress(self, i, done, total, rate):

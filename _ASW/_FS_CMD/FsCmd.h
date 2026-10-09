@@ -1,8 +1,8 @@
 /**
  * @file          FsCmd.h
  * @brief         Header file containing the file commands over BLE: the host (GUI
- *                Files page, bulkxfer_client.py fs) sends the File System Manager's
- *                commands as BulkXfer short messages (appTypes 0x40-0x4F) and gets
+ *                Files page, setu_client.py fs) sends the File System Manager's
+ *                commands as SETU short messages (appTypes 0x40-0x4F) and gets
  *                each one's result back. It replaces the FileSystemPoC's UART test
  *                harness. Contract: _DOC/FileSysManager/PROTOCOL.md.
  * @date          07/10/2026

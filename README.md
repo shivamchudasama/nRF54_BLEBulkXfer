@@ -1,20 +1,24 @@
-# nRF54 BLE Bulk Transfer
+# Project Hanuman
+
+*Crosses the gap, carries the mountain, proves who sent him.*
 
 Zephyr / nRF Connect SDK firmware for a BLE device on the **nRF54L15 DK**. It receives bulk data over GATT, stores uploads as files on the DK's external flash, can be provisioned with a device certificate, and can pair with another provisioned device through certificate-based OOB pairing. A PC GUI uploads to the device, browses its files, provisions it and orchestrates the pairing.
 
+Everything travels over **SETU** (Sliding-window, Error-checked Transfer Utility), the bulk-transfer protocol in [`_LIB/SETU`](_LIB/SETU), meant to be reused by other BLE projects. SETU was called BulkXfer before; only the name changed, and the GATT UUIDs and wire format are the same (SETU v2 = BulkXfer protocol version 2).
+
 ## Status
 
-- **Application (`_ASW`)**: advertises as `BLE Bulk Transfer` and exposes GAP, Device Information, the BulkXfer service and the Pairing service. An appType router splits BulkXfer between four users:
+- **Application (`_ASW`)**: advertises as `ProjectHanuman` and exposes GAP, Device Information, the SETU service and the Pairing service. An appType router splits SETU between four users:
   - **Hex upload** (`0x10`–`0x1F`): receives an Intel HEX file one contiguous segment at a time, buffers each segment in RAM and logs it on the serial terminal. By default it logs one summary line with the segment's CRC-32; built with `CONFIG_DS_HEX_DUMP=y` (for debugging, much slower) it logs every byte as `0xADDRESS: xx xx …` lines. When the client frames the upload with BEGIN (a file name) and COMMIT, the device also stores it as one file on the external flash, a record `[address][length][data]` per segment, for a later ECU update (FOTA); COMMIT reports the file's size and CRC-32.
   - **File commands** (`0x40`–`0x4F`): the FileSystemPoC's UART test harness over BLE: mkdir, cd, open for reading or writing, write, read, list, delete, close and abort on the external flash's file system, each answered with a result.
   - **Device provisioning** (`0x20`–`0x2F`): phase 1 of certificate-based authentication and pairing (Silicon Labs AN1396/AN1268). The device keeps a persistent P-256 key and a CSR. The PC acts as the Certificate Authority: it fetches the CSR and returns a CA certificate and a device certificate. The device verifies both, stores both in PSA Internal Trusted Storage, deletes its CSR and logs both certificates as PEM. Stored certificates are re-verified at boot. Provisioning is one-time. A wipe (the DEPROVISION message, or holding DK Button 0 for 5 s) destroys the key, the CSR and the certificates, and the device makes a fresh key and CSR.
   - **Device pairing** (`0x30`–`0x3F`, between two devices): phase 2 (AN1396 §4.2). The PC tells two provisioned devices their roles and each other's address. The devices connect to each other and exchange and verify their device certificates against their CA. Each then signs fresh LE Secure Connections OOB data with its device key. Each verifies the other's signature, and they pair with the OOB method at security level 4, bonded. The central proves the link by writing a characteristic that only an encrypted, authenticated link may write, and the peripheral lights LED0. The PC follows both devices step by step. From then on the pair reconnects by itself, after a reset or a lost link, and encrypts with the stored keys; while that reconnected link is up, both devices blink LED0. A device keeps one link to the PC and one to its peer.
 - **File system (`_LIB/FileSysManager`)**: ported from the FileSystemPoC. A FAT volume on the first 4 MiB of the DK's MX25R6435F flash, mounted (and formatted if needed) at boot, with every operation run in order on one thread through a Zephyr SMF state machine. The flash is reached over SPI (default) or over sQSPI, the soft QSPI peripheral on the FLPR core (`FLASH_IF=sqspi`).
-- **BulkXfer library (`_LIB/BulkXfer`)**: the transfer protocol itself. The firmware runs both roles: the Server receives uploads, certificates and a peer's pairing data, and the Client sends the CSR to the PC and its own pairing data to the peer. The roles move between live links (`gi_BLKS_Rebind()`, `gi_BLKC_Detach()`).
-- **PC GUI** ([`_TOOLS/BleHostGUI`](_TOOLS/BleHostGUI/README.md)): a navigation rail with Device (scan, connect, read CAPS), Hex upload (optionally stored as a file), Files (the UART harness's command line and buttons, a listing, read data, download), Provisioning (the PC is the CA), Pairing (choose two devices and their roles, follow both live), Log and a switchable BLE traffic monitor. It hosts the PC's own BulkXfer service so that the device can send its CSR. The command-line client `bulkxfer_client.py` does the same uploads, file commands, provisioning and pairing without the GUI.
+- **SETU library (`_LIB/SETU`)**: the transfer protocol itself. The firmware runs both roles: the Server receives uploads, certificates and a peer's pairing data, and the Client sends the CSR to the PC and its own pairing data to the peer. The roles move between live links (`gi_SETUS_Rebind()`, `gi_SETUC_Detach()`).
+- **PC GUI** ([`_TOOLS/BleHostGUI`](_TOOLS/BleHostGUI/README.md)): a navigation rail with Device (scan, connect, read CAPS), Hex upload (optionally stored as a file), Files (the UART harness's command line and buttons, a listing, read data, download), Provisioning (the PC is the CA), Pairing (choose two devices and their roles, follow both live), Log and a switchable BLE traffic monitor. It hosts the PC's own SETU service so that the device can send its CSR. The command-line client `setu_client.py` does the same uploads, file commands, provisioning and pairing without the GUI.
 - **Memory report** ([`_TOOLS/MemReport`](_TOOLS/MemReport/README.md)): every firmware build prints FLASH and RAM use per module of `_ASW` and `_LIB` below the linker's summary, read from the map file.
 
-## BulkXfer in brief
+## SETU in brief
 
 - The **sender is the GATT client**: it writes frames to the receiver's **DATA** characteristic with Write Without Response.
 - The **receiver is the GATT server**: it hosts DATA and **CTRL**, and replies on CTRL with ACK / NACK / END notifications.
@@ -22,12 +26,12 @@ Zephyr / nRF Connect SDK firmware for a BLE device on the **nRF54L15 DK**. It re
 - Data streams through source and sink callbacks, so an object never has to fit in RAM.
 - Frames are up to 244 bytes (ATT_MTU 247 with Data Length Extension).
 
-The wire protocol is specified in [_DOC/BulkXfer/PROTOCOL.md](_DOC/BulkXfer/PROTOCOL.md), and the design rationale in [_DOC/BulkXfer/README.md](_DOC/BulkXfer/README.md).
+The wire protocol is specified in [_DOC/SETU/PROTOCOL.md](_DOC/SETU/PROTOCOL.md), and the design rationale in [_DOC/SETU/README.md](_DOC/SETU/README.md).
 
 ## Hex upload in brief
 
 - Service `B1C00000-16A1-4812-AF35-F3F29A92F6CA`, with DATA (`…0001`, Write Without Response), CTRL (`…0002`, Notify) and CAPS (`…0003`, Read).
-- Each contiguous segment is one BulkXfer transfer with appType `0x10`, carrying `[u32 little-endian start address][data]`. Segments are at most 64 KiB.
+- Each contiguous segment is one SETU transfer with appType `0x10`, carrying `[u32 little-endian start address][data]`. Segments are at most 64 KiB.
 - The server answers with a RESULT message when the transfer ends, and with a STORED message once the segment has been logged (and written to the file). The client waits for STORED before it sends the next segment.
 - To store the upload as a file: BEGIN `0x12` with the file name before the segments, COMMIT `0x13` after them; FILE `0x14` answers both. The file is `/FLASH_DISK:/FW/<name>`, written to a temporary file and renamed at COMMIT, so a lost upload never leaves a half-written file under its name.
 
@@ -43,7 +47,7 @@ The library's design and its changes from the sample are in [_DOC/FileSysManager
 
 ## Provisioning in brief
 
-- The PC (the **provisioner**) hosts a BulkXfer service with the same UUIDs as the device's. The CSR travels from device to PC, so the device attaches its BulkXfer Client to the PC's service over the same connection.
+- The PC (the **provisioner**) hosts a SETU service with the same UUIDs as the device's. The CSR travels from device to PC, so the device attaches its SETU Client to the PC's service over the same connection.
 - Short messages: GET_STATUS `0x20` → STATUS `0x21` (state, flags, CSR length, SHA-256 of the public key); CSR_REQ `0x22`; RESULT `0x26` (`[refAppType][status]`); DEPROVISION `0x27`.
 - Transfers: CSR `0x23` (device → PC, DER PKCS#10), then CA_CERT `0x24` and DEV_CERT `0x25` (PC → device, DER X.509, at most 1024 bytes each).
 - Device states: NO_KEY → KEY_READY → CA_OK → PROVISIONED. The device rejects a certificate that does not parse, does not chain, carries another key or subject than its CSR, or falls outside the profile (P-256, ecdsa-with-SHA256, X.509 v3). The RESULT status says which check failed.
@@ -54,7 +58,7 @@ The contract is in [_DOC/Provisioning/PROTOCOL.md](_DOC/Provisioning/PROTOCOL.md
 
 - A provisioned device advertises the **Pairing service** `B1C10000-…`: CONTROL (`…0001`, Write: START `[01][role][peer address]`, CANCEL, UNPAIR), STATUS (`…0002`, Read/Notify: state, error, detail, provisioning state, role, own and peer address) and SECURED (`…0003`, writable only over an LE Secure Connections link).
 - The PC connects to both devices over plain links and sends START to the peripheral, then to the central. The peripheral advertises directed to the central, and the central scans for it and connects.
-- Over BulkXfer on that link: each device sends its certificate (`0x30`) and verifies the peer's against its CA. Each then sends `[r][c][signature]` (`0x31`), where `r` and `c` are fresh OOB data and the signature is ECDSA P-256 over `r ‖ c ‖ sender address ‖ receiver address` with the device key. Only the pairing appTypes are reachable from the peer.
+- Over SETU on that link: each device sends its certificate (`0x30`) and verifies the peer's against its CA. Each then sends `[r][c][signature]` (`0x31`), where `r` and `c` are fresh OOB data and the signature is ECDSA P-256 over `r ‖ c ‖ sender address ‖ receiver address` with the device key. Only the pairing appTypes are reachable from the peer.
 - SMP pairs with OOB data from both devices: level 4, bonded. The central writes SECURED, and the peripheral lights LED0. Each saves its role and peer next to the bond.
 - A bonded pair reconnects by itself whenever its link is down: the peripheral advertises (also with a PC connected), the central scans for it, connects and encrypts with the stored keys. At level 4 both blink LED0 until the link drops; a link that does not reach level 4 within 10 s is dropped and retried. UNPAIR, a new START or a wipe stops it. STATUS states: IDLE, ARMED, CONNECTED, CERT_EXCHANGE, CERT_VERIFIED, OOB_EXCHANGE, PAIRING, PAIRED, FAILED (with an error such as PEER_CERT, OOB_SIG, SMP, TIMEOUT).
 
@@ -64,10 +68,10 @@ The contract is in [_DOC/Pairing/PROTOCOL.md](_DOC/Pairing/PROTOCOL.md). Design,
 
 | Path | Contents |
 |---|---|
-| [`_ASW/`](_ASW) | Application: `main.c` plus modules for BLE init, the host and peer links and advertising (`_BLE`), the Device Information service (`_GAP`), the BulkXfer GATT service and appType router (`_BLK_SVC`), the RAM segment store, its serial log and the upload file (`_DATA_STORE`), the file commands over BLE (`_FS_CMD`), the device key and CSR (`_CSR`), certificate storage and X.509 verification (`_DEVICE_CERT`), the provisioning protocol and wipe button (`_PROV`), certificate-based pairing and the Pairing service (`_PAIR`), logging and helpers |
+| [`_ASW/`](_ASW) | Application: `main.c` plus modules for BLE init, the host and peer links and advertising (`_BLE`), the Device Information service (`_GAP`), the SETU GATT service and appType router (`_SETU_SVC`), the RAM segment store, its serial log and the upload file (`_DATA_STORE`), the file commands over BLE (`_FS_CMD`), the device key and CSR (`_CSR`), certificate storage and X.509 verification (`_DEVICE_CERT`), the provisioning protocol and wipe button (`_PROV`), certificate-based pairing and the Pairing service (`_PAIR`), logging and helpers |
 | [`_DI/`](_DI) | Build configuration: `prj.conf` (including the FAT file system, PSA crypto on CRACEN, secure storage, Mbed TLS X.509, the DK library, the central role, SMP and bonds), application Kconfig options (`Kconfig`), the board devicetree overlay (console UART at 921600 baud), and per flash interface a Kconfig fragment (`conf/flash_<if>.conf`) and an overlay (`boards/<board>_flash_<if>.overlay`) |
 | [`_LIB/GATT_CB/`](_LIB/GATT_CB) | Generic GATT read/write callbacks driven by per-characteristic descriptors |
-| [`_LIB/BulkXfer/`](_LIB/BulkXfer) | Bulk-transfer library (Server and Client roles) |
+| [`_LIB/SETU/`](_LIB/SETU) | SETU, the bulk-transfer library (Server and Client roles) |
 | [`_LIB/FileSysManager/`](_LIB/FileSysManager) | FAT file system on the external flash: mount, one thread, a state machine, results per command |
 | [`_TOOLS/BleHostGUI/`](_TOOLS/BleHostGUI) | PC GUI (Tkinter + `bleak`, flat light/dark theme): Device, Hex upload, Files, Provisioning, Pairing, Log and Traffic pages; the PC's GATT server and CA; the pairing orchestrator; the command-line client |
 | [`_TOOLS/MemReport/`](_TOOLS/MemReport) | Build-time script that splits the linker's FLASH/RAM figures by module of `_ASW` and `_LIB` |
@@ -90,7 +94,9 @@ west build -b nrf54l15dk/nrf54l15/cpuapp --sysbuild -d build .                  
 west build -b nrf54l15dk/nrf54l15/cpuapp --sysbuild -d build . -- -DFLASH_IF=sqspi  # over sQSPI (FLPR soft peripheral)
 ```
 
-`FLASH_IF` (root `CMakeLists.txt`) picks the external flash interface: it adds `_DI/conf/flash_<if>.conf` and `_DI/boards/<board>_flash_<if>.overlay`. In VS Code, put `-DFLASH_IF=sqspi` in the build configuration's extra CMake arguments.
+`FLASH_IF` (root `CMakeLists.txt`) picks the external flash interface: it adds `_DI/conf/flash_<if>.conf` and `_DI/boards/<board>_flash_<if>.overlay`.
+
+The build configurations are under version control in [CMakePresets.json](CMakePresets.json): `build` (SPI) and `build_sqspi` (sQSPI). In VS Code, choose **Add build configuration** and pick one under **CMake Preset**. A new configuration goes there too (the extension's **Save Configuration as Preset** writes it), with `FLASH_IF` as a cache variable and the flash files left out of its overlay and Kconfig fragment lists; listed there, the build stops with a message saying so.
 
 Below the linker's FLASH/RAM summary, the build prints the same figures per module of `_ASW` and `_LIB` (with Zephyr, NCS and libc as one "Other" row) and writes them to `zephyr/mem_report.txt` in the image's build folder; see [MemReport](_TOOLS/MemReport/README.md).
 
@@ -100,19 +106,19 @@ After changing the layout or configuration, do a pristine build (`-p always`). A
 
 Install the requirements (`pip install -r _TOOLS/BleHostGUI/requirements.txt`: bleak, cryptography, Pillow) and run the GUI with `python _TOOLS/BleHostGUI/ble_host_gui.py`. Provisioning needs Windows 10/11 and an adapter that supports the peripheral role, because the PC hosts its own GATT service.
 
-The command-line client [`_TOOLS/BleHostGUI/bulkxfer_client.py`](_TOOLS/BleHostGUI/bulkxfer_client.py) does the same (`--help` lists all options):
+The command-line client [`_TOOLS/BleHostGUI/setu_client.py`](_TOOLS/BleHostGUI/setu_client.py) does the same (`--help` lists all options):
 
 ```sh
-python _TOOLS/BleHostGUI/bulkxfer_client.py hex app.hex --name "BLE Bulk Transfer"
-python _TOOLS/BleHostGUI/bulkxfer_client.py hex app.hex --store APP1.BIN --name "BLE Bulk Transfer"   # also store it as a file
-python _TOOLS/BleHostGUI/bulkxfer_client.py fs ls --name "BLE Bulk Transfer"                           # mkdir, cd, openr, openw, write, read, ...
-python _TOOLS/BleHostGUI/bulkxfer_client.py fs get /FW/APP1.BIN app1.bin --name "BLE Bulk Transfer"    # put LOCAL REMOTE
-python _TOOLS/BleHostGUI/bulkxfer_client.py fs shell --name "BLE Bulk Transfer"                        # the UART harness's commands
-python _TOOLS/BleHostGUI/bulkxfer_client.py provision --name "BLE Bulk Transfer"              # --ca <folder>, --out <pem>
-python _TOOLS/BleHostGUI/bulkxfer_client.py provision --negative --name "BLE Bulk Transfer"   # certificates the device must reject first
-python _TOOLS/BleHostGUI/bulkxfer_client.py deprovision --name "BLE Bulk Transfer"
-python _TOOLS/BleHostGUI/bulkxfer_client.py pair --central <address> --peripheral <address>
-python _TOOLS/BleHostGUI/bulkxfer_client.py pairstatus --address <address>                     # unpair --address <address>
+python _TOOLS/BleHostGUI/setu_client.py hex app.hex --name "ProjectHanuman"
+python _TOOLS/BleHostGUI/setu_client.py hex app.hex --store APP1.BIN --name "ProjectHanuman"   # also store it as a file
+python _TOOLS/BleHostGUI/setu_client.py fs ls --name "ProjectHanuman"                           # mkdir, cd, openr, openw, write, read, ...
+python _TOOLS/BleHostGUI/setu_client.py fs get /FW/APP1.BIN app1.bin --name "ProjectHanuman"    # put LOCAL REMOTE
+python _TOOLS/BleHostGUI/setu_client.py fs shell --name "ProjectHanuman"                        # the UART harness's commands
+python _TOOLS/BleHostGUI/setu_client.py provision --name "ProjectHanuman"              # --ca <folder>, --out <pem>
+python _TOOLS/BleHostGUI/setu_client.py provision --negative --name "ProjectHanuman"   # certificates the device must reject first
+python _TOOLS/BleHostGUI/setu_client.py deprovision --name "ProjectHanuman"
+python _TOOLS/BleHostGUI/setu_client.py pair --central <address> --peripheral <address>
+python _TOOLS/BleHostGUI/setu_client.py pairstatus --address <address>                     # unpair --address <address>
 ```
 
 Pairing needs two DKs provisioned by the same CA (a device certified by another CA is refused). In the GUI, disconnect the Device page first: the Pairing page makes its own link to each device. Two devices already paired with each other are not paired again until one of them is unpaired. Once paired, the PC can disconnect: the two boards reconnect to each other after every reset or lost link, and blink LED0 while connected.
@@ -123,7 +129,7 @@ The board's serial terminal runs at **921600 baud with RTS/CTS flow control** (s
 
 ## Testing
 
-Host tests cover `_LIB/BulkXfer`, `_LIB/GATT_CB`, `_LIB/FileSysManager` (on an in-memory volume), every application module that is not only calls into the BT stack (data store with its upload files, file commands, router, CSR, certificate storage, provisioning, wipe button, pairing, helpers), and the PC client, file commands, CA, pairing orchestrator, decoders, GUI pages and memory report in `_TOOLS`. Certificate verification runs on the real Mbed TLS, against certificates that the PC's CA issues on each build, including the cases the device must reject; the signed OOB data runs on the real TF-PSA-Crypto against a frame signed by Python. End-to-end tests run a hex upload, a full provisioning and a pairing exchange through the real BulkXfer engine over a simulated link. Expected wire bytes come from a real upload captured in `_LOG/` and are shared by the C and Python tests.
+Host tests cover `_LIB/SETU`, `_LIB/GATT_CB`, `_LIB/FileSysManager` (on an in-memory volume), every application module that is not only calls into the BT stack (data store with its upload files, file commands, router, CSR, certificate storage, provisioning, wipe button, pairing, helpers), and the PC client, file commands, CA, pairing orchestrator, decoders, GUI pages and memory report in `_TOOLS`. Certificate verification runs on the real Mbed TLS, against certificates that the PC's CA issues on each build, including the cases the device must reject; the signed OOB data runs on the real TF-PSA-Crypto against a frame signed by Python. End-to-end tests run a hex upload, a full provisioning and a pairing exchange through the real SETU engine over a simulated link. Expected wire bytes come from a real upload captured in `_LOG/` and are shared by the C and Python tests.
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File _TEST\run_tests.ps1   # add -Coverage for coverage
@@ -133,9 +139,9 @@ This needs a host `gcc` and Python 3.8+. The report is written to `build_test/re
 
 ## Documentation
 
-- [BulkXfer design and integration](_DOC/BulkXfer/README.md)
-- [BulkXfer protocol](_DOC/BulkXfer/PROTOCOL.md)
-- [BulkXfer API reference](_DOC/BulkXfer/API_REFERENCE.md)
+- [SETU design and integration](_DOC/SETU/README.md)
+- [SETU protocol](_DOC/SETU/PROTOCOL.md)
+- [SETU API reference](_DOC/SETU/API_REFERENCE.md)
 - [GATT_CB design and integration](_DOC/GATT_CB/README.md)
 - [GATT_CB API reference](_DOC/GATT_CB/API_REFERENCE.md)
 - [Hex upload protocol](_DOC/HexUpload/PROTOCOL.md)
@@ -147,6 +153,7 @@ This needs a host `gcc` and Python 3.8+. The report is written to `build_test/re
 - [Device pairing protocol](_DOC/Pairing/PROTOCOL.md)
 - [Device pairing design](_DOC/Pairing/README.md)
 - [CBAP application notes (AN1396, AN1268)](_DOC/CBAP/)
+- [Bootloader User Guide (GBL file format)](<_DOC/GBL Format/>)
 - [BLE Host GUI](_TOOLS/BleHostGUI/README.md)
 - [Memory report per module](_TOOLS/MemReport/README.md)
 - [Tests and CI](_TEST/README.md)

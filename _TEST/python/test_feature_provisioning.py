@@ -20,7 +20,7 @@ from cryptography.hazmat.primitives import serialization
 from blehost.core.gatt_server import PcGattServer
 from blehost.features import provisioning as fp
 from blehost.pki.authority import CertificateAuthority
-from blehost.protocols import bulkxfer as bxproto
+from blehost.protocols import setu as setu_proto
 from blehost.protocols import provisioning as prov
 
 STATUS = prov.DeviceStatus(prov.KEY_READY, 0, 371, bytes(range(32)))
@@ -76,10 +76,10 @@ class Ctx:
     def __init__(self):
         self.bus = Bus()
         self.link = type("Link", (), {"connected": True})()
-        self.bx = type("Bx", (), {"available": True, "new_client": lambda s: "device-client"})()
+        self.setu_client = type("Bx", (), {"available": True, "new_client": lambda s: "device-client"})()
         self.pc = type("Pc", (), {"available": True, "subscribers": 0, "error": None,
                                   "receiver": "pc-receiver"})()
-        self.services = {bxproto.BulkXferService.NAME: self.bx, PcGattServer.NAME: self.pc}
+        self.services = {setu_proto.SETUService.NAME: self.setu_client, PcGattServer.NAME: self.pc}
         self.logs = []
         self.hold = False
         self.held = None
@@ -199,19 +199,19 @@ def test_buttons_follow_link_service_ca_and_pc(tab, ca):
     tab.ctx.pc.available, tab.ctx.pc.error = False, "no peripheral role"
     tab._update()
     assert "prov" not in enabled(tab), "Provision needs the PC service"
-    assert tab.pc_var.get().startswith("PC BulkXfer service: not available (no peripheral role)")
+    assert tab.pc_var.get().startswith("PC SETU service: not available (no peripheral role)")
 
-    tab.ctx.bx.available = False
+    tab.ctx.setu_client.available = False
     tab._update()
     assert enabled(tab) == set()
 
 
 def test_pc_service_line(tab):
     tab._show_pc()
-    assert tab.pc_var.get() == "PC BulkXfer service: published"
+    assert tab.pc_var.get() == "PC SETU service: published"
     tab.ctx.pc.subscribers = 1
     tab._tick()
-    assert tab.pc_var.get() == "PC BulkXfer service: published, device subscribed"
+    assert tab.pc_var.get() == "PC SETU service: published, device subscribed"
     assert tab.prov_btn.after_calls, "the line refreshes every second"
     tab.ctx.pc.available = False
     tab._show_pc()

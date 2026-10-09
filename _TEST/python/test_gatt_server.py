@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: MIT
 """PcGattServer (_TOOLS/BleHostGUI/blehost/core/gatt_server.py): the PC's
-BulkXfer service, with a fake backend in place of WinRT; and WinRtBackend
+SETU service, with a fake backend in place of WinRT; and WinRtBackend
 against fake winrt modules (the WinRT GATT server API surface it uses), so
 its service layout, write pump, subscriptions and notifications are tested
 on any OS. Whether Windows and a real adapter accept it is hil-tests."""
@@ -12,7 +12,7 @@ import types
 
 import pytest
 
-import bulkxfer_client as bx
+import setu_client
 from blehost.core import gatt_server as gs
 
 BASE = "16a1-4812-af35-f3f29a92f6ca"
@@ -24,7 +24,7 @@ class FakeBackend:
         self.fail = fail
         self.started = False
         self.notified = []
-        self.client = None                  # a BulkXferClient on the device side
+        self.client = None                  # a SETUClient on the device side
 
     async def start(self):
         if self.fail:
@@ -52,14 +52,14 @@ class Tap:
 
 
 class DeviceLink:
-    """The device's BulkXfer Client writes into the PC's DATA."""
+    """The device's SETU Client writes into the PC's DATA."""
 
     def __init__(self, server):
         self.server = server
         self.mtu_size = 247
 
     async def write_gatt_char(self, uuid, data, response=False):
-        assert uuid == bx.char_uuid(1, BASE)
+        assert uuid == setu_client.char_uuid(1, BASE)
         self.server._on_write(bytes(data))
         await asyncio.sleep(0)
 
@@ -99,16 +99,16 @@ def test_device_sends_an_object_to_the_pc():
     async def go():
         srv, b = make(tap)
         await srv.start()
-        dev = bx.BulkXferClient(DeviceLink(srv), BASE, log=lambda *_: None)
+        dev = setu_client.SETUClient(DeviceLink(srv), BASE, log=lambda *_: None)
         b[0].client = dev
         srv._on_subscribed(1)                       # the device subscribed to CTRL
         status = await dev.send(0x23, bytes(range(256)) * 2)
         return status, await srv.receiver.receive(0x23, timeout=1.0), b[0]
     status, r, backend = run(go())
     assert status == "OK" and r.status == "OK" and r.data == bytes(range(256)) * 2
-    assert backend.notified[-1][1] == bx.T_END
-    assert ("RX", "WNR", bx.char_uuid(1, BASE)) == tap.events[0][:3]
-    assert any(e[0] == "TX" and e[2] == bx.char_uuid(2, BASE) and e[4] == "PC service"
+    assert backend.notified[-1][1] == setu_client.T_END
+    assert ("RX", "WNR", setu_client.char_uuid(1, BASE)) == tap.events[0][:3]
+    assert any(e[0] == "TX" and e[2] == setu_client.char_uuid(2, BASE) and e[4] == "PC service"
                for e in tap.events)
 
 
@@ -116,14 +116,14 @@ def test_start_is_ignored_until_the_device_subscribes():
     async def go():
         srv, b = make()
         await srv.start()
-        start = bx.frame(bx.T_START, bytes([1, 0x23, 10, 0, 0, 0, 240, 16, 0, 0, 0, 0]))
+        start = setu_client.frame(setu_client.T_START, bytes([1, 0x23, 10, 0, 0, 0, 240, 16, 0, 0, 0, 0]))
         srv._on_write(start)
         before = list(b[0].notified)
         srv._on_subscribed(1)
         srv._on_write(start)
         return before, b[0].notified
     before, after = run(go())
-    assert before == [] and after[0][1] == bx.T_ACK
+    assert before == [] and after[0][1] == setu_client.T_ACK
 
 
 def test_link_lost_fails_the_transfer():
@@ -131,7 +131,7 @@ def test_link_lost_fails_the_transfer():
         srv, _ = make()
         await srv.start()
         srv._on_subscribed(1)
-        srv._on_write(bx.frame(bx.T_START, bytes([1, 0x23, 0, 1, 0, 0, 240, 16, 0, 0, 0, 0])))
+        srv._on_write(setu_client.frame(setu_client.T_START, bytes([1, 0x23, 0, 1, 0, 0, 240, 16, 0, 0, 0, 0])))
         srv.link_lost()
         return srv, await srv.receiver.receive(timeout=1.0)
     srv, r = run(go())
@@ -370,8 +370,8 @@ def test_winrt_backend_publishes_the_service(winrt):
         await b.stop()
         return result
     svc_uuid, chars, adv = run(go())
-    assert str(svc_uuid) == bx.char_uuid(0, BASE)
-    assert [str(c.uuid) for c in chars] == [bx.char_uuid(i, BASE) for i in (1, 2, 3)]
+    assert str(svc_uuid) == setu_client.char_uuid(0, BASE)
+    assert [str(c.uuid) for c in chars] == [setu_client.char_uuid(i, BASE) for i in (1, 2, 3)]
     data, ctrl, caps = (c.params for c in chars)
     assert data.characteristic_properties == _Props.WRITE_WITHOUT_RESPONSE | _Props.WRITE
     assert ctrl.characteristic_properties == _Props.NOTIFY

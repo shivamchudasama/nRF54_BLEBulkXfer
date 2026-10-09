@@ -37,12 +37,33 @@ if(NOT FLASH_IF MATCHES "^(spi|sqspi)$")
    message(FATAL_ERROR "FLASH_IF must be spi or sqspi, not '${FLASH_IF}'")
 endif()
 message(STATUS "External flash interface: ${FLASH_IF}")
+# The flash files are added from FLASH_IF alone. Given again by the build
+# configuration (as the VS Code extension does when one is picked in its
+# "Base devicetree overlays"/"Extra Kconfig fragments" lists), the same file
+# appears twice under different spellings and ninja fails with "... is defined
+# as an output multiple times"; given as DTC_OVERLAY_FILE it also replaces the
+# board overlay. Stop early with the fix instead.
+set(USER_BUILD_FILES)
+foreach(var DTC_OVERLAY_FILE EXTRA_DTC_OVERLAY_FILE CONF_FILE EXTRA_CONF_FILE)
+   list(APPEND USER_BUILD_FILES "$CACHE{${var}}")
+   if(DEFINED SYSBUILD_CACHE AND EXISTS "${SYSBUILD_CACHE}")
+      file(STRINGS "${SYSBUILD_CACHE}" USER_ENTRY REGEX "^${var}:[^=]*=")
+      list(APPEND USER_BUILD_FILES "${USER_ENTRY}")
+   endif()
+endforeach()
+if("${USER_BUILD_FILES}" MATCHES "flash_(spi|sqspi)\\.(overlay|conf)")
+   message(FATAL_ERROR
+      "Do not pass _DI/conf/flash_<if>.conf or _DI/boards/<board>_flash_<if>.overlay "
+      "to the build: they are added from FLASH_IF. Remove them from the build "
+      "configuration (base overlay: _DI/boards/<board>.overlay or none; no extra "
+      "files) and select the interface with -DFLASH_IF=spi|sqspi.")
+endif()
 set(EXTRA_CONF_FILE ${CMAKE_CURRENT_SOURCE_DIR}/_DI/conf/flash_${FLASH_IF}.conf)
 set(EXTRA_DTC_OVERLAY_FILE
    ${CMAKE_CURRENT_SOURCE_DIR}/_DI/boards/\${NORMALIZED_BOARD_TARGET}_flash_${FLASH_IF}.overlay)
 
 find_package(Zephyr REQUIRED HINTS $ENV{ZEPHYR_BASE})
-project(nRF54_BLEBulkXfer)
+project(ProjectHanuman)
 
 add_subdirectory(_ASW)
 add_subdirectory(_LIB)

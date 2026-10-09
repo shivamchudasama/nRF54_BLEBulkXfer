@@ -7,28 +7,28 @@ import struct
 
 import pytest
 
-import bulkxfer_client as bx
-from blehost.protocols import bulkxfer as proto
+import setu_client
+from blehost.protocols import setu as proto
 
 
 def test_protocol_constants_match(vectors):
-    assert bx.MAX_FRAME == vectors["max_frame_len"]
-    assert bx.WINDOW == vectors["window"]
+    assert setu_client.MAX_FRAME == vectors["max_frame_len"]
+    assert setu_client.WINDOW == vectors["window"]
     assert proto.APP_TYPE_MAX == vectors["app_type_max"]
     ft = vectors["frame_types"]
-    assert (bx.T_START, bx.T_DATA, bx.T_ACK, bx.T_NACK, bx.T_END, bx.T_ABORT) == \
+    assert (setu_client.T_START, setu_client.T_DATA, setu_client.T_ACK, setu_client.T_NACK, setu_client.T_END, setu_client.T_ABORT) == \
         (ft["START"], ft["DATA"], ft["ACK"], ft["NACK"], ft["END"], ft["ABORT"])
-    assert (bx.ABORT_BY_SENDER, bx.ABORT_BY_RECEIVER) == \
+    assert (setu_client.ABORT_BY_SENDER, setu_client.ABORT_BY_RECEIVER) == \
         (vectors["abort_dir"]["BY_SENDER"], vectors["abort_dir"]["BY_RECEIVER"])
     hx = vectors["hex_app_types"]
-    assert (bx.APP_TYPE_RESULT, bx.APP_TYPE_SEGMENT, bx.APP_TYPE_STORED) == \
+    assert (setu_client.APP_TYPE_RESULT, setu_client.APP_TYPE_SEGMENT, setu_client.APP_TYPE_STORED) == \
         (hx["RESULT"], hx["SEGMENT"], hx["STORED"])
-    assert bx.SEG_MAX == 65536
+    assert setu_client.SEG_MAX == 65536
 
 
 def test_status_names_match_firmware(vectors):
-    assert bx.STATUS == {v: k for k, v in vectors["status"].items()}
-    assert (bx.ST_TIMEOUT, bx.ST_ABORTED) == (vectors["status"]["TIMEOUT"], vectors["status"]["ABORTED"])
+    assert setu_client.STATUS == {v: k for k, v in vectors["status"].items()}
+    assert (setu_client.ST_TIMEOUT, setu_client.ST_ABORTED) == (vectors["status"]["TIMEOUT"], vectors["status"]["ABORTED"])
 
 
 def _payload(fr):
@@ -55,7 +55,7 @@ def _ftype(fr, vectors):
 
 def test_frame_encoding(vectors):
     for fr in vectors["frames"]:
-        assert bx.frame(_ftype(fr, vectors), _payload(fr)).hex() == fr["hex"], fr["name"]
+        assert setu_client.frame(_ftype(fr, vectors), _payload(fr)).hex() == fr["hex"], fr["name"]
 
 
 def test_monitor_decodes_every_vector(vectors):
@@ -78,8 +78,8 @@ def test_client_start_frame_is_byte_identical_to_the_real_upload(vectors, repo, 
     """The first START the client sends for AA00000100.hex is the one in _LOG."""
     hu = vectors["hex_upload"]
     golden = next(f for f in vectors["frames"] if f["name"] == hu["start_frame"])
-    (addr, data), = bx.parse_ihex(f"{repo}/{hu['file']}")
-    asyncio.run(client.send(bx.APP_TYPE_SEGMENT, struct.pack("<I", addr) + data))
+    (addr, data), = setu_client.parse_ihex(f"{repo}/{hu['file']}")
+    asyncio.run(client.send(setu_client.APP_TYPE_SEGMENT, struct.pack("<I", addr) + data))
     assert server.writes[0].hex() == golden["hex"]
 
 
@@ -92,4 +92,4 @@ def test_client_reads_caps(vectors, server, client):
 @pytest.mark.parametrize("uuid_id", [1, 2, 3])
 def test_characteristic_uuids_use_project_base(uuid_id):
     # _ASW/_BLE_GENERIX/BaseUUIDs.h and _DOC/HexUpload/PROTOCOL.md §2
-    assert bx.char_uuid(uuid_id, bx.PROJECT_BASE) == f"b1c0000{uuid_id}-16a1-4812-af35-f3f29a92f6ca"
+    assert setu_client.char_uuid(uuid_id, setu_client.PROJECT_BASE) == f"b1c0000{uuid_id}-16a1-4812-af35-f3f29a92f6ca"

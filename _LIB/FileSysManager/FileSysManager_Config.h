@@ -35,7 +35,7 @@
 
 /**
  * @def           FSMGR_PRIORITY
- * @brief         Priority of the File System Manager thread. Below the BulkXfer
+ * @brief         Priority of the File System Manager thread. Below the SETU
  *                engine (priority 5), so flash writes never delay the link.
  */
 #ifndef FSMGR_PRIORITY

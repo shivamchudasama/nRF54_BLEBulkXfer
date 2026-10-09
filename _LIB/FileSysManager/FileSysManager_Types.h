@@ -34,8 +34,8 @@
 /**
  * @def           FS_MAX_CHUNK_SIZE
  * @brief         Largest payload of one message: a path, a "old\0new" rename
- *                pair, or the data of one write. Equal to the BulkXfer short
- *                message payload (BLK_MAX_SHORT_PAYLOAD), so one short message
+ *                pair, or the data of one write. Equal to the SETU short
+ *                message payload (SETU_MAX_SHORT_PAYLOAD), so one short message
  *                from a peer fits one message.
  */
 #define FS_MAX_CHUNK_SIZE                    (242U)

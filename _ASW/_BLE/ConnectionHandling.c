@@ -5,7 +5,7 @@
  *                The device keeps up to two links at once:
  *                  - the host link: the PC (GUI or CLI) that uploads, provisions
  *                    or orchestrates pairing. It is the first connection that
- *                    the pairing module does not claim; the BulkXfer Server binds
+ *                    the pairing module does not claim; the SETU Server binds
  *                    to it. A second unclaimed connection is refused.
  *                  - the peer link: another device during and after pairing,
  *                    owned by _PAIR (gb_Pair_ClaimConn()).
@@ -16,7 +16,7 @@
  *                Undirected advertising runs while there is no host link, or
  *                while _PAIR awaits its bonded central (gb_Pair_AwaitsBondedPeer()),
  *                and only while _PAIR is not using the advertiser. It carries the Pairing
- *                service UUID once the device is provisioned, the BulkXfer
+ *                service UUID once the device is provisioned, the SETU
  *                service UUID before.
  * @date          21/02/2026
  * @author        Shivam Chudasama [SC]
@@ -31,7 +31,7 @@
 #include "ConnectionHandling.h"
 #include <errno.h>
 #include <zephyr/settings/settings.h>
-#include "BulkXfer.h"
+#include "SETU.h"
 #include "Pair.h"
 #include "PairSvc.h"
 #include "Prov.h"
@@ -216,22 +216,22 @@ static bool sb_btReady = false;
 /**
  * @var           sstar_advDataProv
  * @brief         Advertising data of a device to provision: flags and the
- *                BulkXfer service, which lets the PC filter its scans. The name
+ *                SETU service, which lets the PC filter its scans. The name
  *                stays in the scan response (both don't fit in 31 B).
  */
 static struct bt_data sstar_advDataProv[] =
 {
    // AD Type: Flags - general discoverable and no BR/EDR support
    BT_DATA_BYTES(BT_DATA_FLAGS, (BT_LE_AD_GENERAL | BT_LE_AD_NO_BREDR)),
-   // AD Type: Complete list of 128-bit service UUIDs - BulkXfer service
-   BT_DATA_BYTES(BT_DATA_UUID128_ALL, BT_UUID_BLK_SVC_VAL),
+   // AD Type: Complete list of 128-bit service UUIDs - SETU service
+   BT_DATA_BYTES(BT_DATA_UUID128_ALL, BT_UUID_SETU_SVC_VAL),
 };
 
 /**
  * @var           sstar_advDataPair
  * @brief         Advertising data of a provisioned device: flags and the
  *                Pairing service, which the GUI's pairing page scans for.
- *                BulkXfer stays available over GATT.
+ *                SETU stays available over GATT.
  */
 static struct bt_data sstar_advDataPair[] =
 {
@@ -744,8 +744,8 @@ static void sv_Connected(struct bt_conn *stpt_conn, uint8_t u8_err)
 
    LOG_INF("Host connected");
 
-   // Bind the BulkXfer Server to the host (unless pairing holds it)
-   gv_BLKS_OnConnected(stpt_conn);
+   // Bind the SETU Server to the host (unless pairing holds it)
+   gv_SETUS_OnConnected(stpt_conn);
 
    sv_OpenLink(stpt_conn);
 
@@ -768,8 +768,8 @@ static void sv_Disconnected(struct bt_conn *stpt_conn, uint8_t reason)
 
 	LOG_INF("Disconnected (reason 0x%x)", reason);
 
-   // Release BulkXfer's binding; a running transfer ends with eBS_DISCONNECTED
-   gv_BLK_OnDisconnected(stpt_conn);
+   // Release SETU's binding; a running transfer ends with eBS_DISCONNECTED
+   gv_SETU_OnDisconnected(stpt_conn);
 
    // The pairing module releases its peer link
    gv_Pair_OnDisconnected(stpt_conn, reason);

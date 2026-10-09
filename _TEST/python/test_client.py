@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: MIT
-"""BulkXferClient (the Client role of the PC tools) against a scripted server,
-without a BLE adapter. Contract: _DOC/BulkXfer/API_REFERENCE.md §6 (wire) and
+"""SETUClient (the Client role of the PC tools) against a scripted server,
+without a BLE adapter. Contract: _DOC/SETU/API_REFERENCE.md §6 (wire) and
 _DOC/HexUpload/PROTOCOL.md §4 (upload sequence)."""
 
 import asyncio
@@ -9,7 +9,7 @@ import struct
 
 import pytest
 
-import bulkxfer_client as bx
+import setu_client
 from conftest import FakeServer
 
 
@@ -23,7 +23,7 @@ def run(coro):
     (3, 0x1FFFF, 0x20003), (255, 256, 511),
 ])
 def test_seq_to_abs(seq, base, expected):
-    assert bx.seq_to_abs(seq, base) == expected
+    assert setu_client.seq_to_abs(seq, base) == expected
 
 
 def frames_of(writes, ftype):
@@ -42,10 +42,10 @@ def test_send_delivers_intact_object(server, client, size):
 
 def test_start_and_chunks_follow_the_mtu():
     server = FakeServer(mtu=23)
-    client = bx.BulkXferClient(server, log=lambda *_: None)
+    client = setu_client.SETUClient(server, log=lambda *_: None)
     server.client = client
     assert run(client.send(0x10, bytes(1000))) == "OK"
-    start = frames_of(server.writes, bx.T_START)[0]
+    start = frames_of(server.writes, setu_client.T_START)[0]
     assert start[8] == 23 - 3 - 4, "chunk = min(MTU - 3, 244) - 4"   # [len][type][xid][app][u32 total][chunk]
     assert max(len(w) for w in server.writes) <= 20
 
@@ -57,7 +57,7 @@ def test_window_is_never_exceeded(server, client):
     orig = server._notify
 
     def notify(p):
-        sent_before_ack.append(len(frames_of(server.writes, bx.T_DATA)))
+        sent_before_ack.append(len(frames_of(server.writes, setu_client.T_DATA)))
         orig(p)
 
     server._notify = notify
@@ -79,19 +79,19 @@ def test_nack_recovers_lost_frame_without_timeout(server, client):
 
     assert run(go()) == "OK"
     assert server.objects[-1][1] == data
-    assert loop_time[0] < bx.ACK_TIMEOUT, "recovery must come from the NACK, not the timeout"
+    assert loop_time[0] < setu_client.ACK_TIMEOUT, "recovery must come from the NACK, not the timeout"
 
 
 def test_silent_server_times_out_and_aborts(server, client, fast_timeouts):
     server.silent = True
     assert run(client.send(0x10, bytes(100))) == "TIMEOUT"
-    assert len(frames_of(server.writes, bx.T_START)) == 1 + bx.MAX_RETRIES, "START is retried"
-    assert server.writes[-1] == bx.frame(bx.T_ABORT, bytes([client.xfer_id, bx.ST_TIMEOUT,
-                                                             bx.ABORT_BY_SENDER]))
+    assert len(frames_of(server.writes, setu_client.T_START)) == 1 + setu_client.MAX_RETRIES, "START is retried"
+    assert server.writes[-1] == setu_client.frame(setu_client.T_ABORT, bytes([client.xfer_id, setu_client.ST_TIMEOUT,
+                                                             setu_client.ABORT_BY_SENDER]))
 
 
 def test_server_rejection_is_reported(server, client):
-    # _DOC/BulkXfer/README.md: a rejected START is answered with ABORT(by receiver)
+    # _DOC/SETU/README.md: a rejected START is answered with ABORT(by receiver)
     server.reject = 5
     assert run(client.send(0x42, bytes(10))) == "ABORTED_BY_SERVER:REJECTED"
 
@@ -112,21 +112,21 @@ def test_cancel_sends_abort(server, client):
             await task
 
     run(go())
-    assert server.writes[-1] == bx.frame(bx.T_ABORT, bytes([client.xfer_id, bx.ST_ABORTED,
-                                                             bx.ABORT_BY_SENDER]))
+    assert server.writes[-1] == setu_client.frame(setu_client.T_ABORT, bytes([client.xfer_id, setu_client.ST_ABORTED,
+                                                             setu_client.ABORT_BY_SENDER]))
 
 
 def test_transfer_ids_increment_and_wrap(server, client):
     client.xfer_id = 0xFE
     run(client.send(0x10, b"a"))
     run(client.send(0x10, b"b"))
-    assert [w[2] for w in frames_of(server.writes, bx.T_START)] == [0xFF, 0x00]
+    assert [w[2] for w in frames_of(server.writes, setu_client.T_START)] == [0xFF, 0x00]
 
 
 def test_stale_frames_of_another_transfer_are_ignored(server, client):
     async def go():
         # An END for an old transfer id is already queued when the next one starts
-        client.on_notify(0, bytearray(bx.frame(bx.T_END, bytes([0x33, 1]))))
+        client.on_notify(0, bytearray(setu_client.frame(setu_client.T_END, bytes([0x33, 1]))))
         return await client.send(0x10, bytes(300))
 
     assert run(go()) == "OK"
@@ -138,17 +138,17 @@ def report(app_type, status, addr, n):
 
 
 def test_upload_segment_waits_for_stored(server, client):
-    server.after_end = [report(bx.APP_TYPE_RESULT, 0, 0x8000, 64),
-                        report(bx.APP_TYPE_STORED, 0, 0x8000, 64)]
+    server.after_end = [report(setu_client.APP_TYPE_RESULT, 0, 0x8000, 64),
+                        report(setu_client.APP_TYPE_STORED, 0, 0x8000, 64)]
     st, stored = run(client.upload_segment(0x8000, bytes(64)))
     assert (st, stored) == ("OK", (0, 0x8000, 64))
     app, obj = server.objects[0]
-    assert app == bx.APP_TYPE_SEGMENT and obj[:4] == struct.pack("<I", 0x8000)
+    assert app == setu_client.APP_TYPE_SEGMENT and obj[:4] == struct.pack("<I", 0x8000)
 
 
 def test_upload_segment_drops_leftover_shorts(server, client):
-    client.short_q.put_nowait(report(bx.APP_TYPE_STORED, 0, 0xDEAD, 1))    # from an earlier segment
-    server.after_end = [report(bx.APP_TYPE_STORED, 0, 0x100, 8)]
+    client.short_q.put_nowait(report(setu_client.APP_TYPE_STORED, 0, 0xDEAD, 1))    # from an earlier segment
+    server.after_end = [report(setu_client.APP_TYPE_STORED, 0, 0x100, 8)]
     assert run(client.upload_segment(0x100, bytes(8))) == ("OK", (0, 0x100, 8))
 
 
@@ -158,37 +158,37 @@ def test_upload_segment_failed_transfer_has_no_stored(server, client):
 
 
 def test_upload_segment_times_out_without_stored(server, client, monkeypatch):
-    server.after_end = [report(bx.APP_TYPE_RESULT, 0, 0x100, 8)]
+    server.after_end = [report(setu_client.APP_TYPE_RESULT, 0, 0x100, 8)]
     clock = iter(range(0, 10_000, 100))                       # every read jumps 100 s
-    monkeypatch.setattr(bx.time, "perf_counter", lambda: next(clock))
+    monkeypatch.setattr(setu_client.time, "perf_counter", lambda: next(clock))
     with pytest.raises(TimeoutError, match="0x00000100: no STORED"):
         run(client.upload_segment(0x100, bytes(8)))
 
 
 # ---- CTRL notification handling -----------------------------------------------
 def test_on_notify_routes_frames(client):
-    client.on_notify(0, bytearray(bx.frame(bx.T_ACK, bytes([1, 0, 16]))))
-    client.on_notify(0, bytearray(bx.frame(0x05, b"hi")))
-    assert client.ctrl_q.get_nowait()[1] == bx.T_ACK
+    client.on_notify(0, bytearray(setu_client.frame(setu_client.T_ACK, bytes([1, 0, 16]))))
+    client.on_notify(0, bytearray(setu_client.frame(0x05, b"hi")))
+    assert client.ctrl_q.get_nowait()[1] == setu_client.T_ACK
     assert client.short_q.get_nowait() == (0x05, b"hi")
 
 
 def test_on_notify_drops_bad_length_and_sender_frames():
     logged = []
-    c = bx.BulkXferClient(FakeServer(), log=logged.append)
+    c = setu_client.SETUClient(FakeServer(), log=logged.append)
     c.on_notify(0, bytearray(b"\x05\xf2\x01"))                   # len field says 5, has 1
-    c.on_notify(0, bytearray(bx.frame(bx.T_DATA, b"\x01\x00x")))  # sender frame on CTRL
-    c.on_notify(0, bytearray(bx.frame(bx.T_ABORT, bytes([1, 3, bx.ABORT_BY_SENDER]))))
+    c.on_notify(0, bytearray(setu_client.frame(setu_client.T_DATA, b"\x01\x00x")))  # sender frame on CTRL
+    c.on_notify(0, bytearray(setu_client.frame(setu_client.T_ABORT, bytes([1, 3, setu_client.ABORT_BY_SENDER]))))
     assert c.ctrl_q.empty() and c.short_q.empty()
     assert len(logged) == 3
 
 
-@pytest.mark.parametrize("ftype", [bx.T_ACK, bx.T_NACK, bx.T_END, bx.T_ABORT])
+@pytest.mark.parametrize("ftype", [setu_client.T_ACK, setu_client.T_NACK, setu_client.T_END, setu_client.T_ABORT])
 def test_on_notify_rejects_truncated_control_frames(ftype):
     # A control frame shorter than its type needs is logged and dropped: it must
     # neither raise in the notification callback nor reach send()
     logged = []
-    c = bx.BulkXferClient(FakeServer(), log=logged.append)
-    c.on_notify(0, bytearray(bx.frame(ftype, b"\x01")))
+    c = setu_client.SETUClient(FakeServer(), log=logged.append)
+    c.on_notify(0, bytearray(setu_client.frame(ftype, b"\x01")))
     assert c.ctrl_q.empty() and c.short_q.empty()
     assert len(logged) == 1 and "truncated" in logged[0]

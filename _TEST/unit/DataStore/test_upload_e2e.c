@@ -1,6 +1,6 @@
 /**
  * @file          test_upload_e2e.c
- * @brief         Hex upload end to end on the host: the real BulkXfer Server
+ * @brief         Hex upload end to end on the host: the real SETU Server
  *                engine and the real DataStore, over the simulated link in
  *                sim_link.h, with its scripted peer as the upload client.
  *                The segment is the first one of AA00000100.hex, and the
@@ -14,19 +14,19 @@
  * @copyright     Bajaj Auto Technology Limited (BATL)
  */
 
-/* Server role only, as in the firmware (BLK_ENABLE_CLIENT=0) */
-#include "BulkXfer_Core.c"
-#include "BulkXfer_Server.c"
-#include "BulkXfer_Client.c"
+/* Server role only, as in the firmware (SETU_ENABLE_CLIENT=0) */
+#include "SETU_Core.c"
+#include "SETU_Server.c"
+#include "SETU_Client.c"
 #include "sim_link.h"
 #include "DataStore.c"
-#include "BulkRouter.c"
+#include "SETURouter.c"
 #include "FileSysManager.c"
 #include "FileSysManagerFSM.c"
 #include "wire_vectors.h"
 
-/* _BLK_SVC stand-in: the CTRL attribute is the one the simulated link knows */
-const struct bt_gatt_attr *gstpt_BulkSvc_Init(void)
+/* _SETU_SVC stand-in: the CTRL attribute is the one the simulated link knows */
+const struct bt_gatt_attr *gstpt_SETUSvc_Init(void)
 {
    return &sst_ctrlAttr;
 }
@@ -138,7 +138,7 @@ static void test_SegmentBeforeStoredIsRejected(void)
    TEST_ASSERT_EQUAL_INT(eBS_OK, sst_peer.i_txDone);
 
    // No dump yet: the buffer is still owned by the dump thread. The server
-   // refuses with ABORT(by receiver, REJECTED) - see _DOC/BulkXfer/README.md
+   // refuses with ABORT(by receiver, REJECTED) - see _DOC/SETU/README.md
    sv_Upload(u32_len);
    TEST_ASSERT_EQUAL_INT(PEER_ABORT_BASE + eBS_REJECTED, sst_peer.i_txDone);
 
@@ -275,9 +275,9 @@ int main(int argc, char **argv)
    gb_simVerbose = (argc > 1) && (strcmp(argv[1], "-v") == 0);
 
    // As main() does in the firmware, before any connection
-   if ((gi_DataStore_Init() != 0) || (gi_BulkRouter_Start() != 0))
+   if ((gi_DataStore_Init() != 0) || (gi_SETURouter_Start() != 0))
    {
-      printf("gi_DataStore_Init / gi_BulkRouter_Start failed\n");
+      printf("gi_DataStore_Init / gi_SETURouter_Start failed\n");
       return 1;
    }
 

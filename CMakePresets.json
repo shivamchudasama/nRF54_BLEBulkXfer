@@ -1,0 +1,33 @@
+{
+    "version": 2,
+    "cmakeMinimumRequired": {
+        "major": 3,
+        "minor": 20
+    },
+    "configurePresets": [
+        {
+            "name": "build",
+            "displayName": "nRF54L15 DK, external flash over SPI",
+            "generator": "Ninja",
+            "binaryDir": "${sourceDir}/build",
+            "cacheVariables": {
+                "BOARD": "nrf54l15dk/nrf54l15/cpuapp",
+                "CONF_FILE": "${sourceDir}/_DI/prj.conf",
+                "DTC_OVERLAY_FILE": "${sourceDir}/_DI/boards/nrf54l15dk_nrf54l15_cpuapp.overlay",
+                "FLASH_IF": "spi"
+            }
+        },
+        {
+            "name": "build_sqspi",
+            "displayName": "nRF54L15 DK, external flash over sQSPI (FLPR)",
+            "generator": "Ninja",
+            "binaryDir": "${sourceDir}/build_sqspi",
+            "cacheVariables": {
+                "BOARD": "nrf54l15dk/nrf54l15/cpuapp",
+                "CONF_FILE": "${sourceDir}/_DI/prj.conf",
+                "DTC_OVERLAY_FILE": "${sourceDir}/_DI/boards/nrf54l15dk_nrf54l15_cpuapp.overlay",
+                "FLASH_IF": "sqspi"
+            }
+        }
+    ]
+}

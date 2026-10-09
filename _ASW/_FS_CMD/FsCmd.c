@@ -22,8 +22,8 @@
 #include <string.h>
 #include <zephyr/sys/atomic.h>
 #include <zephyr/sys/byteorder.h>
-#include "BulkXfer.h"
-#include "BulkRouter.h"
+#include "SETU.h"
+#include "SETURouter.h"
 #include "DataStore.h"
 #include "FileSysManager.h"
 #include "AppLog.h"
@@ -118,7 +118,7 @@ static uint8_t su8_op = 0U;
 
 /**
  * @var           sst_msg
- * @brief         Message built from a CMD (BulkXfer engine thread only).
+ * @brief         Message built from a CMD (SETU engine thread only).
  */
 static FileSysMessage_T sst_msg;
 
@@ -128,7 +128,7 @@ static FileSysMessage_T sst_msg;
  *                from the immediate refusals on the engine thread, which use their
  *                own buffer).
  */
-static uint8_t su8ar_tx[BLK_MAX_SHORT_PAYLOAD];
+static uint8_t su8ar_tx[SETU_MAX_SHORT_PAYLOAD];
 
 /******************************************************************************/
 /*                                                                            */
@@ -166,7 +166,7 @@ static void sv_SendReply(uint8_t u8_seq, uint8_t u8_op, uint8_t u8_status,
       memcpy(&u8ar_reply[FSCMD_REPLY_HDR_LEN], u8pt_data, u32_len);
    }
 
-   i_ret = gi_BLKS_SendShort(FSCMD_APP_TYPE_REPLY, u8ar_reply,
+   i_ret = gi_SETUS_SendShort(FSCMD_APP_TYPE_REPLY, u8ar_reply,
       (uint8_t)(FSCMD_REPLY_HDR_LEN + u32_len), K_MSEC(FSCMD_SHORT_TIMEOUT_MS));
 
    // Check if the reply could not be sent (no link, not subscribed, no credit)
@@ -282,7 +282,7 @@ static void sv_OnResult(const FsmgrResult_T *stpt_result, void *vpt_user)
       su8ar_tx[1] = stpt_result->u8_entryType;
       sys_put_le32(stpt_result->u32_entrySize, &su8ar_tx[2]);
       memcpy(&su8ar_tx[FSCMD_ENTRY_HDR_LEN], stpt_result->u8pt_data, u32_len);
-      i_ret = gi_BLKS_SendShort(FSCMD_APP_TYPE_ENTRY, su8ar_tx,
+      i_ret = gi_SETUS_SendShort(FSCMD_APP_TYPE_ENTRY, su8ar_tx,
          (uint8_t)(FSCMD_ENTRY_HDR_LEN + u32_len), K_MSEC(FSCMD_SHORT_TIMEOUT_MS));
       if (i_ret != 0)
       {
@@ -335,7 +335,7 @@ static void sv_OnResult(const FsmgrResult_T *stpt_result, void *vpt_user)
 
 /**
  * @private       sv_OnRxShort
- * @brief         BlkRxShort_F, on the BulkXfer engine thread: hand a CMD to the File
+ * @brief         SETURxShort_F, on the SETU engine thread: hand a CMD to the File
  *                System Manager, or answer it at once (bad op or argument, busy).
  * @param[in]     u8_appType Application type.
  * @param[in]     u8pt_data Payload (valid only during the call).
@@ -399,14 +399,14 @@ static void sv_OnRxShort(uint8_t u8_appType, const uint8_t *u8pt_data, uint8_t u
 /**
  * @public        gi_FsCmd_Init
  * @brief         Register the file commands' appType range (0x40-0x4F) with the
- *                BulkXfer router (short messages only: transfers are refused). Call
- *                once, before gi_BulkRouter_Start(). Does nothing without
+ *                SETU router (short messages only: transfers are refused). Call
+ *                once, before gi_SETURouter_Start(). Does nothing without
  *                CONFIG_FS_CMD.
- * @return        0 on success, otherwise the error from gi_BulkRouter_Register().
+ * @return        0 on success, otherwise the error from gi_SETURouter_Register().
  */
 int gi_FsCmd_Init(void)
 {
-   BulkRoute_T st_route = { 0 };
+   SETURoute_T st_route = { 0 };
    int i_ret = 0;
 
    // Check if the file commands are built in
@@ -419,12 +419,12 @@ int gi_FsCmd_Init(void)
    st_route.u8_lastAppType = FSCMD_APP_TYPE_LAST;
    st_route.fpt_onRxShort = sv_OnRxShort;
 
-   i_ret = gi_BulkRouter_Register(&st_route);
+   i_ret = gi_SETURouter_Register(&st_route);
 
    // Check if the route was registered
    if (i_ret != 0)
    {
-      APP_LOG_ERR("gi_BulkRouter_Register failed (%d)", i_ret);
+      APP_LOG_ERR("gi_SETURouter_Register failed (%d)", i_ret);
    }
    else
    {

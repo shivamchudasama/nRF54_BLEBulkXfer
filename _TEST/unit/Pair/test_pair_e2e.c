@@ -1,17 +1,17 @@
 /**
  * @file          test_pair_e2e.c
- * @brief         Device pairing end to end on the host: the real BulkXfer engine
+ * @brief         Device pairing end to end on the host: the real SETU engine
  *                in both roles, the real appType router and the real Pair.c,
  *                over the simulated link in sim_link.h. The device is the
  *                peripheral; the host link is sim_link's second link
  *                (sst_conn2) and the peer link is its simulated link, whose
- *                scripted peer plays the other device: it hosts the BulkXfer
+ *                scripted peer plays the other device: it hosts the SETU
  *                service the device Client attaches to and receives this
  *                device's certificate and OOB frame on, and sends its own
  *                certificate and OOB frame to the device Server. The BT stack
  *                beyond GATT (advertising, SMP), certificate verification and
  *                OOB signing are stubbed (test_pair.c and test_pair_oob.c cover
- *                them). Checks that BulkXfer moves to the peer link and back,
+ *                them). Checks that SETU moves to the peer link and back,
  *                that the peer reaches nothing but the pairing range, and that
  *                both objects cross intact.
  *                Contract: _DOC/Pairing/PROTOCOL.md.
@@ -22,19 +22,19 @@
  */
 
 /* Both roles, as in the firmware */
-#include "BulkXfer_Core.c"
-#include "BulkXfer_Server.c"
-#include "BulkXfer_Client.c"
+#include "SETU_Core.c"
+#include "SETU_Server.c"
+#include "SETU_Client.c"
 #include "sim_link.h"
-#include "BulkRouter.c"
+#include "SETURouter.c"
 #include "Pair.c"
 #include "wire_vectors.h"
 
 /******************************************************************************/
 /*  Device-side stand-ins                                                     */
 /******************************************************************************/
-/* _BLK_SVC: the CTRL attribute is the one the simulated link knows */
-const struct bt_gatt_attr *gstpt_BulkSvc_Init(void) { return &sst_ctrlAttr; }
+/* _SETU_SVC: the CTRL attribute is the one the simulated link knows */
+const struct bt_gatt_attr *gstpt_SETUSvc_Init(void) { return &sst_ctrlAttr; }
 
 /* _BLE: the host is the second simulated link */
 struct bt_conn *gstpt_BLE_GetHostConn(void) { return &sst_conn2; }
@@ -238,7 +238,7 @@ void setUp(void)
    sb_dbHasService = true;
 
    // The host is connected and holds the Server, as ConnectionHandling.c does
-   (void)gi_BLKS_Rebind(&sst_conn2);
+   (void)gi_SETUS_Rebind(&sst_conn2);
    gv_Pair_OnBtReady();
    sv_RunPairThread();
 
@@ -253,13 +253,13 @@ void setUp(void)
    // The peer connects (the simulated link); the stack's connected callback
    // offers it to Pair.c, which claims it
    sv_SimConnect(247U);
-   TEST_ASSERT_EQUAL_PTR_MESSAGE(&sst_conn2, sstpt_BLKS_conn, "the host keeps the Server so far");
+   TEST_ASSERT_EQUAL_PTR_MESSAGE(&sst_conn2, sstpt_SETUS_conn, "the host keeps the Server so far");
    TEST_ASSERT_TRUE(gb_Pair_ClaimConn(&sst_conn, 0U));
 }
 
 void tearDown(void)
 {
-   // The stack reports the drop to both BulkXfer (sim_link) and Pair.c
+   // The stack reports the drop to both SETU (sim_link) and Pair.c
    gv_Pair_OnDisconnected(&sst_conn, 0x16U);
    sv_Disconnect();
    sv_RunPairThread();
@@ -276,7 +276,7 @@ static void test_TwoDevicesExchangeAndPair(void)
    // The Server moves to the peer, the Client attaches to the peer's service,
    // and this device's certificate crosses
    TEST_ASSERT_TRUE(sb_RunUntil(sb_CertExchange, 2000));
-   TEST_ASSERT_EQUAL_PTR(&sst_conn, sstpt_BLKS_conn);
+   TEST_ASSERT_EQUAL_PTR(&sst_conn, sstpt_SETUS_conn);
    sv_PeerReceives(VEC_PAIR_APP_PEER_CERT, gst_deviceCertData.u8ar_DeviceCert, 517U);
 
    // The peer's certificate crosses and verifies; this device's OOB frame follows
@@ -312,10 +312,10 @@ static void test_TwoDevicesExchangeAndPair(void)
    TEST_ASSERT_EQUAL_UINT8(ePST_PAIRED, su8ar_hostStatus[0]);
    TEST_ASSERT_EQUAL_UINT32(1U, su32_led);
 
-   // BulkXfer back with the host: Server rebound, Client released, no filter
+   // SETU back with the host: Server rebound, Client released, no filter
    sv_Settle(10);
-   TEST_ASSERT_EQUAL_PTR(&sst_conn2, sstpt_BLKS_conn);
-   TEST_ASSERT_NULL(sstpt_BLKC_conn);
+   TEST_ASSERT_EQUAL_PTR(&sst_conn2, sstpt_SETUS_conn);
+   TEST_ASSERT_NULL(sstpt_SETUC_conn);
    TEST_ASSERT_EQUAL_INT(1, si_unsubscribes);
    TEST_ASSERT_EQUAL_HEX(0, atomic_get(&st_filter));
    TEST_ASSERT_FALSE(sb_scFlag);
@@ -346,12 +346,12 @@ static void test_PeerReachesOnlyThePairingRange(void)
    TEST_ASSERT_TRUE(sb_RunUntil(sb_OobExchange, 2000));
 }
 
-static void test_LinkLossReturnsBulkXferToTheHost(void)
+static void test_LinkLossReturnsSETUToTheHost(void)
 {
    uint8_t u8ar_status[PAIR_STATUS_LEN];
 
    TEST_ASSERT_TRUE(sb_RunUntil(sb_CertExchange, 2000));
-   TEST_ASSERT_EQUAL_PTR(&sst_conn, sstpt_BLKS_conn);
+   TEST_ASSERT_EQUAL_PTR(&sst_conn, sstpt_SETUS_conn);
    // The peer link drops in the middle of the exchange
    sst_peer.b_silent = true;
    sv_Settle(5);
@@ -362,13 +362,13 @@ static void test_LinkLossReturnsBulkXferToTheHost(void)
    TEST_ASSERT_EQUAL_UINT8(ePST_FAILED, u8ar_status[0]);
    TEST_ASSERT_EQUAL_UINT8(ePER_LINK_LOST, u8ar_status[1]);
    TEST_ASSERT_EQUAL_UINT8(0x08U, u8ar_status[2]);
-   TEST_ASSERT_EQUAL_PTR(&sst_conn2, sstpt_BLKS_conn);
+   TEST_ASSERT_EQUAL_PTR(&sst_conn2, sstpt_SETUS_conn);
    TEST_ASSERT_EQUAL_HEX(0, atomic_get(&st_filter));
 }
 
 int main(int argc, char **argv)
 {
-   BulkRoute_T st_other = { 0 };
+   SETURoute_T st_other = { 0 };
 
    (void)setvbuf(stdout, NULL, _IONBF, 0);
    gb_simVerbose = (argc > 1) && (strcmp(argv[1], "-v") == 0);
@@ -379,8 +379,8 @@ int main(int argc, char **argv)
    st_other.u8_lastAppType = 0x10U;
    st_other.fpt_onRxStart = si_OtherStart;
    st_other.fpt_onRxData = si_OtherData;
-   if ((gi_BulkRouter_Register(&st_other) != 0) || (gi_Pair_Init() != 0) ||
-      (gi_BulkRouter_Start() != 0))
+   if ((gi_SETURouter_Register(&st_other) != 0) || (gi_Pair_Init() != 0) ||
+      (gi_SETURouter_Start() != 0))
    {
       printf("init failed\n");
       return 1;
@@ -389,6 +389,6 @@ int main(int argc, char **argv)
    UNITY_BEGIN();
    RUN_TEST(test_TwoDevicesExchangeAndPair);
    RUN_TEST(test_PeerReachesOnlyThePairingRange);
-   RUN_TEST(test_LinkLossReturnsBulkXferToTheHost);
+   RUN_TEST(test_LinkLossReturnsSETUToTheHost);
    return UNITY_END();
 }

@@ -4,7 +4,7 @@
     "wire_vectors.h) and the Python tests. Both sides must produce and parse",
     "exactly these bytes, so the firmware and the PC client cannot drift apart.",
     "Values marked 'from _LOG' were captured from a real upload of",
-    "AA00000100.hex (_LOG/BulkXfer_GUI_Client.txt, _LOG/BulkXfer_Device_Server.txt)."
+    "AA00000100.hex (_LOG/SETU_GUI_Client.txt, _LOG/SETU_Device_Server.txt)."
   ],
 
   "protocol_version": 2,

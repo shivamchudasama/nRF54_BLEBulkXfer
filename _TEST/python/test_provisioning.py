@@ -4,8 +4,8 @@ against a simulated device that follows _DOC/Provisioning/PROTOCOL.md (the
 rules of _ASW/_PROV/Prov.c), plus the protocol constants and decoders against
 the wire.json vectors.
 
-The simulated device is built from the PC's own BulkXfer pieces, wired back to
-back: its Server is a BulkXferReceiver, its Client a BulkXferClient writing
+The simulated device is built from the PC's own SETU pieces, wired back to
+back: its Server is a SETUReceiver, its Client a SETUClient writing
 into the PC's receiver (the PC's GATT server in real life)."""
 
 import asyncio
@@ -17,11 +17,11 @@ from cryptography import x509
 from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import ec
 
-import bulkxfer_client as bx
-import bulkxfer_receiver as bxr
+import setu_client
+import setu_receiver
 from blehost.pki import negative
 from blehost.pki.authority import CertificateAuthority
-from blehost.protocols import bulkxfer as bxproto
+from blehost.protocols import setu as setu_proto
 from blehost.protocols import provisioning as prov
 
 
@@ -58,12 +58,12 @@ class FakeDevice:
         self.der_result = {}                   # DER -> RESULT status to answer instead
         log = lambda *_: None                  # noqa: E731
         # PC side: client on the device's service, receiver of the PC's service
-        self.pc_client = bx.BulkXferClient(_Link(lambda: self.rx), log=log)
-        self.pc_receiver = bxr.BulkXferReceiver(lambda f: self.dev_client.on_notify(0, f), log=log)
+        self.pc_client = setu_client.SETUClient(_Link(lambda: self.rx), log=log)
+        self.pc_receiver = setu_receiver.SETUReceiver(lambda f: self.dev_client.on_notify(0, f), log=log)
         # device side: its Server, and its Client on the PC's service
-        self.rx = bxr.BulkXferReceiver(lambda f: self.pc_client.on_notify(0, f),
+        self.rx = setu_receiver.SETUReceiver(lambda f: self.pc_client.on_notify(0, f),
                                        accept=self._accept, log=log)
-        self.dev_client = bx.BulkXferClient(_Link(lambda: self.pc_receiver), log=log)
+        self.dev_client = setu_client.SETUClient(_Link(lambda: self.pc_receiver), log=log)
         self.task = None
 
     def _set_key(self, key):
@@ -88,7 +88,7 @@ class FakeDevice:
     # ---- replies ------------------------------------------------------------
     def _short(self, app_type, payload):
         if not self.silent:
-            self.pc_client.on_notify(0, bytearray(bx.frame(app_type, payload)))
+            self.pc_client.on_notify(0, bytearray(setu_client.frame(app_type, payload)))
 
     def _result(self, ref, status):
         self._short(prov.RESULT, bytes([ref, status]))
@@ -267,7 +267,7 @@ def test_deprovision_refused(device_csr):
     assert e.value.status == 0x01
 
 
-# ---- provision --negative (bulkxfer_client.provision_with_rejections) ------------
+# ---- provision --negative (setu_client.provision_with_rejections) ------------
 @pytest.fixture
 def few_cases(monkeypatch):
     """Two cases the fake device answers as told (it does not parse X.509 for them)."""
@@ -286,7 +286,7 @@ def test_negative_run_wipes_rejects_then_provisions(ca, device_csr, few_cases, p
             if provisioned_before:
                 await dev.session().provision(ca)
                 dev.received.clear()
-            failures, out = await bx.provision_with_rejections(dev.session(), ca, 30)
+            failures, out = await setu_client.provision_with_rejections(dev.session(), ca, 30)
             return dev, failures, out
     dev, failures, out = run(go())
     assert failures == 0
@@ -301,7 +301,7 @@ def test_negative_run_counts_wrong_answers(ca, device_csr, few_cases):
         async with FakeDevice(device_csr) as dev:
             dev.der_result[few_cases[0].der] = few_cases[0].expected
             dev.der_result[few_cases[1].der] = 0x00          # accepted: wrong
-            return await bx.provision_with_rejections(dev.session(), ca, 30)
+            return await setu_client.provision_with_rejections(dev.session(), ca, 30)
     failures, _ = run(go())
     assert failures == 1
 
@@ -411,7 +411,7 @@ def test_status_vectors_parse(vectors, name):
 def test_requests_are_the_golden_frames(vectors):
     for name, t in (("get_status", prov.GET_STATUS), ("csr_req", prov.CSR_REQ),
                     ("deprovision", prov.DEPROVISION)):
-        assert bx.frame(t, b"") == _short(vectors, name)[1]
+        assert setu_client.frame(t, b"") == _short(vectors, name)[1]
 
 
 @pytest.mark.parametrize("name, text", [
@@ -424,12 +424,12 @@ def test_requests_are_the_golden_frames(vectors):
 ])
 def test_monitor_decodes_results(vectors, name, text):
     _, wire = _short(vectors, name)
-    assert bxproto.decode_frame(wire) == ("SHORT", text)
+    assert setu_proto.decode_frame(wire) == ("SHORT", text)
 
 
 def test_monitor_decodes_status(vectors):
     _, wire = _short(vectors, "status_csr_busy")
-    kind, text = bxproto.decode_frame(wire)
+    kind, text = setu_proto.decode_frame(wire)
     assert kind == "SHORT" and text.startswith("STATUS CA_OK CSR-busy csr=420 B key=")
 
 

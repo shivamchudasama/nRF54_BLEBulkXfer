@@ -8,7 +8,7 @@ region for the whole image. This tool splits it by module of this repository:
 every input section in the map names the object file it came from, and each
 object file is traced back to its source file under the scanned folders
 (_ASW, _LIB by default). A module is one sub-folder of a scanned folder
-(_ASW/_BLE, _LIB/BulkXfer, ...); a source file directly in a scanned folder
+(_ASW/_BLE, _LIB/SETU, ...); a source file directly in a scanned folder
 (_ASW/main.c) is a module of its own. Everything else (Zephyr, NCS, libc,
 alignment padding) is the "Other" row, so the rows add up to the total.
 

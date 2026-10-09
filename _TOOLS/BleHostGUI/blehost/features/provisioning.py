@@ -2,7 +2,7 @@
 device (_DOC/Provisioning/PROTOCOL.md).
 
 The page holds a CA (create or load a folder), reads the device's STATUS, and
-runs the whole sequence: CSR from the device (over the PC's own BulkXfer
+runs the whole sequence: CSR from the device (over the PC's own SETU
 service, core/gatt_server.py), sign it, send the CA certificate and the device
 certificate, each verified by the device, which then stores both. A provisioned
 device refuses another run: "Remove provisioning" wipes it (DEPROVISION) and it
@@ -17,7 +17,7 @@ from cryptography.hazmat.primitives import serialization
 
 from ..core.gatt_server import PcGattServer
 from ..pki.authority import DEFAULT_FOLDER, CaError, CertificateAuthority
-from ..protocols import bulkxfer, provisioning as prov
+from ..protocols import setu, provisioning as prov
 from ..ui import theme as th
 from ..ui.widgets import Disclosure, MoreMenu, Pill, Stepper, Tooltip, card, set_icon, set_var
 from .base import Feature
@@ -182,10 +182,10 @@ class ProvisioningFeature(Feature):
     # ---- display (pills, step list) -----------------------------------------
     def _show_pc_pill(self):
         text = self.pc_var.get()
-        if text.startswith("PC BulkXfer service: published"):
+        if text.startswith("PC SETU service: published"):
             sub = "subscribed" in text
             self.pc_pill.set("PC service: subscribed" if sub else "PC service: published", "ok")
-            self._pc_tip.text = "The PC's BulkXfer service: the device sends its CSR to it."
+            self._pc_tip.text = "The PC's SETU service: the device sends its CSR to it."
         else:
             self.pc_pill.set("PC service: not available", "warn")
             self._pc_tip.text = text
@@ -201,7 +201,7 @@ class ProvisioningFeature(Feature):
 
     def _update(self):
         busy = self.busy
-        ready = self.ctx.link.connected and self._bulkxfer().available and not busy
+        ready = self.ctx.link.connected and self._setu().available and not busy
         self.status_btn.state(["!disabled"] if ready else ["disabled"])
         self.deprov_btn.state(["!disabled"] if ready else ["disabled"])
         self.prov_btn.state(["!disabled"] if ready and self.ca and self._pc().available else ["disabled"])
@@ -213,9 +213,9 @@ class ProvisioningFeature(Feature):
         pc = self._pc()
         if pc.available:
             subs = ", device subscribed" if pc.subscribers else ""
-            set_var(self.pc_var, f"PC BulkXfer service: published{subs}")
+            set_var(self.pc_var, f"PC SETU service: published{subs}")
         else:
-            set_var(self.pc_var, f"PC BulkXfer service: not available ({pc.error or 'starting'}): "
+            set_var(self.pc_var, f"PC SETU service: not available ({pc.error or 'starting'}): "
                                  "the CSR cannot be received")
 
     def _tick(self):
@@ -228,8 +228,8 @@ class ProvisioningFeature(Feature):
         """To the application log (the Log page and the status line)."""
         self.ctx.log(f"provisioning: {text}", level)
 
-    def _bulkxfer(self):
-        return self.ctx.services[bulkxfer.BulkXferService.NAME]
+    def _setu(self):
+        return self.ctx.services[setu.SETUService.NAME]
 
     def _pc(self) -> PcGattServer:
         return self.ctx.services[PcGattServer.NAME]
@@ -276,7 +276,7 @@ class ProvisioningFeature(Feature):
     def _session(self) -> prov.ProvisioningSession:
         """On the BLE loop."""
         call = self.ctx.bus.call
-        return prov.ProvisioningSession(self._bulkxfer().new_client(), self._pc().receiver,
+        return prov.ProvisioningSession(self._setu().new_client(), self._pc().receiver,
                                         log=lambda t: call(self._log, t),
                                         step=lambda t: call(self.step_var.set, t))
 

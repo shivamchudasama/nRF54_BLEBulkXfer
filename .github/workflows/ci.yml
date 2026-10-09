@@ -163,7 +163,7 @@ jobs:
       - name: Summary
         run: |
           python3 _TEST/tools/report.py junit --md summary.md --html report.html \
-            --title "nRF54_BLEBulkXfer tests"
+            --title "Project Hanuman tests"
           cat summary.md >> "$GITHUB_STEP_SUMMARY"
           c=reports/report-c/coverage/c/summary.txt
           py=reports/report-python/coverage-python.txt
@@ -208,7 +208,7 @@ jobs:
       - name: Flash
         run: nrfutil device program --firmware fw/build_ci/merged.hex --options chip_erase_mode=ERASE_ALL
       - name: Upload AA00000100.hex over BLE
-        run: python _TOOLS/BleHostGUI/bulkxfer_client.py hex AA00000100.hex --name "BLE Bulk Transfer"
+        run: python _TOOLS/BleHostGUI/setu_client.py hex AA00000100.hex --name "ProjectHanuman"
       # The file system on the external flash (_DOC/FileSysManager): the upload
       # stored as a file (the client checks the size and CRC-32 COMMIT reports),
       # listed, read back over the file commands, and compared byte for byte
@@ -216,19 +216,19 @@ jobs:
       - name: Store the upload as a file and read it back
         shell: pwsh
         run: |
-          $cli = "_TOOLS/BleHostGUI/bulkxfer_client.py"
-          python $cli hex AA00000100.hex --store HIL.BIN --name "BLE Bulk Transfer"
+          $cli = "_TOOLS/BleHostGUI/setu_client.py"
+          python $cli hex AA00000100.hex --store HIL.BIN --name "ProjectHanuman"
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          python $cli fs ls --name "BLE Bulk Transfer"
+          python $cli fs ls --name "ProjectHanuman"
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          python $cli fs get /FW/HIL.BIN ${{ runner.temp }}/hil.bin --name "BLE Bulk Transfer"
+          python $cli fs get /FW/HIL.BIN ${{ runner.temp }}/hil.bin --name "ProjectHanuman"
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           nrfutil device reset
-          python $cli fs get /FW/HIL.BIN ${{ runner.temp }}/hil_after_reset.bin --name "BLE Bulk Transfer"
+          python $cli fs get /FW/HIL.BIN ${{ runner.temp }}/hil_after_reset.bin --name "ProjectHanuman"
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          python -c "import sys; sys.path.insert(0, '_TOOLS/BleHostGUI'); import bulkxfer_client as bx; want = bx.file_image(bx.parse_ihex('AA00000100.hex')); got = [open(f, 'rb').read() for f in sys.argv[1:]]; sys.exit(0 if all(g == want for g in got) else 'stored file differs')" ${{ runner.temp }}/hil.bin ${{ runner.temp }}/hil_after_reset.bin
+          python -c "import sys; sys.path.insert(0, '_TOOLS/BleHostGUI'); import setu_client as bx; want = bx.file_image(bx.parse_ihex('AA00000100.hex')); got = [open(f, 'rb').read() for f in sys.argv[1:]]; sys.exit(0 if all(g == want for g in got) else 'stored file differs')" ${{ runner.temp }}/hil.bin ${{ runner.temp }}/hil_after_reset.bin
       # Device provisioning (_DOC/Provisioning/PROTOCOL.md): the runner hosts the
-      # PC-side BulkXfer service (Windows), acts as the CA and provisions the DK.
+      # PC-side SETU service (Windows), acts as the CA and provisions the DK.
       # The chip erase above makes the device generate a fresh key and CSR.
       # --negative sends every certificate the device must reject
       # (blehost/pki/negative.py) before the good CA and device certificate (a
@@ -236,7 +236,7 @@ jobs:
       # and fails on any wrong RESULT: the set the host test devicecert_verify
       # runs too, here on the device's own mbedTLS, PSA and CRACEN.
       - name: Provision the device and test its certificate verification
-        run: python _TOOLS/BleHostGUI/bulkxfer_client.py provision --negative --name "BLE Bulk Transfer" --ca ${{ runner.temp }}/ca --out ${{ runner.temp }}/device.pem
+        run: python _TOOLS/BleHostGUI/setu_client.py provision --negative --name "ProjectHanuman" --ca ${{ runner.temp }}/ca --out ${{ runner.temp }}/device.pem
       - name: Check the issued certificate against the CA
         run: openssl verify -CAfile ${{ runner.temp }}/ca/ca_cert.pem ${{ runner.temp }}/device.pem
       # One-time provisioning: a provisioned device refuses another run, so the
@@ -245,14 +245,14 @@ jobs:
       - name: A provisioned device refuses another provisioning
         shell: pwsh
         run: |
-          python _TOOLS/BleHostGUI/bulkxfer_client.py provision --name "BLE Bulk Transfer" --ca ${{ runner.temp }}/ca
+          python _TOOLS/BleHostGUI/setu_client.py provision --name "ProjectHanuman" --ca ${{ runner.temp }}/ca
           if ($LASTEXITCODE -eq 0) { throw "provisioned twice" } else { $global:LASTEXITCODE = 0 }
       - name: Wipe the provisioning and provision again
         shell: pwsh
         run: |
-          python _TOOLS/BleHostGUI/bulkxfer_client.py deprovision --name "BLE Bulk Transfer"
+          python _TOOLS/BleHostGUI/setu_client.py deprovision --name "ProjectHanuman"
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          python _TOOLS/BleHostGUI/bulkxfer_client.py provision --name "BLE Bulk Transfer" --ca ${{ runner.temp }}/ca
+          python _TOOLS/BleHostGUI/setu_client.py provision --name "ProjectHanuman" --ca ${{ runner.temp }}/ca
       # Next step when it exists: capture the UART and check the
       # "SEG addr=0x00000000 len=6560 crc=0xe2e72827" line, the two PEM blocks,
       # "device provisioned", and after a reset "provisioned: stored
@@ -268,7 +268,7 @@ jobs:
     if: github.event_name == 'workflow_dispatch' && inputs.hil_pair
     runs-on: [self-hosted, nrf54l15dk-pair]
     env:
-      CLI: python _TOOLS/BleHostGUI/bulkxfer_client.py
+      CLI: python _TOOLS/BleHostGUI/setu_client.py
       A: ${{ vars.DK_A_ADDR }}
       B: ${{ vars.DK_B_ADDR }}
     steps:
