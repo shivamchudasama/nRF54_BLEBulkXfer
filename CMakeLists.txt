@@ -42,7 +42,7 @@ set(EXTRA_DTC_OVERLAY_FILE
    ${CMAKE_CURRENT_SOURCE_DIR}/_DI/boards/\${NORMALIZED_BOARD_TARGET}_flash_${FLASH_IF}.overlay)
 
 find_package(Zephyr REQUIRED HINTS $ENV{ZEPHYR_BASE})
-project(nRF54_BLEBulkXfer)
+project(ProjectHanuman)
 
 add_subdirectory(_ASW)
 add_subdirectory(_LIB)

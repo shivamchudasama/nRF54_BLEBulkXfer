@@ -4,7 +4,7 @@
 The same set drives the device code twice: on the host, where
 _TEST/tools/gen_cert_vectors.py turns it into C vectors for the
 devicecert_verify test (real Mbed TLS / TF-PSA-Crypto), and on a real device
-(bulkxfer_client.py provision --negative, the CI hil-tests job). Each case is
+(setu_client.py provision --negative, the CI hil-tests job). Each case is
 built from the device's own CSR, because a device certificate only passes with
 the device's key and subject, and carries the RESULT status the device must
 answer.

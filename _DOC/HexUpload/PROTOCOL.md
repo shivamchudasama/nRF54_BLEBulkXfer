@@ -1,6 +1,6 @@
 # Hex Upload — Protocol
 
-This is the contract between the firmware in `_ASW` (the BLE peripheral and GATT server that receives data) and a client that uploads an Intel HEX file. Everything runs on top of the BulkXfer library, so the client implements the BulkXfer **Client** role. The BulkXfer protocol itself (GATT service, frame formats, sequences, timing, errors) is specified in [../BulkXfer/PROTOCOL.md](../BulkXfer/PROTOCOL.md). There are two clients: the PC GUI in [_TOOLS/BleHostGUI](../../_TOOLS/BleHostGUI/README.md) (Hex Upload tab), and the `hex` command in the reference client [bulkxfer_client.py](../../_TOOLS/BleHostGUI/bulkxfer_client.py), whose protocol code the GUI reuses.
+This is the contract between the firmware in `_ASW` (the BLE peripheral and GATT server that receives data) and a client that uploads an Intel HEX file. Everything runs on top of the SETU library, so the client implements the SETU **Client** role. The SETU protocol itself (GATT service, frame formats, sequences, timing, errors) is specified in [../SETU/PROTOCOL.md](../SETU/PROTOCOL.md). There are two clients: the PC GUI in [_TOOLS/BleHostGUI](../../_TOOLS/BleHostGUI/README.md) (Hex Upload tab), and the `hex` command in the reference client [setu_client.py](../../_TOOLS/BleHostGUI/setu_client.py), whose protocol code the GUI reuses.
 
 The server does not program its own flash. It buffers each segment in RAM and logs it on the serial terminal (UART, 921600 baud, RTS/CTS flow control): by default one summary line per segment, or every byte as `0xAAAAAAAA: xx xx …` lines when the firmware is built with `CONFIG_DS_HEX_DUMP=y` (see §6). When the client frames the upload with BEGIN and COMMIT, the server also stores it as a file on the external flash, one record per segment (§7), for an ECU update to use later.
 
@@ -8,8 +8,8 @@ The server does not program its own flash. It buffers each segment in RAM and lo
 
 | Item | Value |
 |---|---|
-| Device name (scan response) | `BLE Bulk Transfer` (`CONFIG_BT_DEVICE_NAME`) |
-| Advertised service (adv data, 128-bit list) | `B1C00000-16A1-4812-AF35-F3F29A92F6CA` until the device is provisioned; then the Pairing service `B1C10000-…` ([../Pairing/PROTOCOL.md §2](../Pairing/PROTOCOL.md#2-gatt-the-pairing-service)). The BulkXfer service is in the GATT table either way |
+| Device name (scan response) | `ProjectHanuman` (`CONFIG_BT_DEVICE_NAME`) |
+| Advertised service (adv data, 128-bit list) | `B1C00000-16A1-4812-AF35-F3F29A92F6CA` until the device is provisioned; then the Pairing service `B1C10000-…` ([../Pairing/PROTOCOL.md §2](../Pairing/PROTOCOL.md#2-gatt-the-pairing-service)). The SETU service is in the GATT table either way |
 | Connections | One host at a time (a second is refused); while pairing, a peer device on a second link |
 | Security | None (open link) |
 
@@ -20,31 +20,31 @@ The UUIDs are `B1C0xxxx` followed by the project base `-16A1-4812-AF35-F3F29A92F
 | Attribute | UUID | Properties | Permissions | Value |
 |---|---|---|---|---|
 | Primary service | `B1C00000-…` | — | — | — |
-| DATA | `B1C00001-…` | Write Without Response, Write | Write | One BulkXfer frame per write, 2…244 B. **Use Write Without Response.** Long (prepared) writes are refused |
+| DATA | `B1C00001-…` | Write Without Response, Write | Write | One SETU frame per write, 2…244 B. **Use Write Without Response.** Long (prepared) writes are refused |
 | CTRL | `B1C00002-…` | Notify | — | Server → client frames (ACK / NACK / END / ABORT and short messages) |
 | CTRL CCCD | `0x2902` | — | Read, Write | Write `01 00` to subscribe. The server ignores START until the client is subscribed |
 | CAPS | `B1C00003-…` | Read | Read | 4 B: protocol version `2`, max frame `244`, window `16`, reserved `0` |
 
 The device also exposes Zephyr's GAP service and the Device Information service.
 
-Link setup: the server itself requests 2M PHY, data length 251 and MTU 247 about 2 s after connecting, then a connection interval of 7.5–15 ms (latency 0, supervision timeout 4 s), which Zephyr sends 5 s after connecting (`CONFIG_BT_CONN_PARAM_UPDATE_TIMEOUT`). The interval sets the throughput, so a client that uploads right after connecting runs at the central's default interval until then. The central may refuse the request. A client should also request MTU 247. BulkXfer's chunk size is `min(ATT_MTU − 3, 244) − 4`, fixed when each transfer starts.
+Link setup: the server itself requests 2M PHY, data length 251 and MTU 247 about 2 s after connecting, then a connection interval of 7.5–15 ms (latency 0, supervision timeout 4 s), which Zephyr sends 5 s after connecting (`CONFIG_BT_CONN_PARAM_UPDATE_TIMEOUT`). The interval sets the throughput, so a client that uploads right after connecting runs at the central's default interval until then. The central may refuse the request. A client should also request MTU 247. SETU's chunk size is `min(ATT_MTU − 3, 244) − 4`, fixed when each transfer starts.
 
 ## 3. Application messages
 
 | appType | Direction | Kind | Payload |
 |---|---|---|---|
-| `0x10` SEGMENT | client → server | BulkXfer transfer (START / DATA …) | `[u32 LE start address][data]` |
+| `0x10` SEGMENT | client → server | SETU transfer (START / DATA …) | `[u32 LE start address][data]` |
 | `0x01` RESULT | server → client | short message on CTRL | `[u8 status][u32 LE address][u32 LE data length]` |
 | `0x11` STORED | server → client | short message on CTRL | `[u8 status][u32 LE address][u32 LE data length]` |
 | `0x12` BEGIN | client → server | short message | File name, 1..32 characters (§7) |
 | `0x13` COMMIT | client → server | short message | empty |
 | `0x14` FILE | server → client | short message on CTRL | `[u8 op][u8 status][u32 LE file size][u32 LE file CRC-32]`, answering BEGIN (`op` `0x12`) and COMMIT (`op` `0x13`) |
 
-In RESULT and STORED, `status` is a `BlkStatus_E` value (`0` = OK). On failure, RESULT carries address and length `0`. STORED is `0` unless the upload is being stored in a file and writing it failed: then `8` (SINK_ERROR), and the client should stop. In FILE, `status` is the file system's code ([../FileSysManager/PROTOCOL.md §3](../FileSysManager/PROTOCOL.md#3-status-codes): `0` OK, `5` BAD_ARG, `6` BAD_STATE, `7` BUSY, `8` NOT_MOUNTED, `9` IO, …).
+In RESULT and STORED, `status` is a `SETUStatus_E` value (`0` = OK). On failure, RESULT carries address and length `0`. STORED is `0` unless the upload is being stored in a file and writing it failed: then `8` (SINK_ERROR), and the client should stop. In FILE, `status` is the file system's code ([../FileSysManager/PROTOCOL.md §3](../FileSysManager/PROTOCOL.md#3-status-codes): `0` OK, `5` BAD_ARG, `6` BAD_STATE, `7` BUSY, `8` NOT_MOUNTED, `9` IO, …).
 
 The START frame's length and CRC-32 cover the whole object, **address header included**.
 
-The device's BulkXfer Server is shared by appType range ([_ASW/_BLK_SVC/BulkRouter.c](../../_ASW/_BLK_SVC/BulkRouter.c)). This is the whole registry:
+The device's SETU Server is shared by appType range ([_ASW/_SETU_SVC/SETURouter.c](../../_ASW/_SETU_SVC/SETURouter.c)). This is the whole registry:
 
 | appTypes | Owner | Contract |
 |---|---|---|
@@ -54,9 +54,9 @@ The device's BulkXfer Server is shared by appType range ([_ASW/_BLK_SVC/BulkRout
 | `0x40`–`0x4F` | File commands (`_FS_CMD`), when built with `CONFIG_FS_CMD` | [../FileSysManager/PROTOCOL.md](../FileSysManager/PROTOCOL.md) |
 | others up to `0xEF` | Free | A transfer is refused (§5), a short message is logged and ignored |
 
-A new user of the Server registers a free range with `gi_BulkRouter_Register()` before `gi_BulkRouter_Start()` and adds it here.
+A new user of the Server registers a free range with `gi_SETURouter_Register()` before `gi_SETURouter_Start()` and adds it here.
 
-While the Server is bound to a peer device for pairing, the router's filter (`gv_BulkRouter_SetFilter()`) admits only `0x30`–`0x3F`: any other transfer is refused at START as an unknown type and any other short message is dropped, so a peer device cannot upload hex or reach provisioning.
+While the Server is bound to a peer device for pairing, the router's filter (`gv_SETURouter_SetFilter()`) admits only `0x30`–`0x3F`: any other transfer is refused at START as an unknown type and any other short message is dropped, so a peer device cannot upload hex or reach provisioning.
 
 ## 4. Upload sequence
 
@@ -65,7 +65,7 @@ While the Server is bound to a peer device for pairing, the router's filter (`gv
 3. Connect, subscribe to CTRL, and optionally read CAPS.
 4. To store the upload as a file: send BEGIN with the file name and wait for FILE (§7). Only status `0` goes on.
 5. For each segment:
-   1. Send a BulkXfer transfer with appType `0x10` and object `pack('<I', address) + data`.
+   1. Send a SETU transfer with appType `0x10` and object `pack('<I', address) + data`.
    2. Wait for END. Only status `OK` means the segment arrived intact.
    3. RESULT follows right away.
    4. **Wait for STORED** before sending the next segment. The server keeps the segment in its only buffer until it has been logged, and written to the file when one is open. By default the log is one line and STORED follows almost at once; writing a 64 KiB segment to the external flash takes about a second or two more. With `CONFIG_DS_HEX_DUMP=y` the full dump takes several seconds per 64 KiB segment (10–15 s has been observed at 921600 baud), and a slower terminal or UART setting stretches it further, so use a generous timeout. A STORED status other than `0` means the file write failed.
@@ -73,7 +73,7 @@ While the Server is bound to a peer device for pairing, the router's filter (`gv
 
 ## 5. Rejections
 
-The server rejects a START by answering it with **ABORT** (direction *by receiver*, reason `REJECTED` = `0x05`) instead of the first ACK. No END follows (`bulkxfer_client.py` reports this as `ABORTED_BY_SERVER:REJECTED`). This happens when:
+The server rejects a START by answering it with **ABORT** (direction *by receiver*, reason `REJECTED` = `0x05`) instead of the first ACK. No END follows (`setu_client.py` reports this as `ABORTED_BY_SERVER:REJECTED`). This happens when:
 
 | Cause | Fix |
 |---|---|
@@ -142,6 +142,6 @@ A BEGIN while an upload is open discards that upload (its COMMIT never came, e.g
 | the first write error (`4` NO_SPACE, `9` IO, …) | A segment could not be written (its STORED said SINK_ERROR); the file is deleted |
 | `9` IO, … | Closing or renaming failed; the file is deleted |
 
-Segments sent without BEGIN are only logged, as before. Between BEGIN and COMMIT the file commands answer BUSY ([../FileSysManager/PROTOCOL.md §4](../FileSysManager/PROTOCOL.md#4-sequence-and-rules)). The stored file can be listed and read back with them (`bulkxfer_client.py fs get /FW/<name> <local file>`).
+Segments sent without BEGIN are only logged, as before. Between BEGIN and COMMIT the file commands answer BUSY ([../FileSysManager/PROTOCOL.md §4](../FileSysManager/PROTOCOL.md#4-sequence-and-rules)). The stored file can be listed and read back with them (`setu_client.py fs get /FW/<name> <local file>`).
 
 The golden BEGIN, COMMIT and FILE frames, and the first segment's record with its file size and CRC-32, are in [`_TEST/vectors/wire.json`](../../_TEST/vectors/wire.json), section `hex_file`.

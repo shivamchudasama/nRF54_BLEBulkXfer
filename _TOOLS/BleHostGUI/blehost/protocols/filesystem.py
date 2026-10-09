@@ -1,15 +1,15 @@
 """The device's file commands over BLE (_DOC/FileSysManager/PROTOCOL.md).
 
 The FileSystemPoC drove its File System Manager from a UART test harness;
-here the same commands travel as BulkXfer short messages on the host link:
+here the same commands travel as SETU short messages on the host link:
 
     CMD   0x40  host -> device  [u8 seq][u8 op][arg]
     REPLY 0x41  device -> host  [u8 seq][u8 op][u8 status][data]
     ENTRY 0x42  device -> host  [u8 seq][u8 type][u32 LE size][path]  (LS only, before REPLY)
 
-FileSystemSession runs them one at a time on a BulkXferClient (anything with
+FileSystemSession runs them one at a time on a SETUClient (anything with
 send_short and short_q). parse_line() reads the UART harness's command lines,
-for the GUI's Files page and `bulkxfer_client.py fs shell`.
+for the GUI's Files page and `setu_client.py fs shell`.
 """
 
 import asyncio
@@ -17,17 +17,17 @@ import struct
 import time
 from dataclasses import dataclass, field
 
-from .bulkxfer import bx, register_app_type
+from .setu import setu_client, register_app_type
 
 APP_CMD, APP_REPLY, APP_ENTRY = 0x40, 0x41, 0x42
 APP_FIRST, APP_LAST = 0x40, 0x4F
 OPS = {"MKDIR": 1, "CD": 2, "OPENR": 3, "OPENW": 4, "WRITE": 5, "READ": 6, "LS": 7,
        "DELFILE": 8, "DELDIR": 9, "CLOSE": 10, "ABORT": 11}
 OP_NAMES = {v: k for k, v in OPS.items()}
-STATUS = bx.FS_STATUS
+STATUS = setu_client.FS_STATUS
 ST_OK, ST_BAD_ARG, ST_BAD_STATE, ST_BUSY = 0, 5, 6, 7
 ENTRY_FILE, ENTRY_DIR = 0, 1
-SHORT_MAX = 242                                      # BulkXfer short payload
+SHORT_MAX = 242                                      # SETU short payload
 ARG_MAX, READ_MAX, ENTRY_PATH_MAX = SHORT_MAX - 2, SHORT_MAX - 3, SHORT_MAX - 6
 TIMEOUT = 15.0                                       # one command (flash work: erase, sync)
 
@@ -226,11 +226,11 @@ register_app_type(APP_ENTRY, "FS_ENTRY", _entry)
 
 # ---- session -----------------------------------------------------------------------
 class FileSystemSession:
-    """Runs file commands one at a time. `blk` needs send_short(app_type, payload)
-    and short_q (an asyncio.Queue of (app_type, payload)), as BulkXferClient has."""
+    """Runs file commands one at a time. `setu_cli` needs send_short(app_type, payload)
+    and short_q (an asyncio.Queue of (app_type, payload)), as SETUClient has."""
 
-    def __init__(self, blk, log=print, timeout: float = None):
-        self.blk = blk
+    def __init__(self, setu_cli, log=print, timeout: float = None):
+        self.setu_cli = setu_cli
         self.log = log
         self.timeout = timeout                        # None: TIMEOUT, read at each command
         self.seq = 0
@@ -238,16 +238,16 @@ class FileSystemSession:
     async def command(self, op, arg: bytes = b"") -> Reply:
         """Send one CMD and return its REPLY (whatever the status) with its ENTRYs."""
         op = OPS[op] if isinstance(op, str) else op
-        while not self.blk.short_q.empty():               # replies of an earlier command
-            self.blk.short_q.get_nowait()
+        while not self.setu_cli.short_q.empty():               # replies of an earlier command
+            self.setu_cli.short_q.get_nowait()
         self.seq = (self.seq + 1) & 0xFF
         seq = self.seq
-        await self.blk.send_short(APP_CMD, encode_cmd(seq, op, arg))
+        await self.setu_cli.send_short(APP_CMD, encode_cmd(seq, op, arg))
         entries = []
         deadline = time.perf_counter() + (TIMEOUT if self.timeout is None else self.timeout)
         while True:
             try:
-                t, p = await asyncio.wait_for(self.blk.short_q.get(),
+                t, p = await asyncio.wait_for(self.setu_cli.short_q.get(),
                                               max(0.05, deadline - time.perf_counter()))
             except asyncio.TimeoutError:
                 raise FsError(f"{OP_NAMES.get(op, op)}: no reply from the device", op=op) from None
@@ -375,7 +375,7 @@ def describe(r: Reply) -> list:
 
 
 async def run_cli(session: FileSystemSession, sub: str, rest: list, hex_data=None, from_file=None):
-    """`bulkxfer_client.py fs SUB ...` (not shell)."""
+    """`setu_client.py fs SUB ...` (not shell)."""
     log = session.log
     if sub == "get":
         if len(rest) != 2:

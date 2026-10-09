@@ -40,8 +40,8 @@ rom_start       0x00000000       0x40
 text            0x00000040      0x120
  .text.gv_Ble   0x00000040       0x30 app/libapp.a(Ble.c.obj)
                 0x00000040                gv_Ble
- .text.gi_BLKS_Init
-                0x00000070       0x50 app/libapp.a(BulkXfer_Server.c.obj)
+ .text.gi_SETUS_Init
+                0x00000070       0x50 app/libapp.a(SETU_Server.c.obj)
  .text.main     0x000000c0        0x8 app/libapp.a(main.c.obj)
  *fill*         0x000000c8        0x8
  .text.k_sleep  0x000000d0       0x90 zephyr/kernel/libkernel.a(sched.c.obj)
@@ -54,8 +54,8 @@ rodata          0x00000170       0x60
                 0x00000170       0x10 app/libapp.a(Ble.c.obj)
  .rodata.sv_Disconnected.str1.1
                 0x00000180       0x40 app/libapp.a(Ble.c.obj)
- .rodata.gi_BLKS_Init.str1.1
-                0x000001c0       0x20 app/libapp.a(BulkXfer_Server.c.obj)
+ .rodata.gi_SETUS_Init.str1.1
+                0x000001c0       0x20 app/libapp.a(SETU_Server.c.obj)
  .rodata.str1.1
                 0x000001e0       0x40 zephyr/kernel/libkernel.a(sched.c.obj)
  .rodata.k_cfg  0x000001c0       0x10 zephyr/kernel/libkernel.a(sched.c.obj)
@@ -83,10 +83,10 @@ LOAD linker stubs
 
 @pytest.fixture
 def tree(tmp_path):
-    """A repository with _ASW/_BLE, _ASW/main.c and _LIB/BulkXfer."""
+    """A repository with _ASW/_BLE, _ASW/main.c and _LIB/SETU."""
     for rel in ("_ASW/main.c", "_ASW/_BLE/Ble.c", "_ASW/_BLE/Ble.h",
-                "_ASW/_GENERIX/Helpers.h", "_LIB/BulkXfer/BulkXfer_Server.c",
-                "_LIB/BulkXfer/sub/Deep.c"):
+                "_ASW/_GENERIX/Helpers.h", "_LIB/SETU/SETU_Server.c",
+                "_LIB/SETU/sub/Deep.c"):
         p = tmp_path / rel
         p.parent.mkdir(parents=True, exist_ok=True)
         p.write_text("")
@@ -124,7 +124,7 @@ def test_one_line_and_two_line_sections(parsed):
     long = s["a_very_long_output_section_name"]
     assert (long.vma, long.size, long.lma) == (0x20000000, 0x20, 0x1d0)
     assert [(n, sz) for n, sz, _o in s["text"].inputs] == [
-        (".text.gv_Ble", 0x30), (".text.gi_BLKS_Init", 0x50),
+        (".text.gv_Ble", 0x30), (".text.gi_SETUS_Init", 0x50),
         (".text.main", 0x8), (".text.k_sleep", 0x90)]
 
 
@@ -153,14 +153,14 @@ def test_object_name(obj, name):
 def test_module_index(tree):
     index, modules, clashes = mr.module_index(str(tree), ["_ASW", "_LIB", "_NONE"])
     assert index == {"main.c.obj": "_ASW/main.c", "Ble.c.obj": "_ASW/_BLE",
-                     "BulkXfer_Server.c.obj": "_LIB/BulkXfer",
-                     "Deep.c.obj": "_LIB/BulkXfer"}
-    assert modules == ["_ASW/main.c", "_ASW/_BLE", "_LIB/BulkXfer"]
+                     "SETU_Server.c.obj": "_LIB/SETU",
+                     "Deep.c.obj": "_LIB/SETU"}
+    assert modules == ["_ASW/main.c", "_ASW/_BLE", "_LIB/SETU"]
     assert clashes == []
 
 
 def test_module_index_clash_goes_to_other(tree):
-    (tree / "_LIB" / "BulkXfer" / "Ble.c").write_text("")
+    (tree / "_LIB" / "SETU" / "Ble.c").write_text("")
     index, _modules, clashes = mr.module_index(str(tree), ["_ASW", "_LIB"])
     assert clashes == ["Ble.c.obj"]
     assert "Ble.c.obj" not in index
@@ -202,13 +202,13 @@ def rows(tree, parsed):
 
 def test_usage_per_module(rows):
     # The string pool (0x40, listed under Ble.c) goes to the other 0x60 of
-    # strings, scaled by 2/3: BulkXfer 0x20 -> 21, the kernel 43, Ble.c 0.
+    # strings, scaled by 2/3: SETU 0x20 -> 21, the kernel 43, Ble.c 0.
     # The data section counts in RAM and, by its load address, in FLASH.
     ble = rows["_ASW/_BLE"]
     assert ble["FLASH"] == 0x30 + 0x10 + 0 + 0x20
     assert ble["RAM"] == 0x20 + 0xc0
-    blk = rows["_LIB/BulkXfer"]
-    assert blk == {"FLASH": 0x50 + round(0x40 / 3), "RAM": 0, "IDT_LIST": 0}
+    setu_cli = rows["_LIB/SETU"]
+    assert setu_cli == {"FLASH": 0x50 + round(0x40 / 3), "RAM": 0, "IDT_LIST": 0}
     assert rows["_ASW/main.c"]["FLASH"] == 8
 
 
@@ -248,7 +248,7 @@ def test_format_report(rows, parsed):
     assert "FLASH (B)" in lines[1] and "RAM (B)" in lines[1]
     assert "IDT_LIST" not in text                      # unused region hidden
     labels = [ln.split()[0] for ln in lines[3:] if not ln.startswith("-")]
-    assert labels == ["_ASW/main.c", "_ASW/_BLE", "_ASW", "_LIB/BulkXfer",
+    assert labels == ["_ASW/main.c", "_ASW/_BLE", "_ASW", "_LIB/SETU",
                       "_LIB", "Other", "Total"]
     total = lines[-1].split()
     assert total[:2] == ["Total", str(0x1f0)]
@@ -283,7 +283,7 @@ def test_main_prints_and_writes(tree, tmp_path, capsys):
 
 
 def test_main_reports_clash(tree, tmp_path, capsys):
-    (tree / "_LIB" / "BulkXfer" / "Ble.c").write_text("")
+    (tree / "_LIB" / "SETU" / "Ble.c").write_text("")
     m = tmp_path / "zephyr.map"
     m.write_text(MAP)
     assert mr.main(["--map", str(m), "--root", str(tree)]) == 0

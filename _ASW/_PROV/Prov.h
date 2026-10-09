@@ -1,6 +1,6 @@
 /**
  * @file          Prov.h
- * @brief         Header file containing device provisioning over BulkXfer: hands
+ * @brief         Header file containing device provisioning over SETU: hands
  *                the CSR to the provisioner (PC acting as the CA), receives the CA
  *                certificate and the device certificate, verifies both, stores
  *                them in ITS and deletes the CSR. Provisioning is one-time until a
@@ -28,13 +28,13 @@
 /******************************************************************************/
 /**
  * @def           PROV_APP_TYPE_FIRST
- * @brief         First BulkXfer appType of the provisioning range.
+ * @brief         First SETU appType of the provisioning range.
  */
 #define PROV_APP_TYPE_FIRST                  (0x20U)
 
 /**
  * @def           PROV_APP_TYPE_LAST
- * @brief         Last BulkXfer appType of the provisioning range (inclusive).
+ * @brief         Last SETU appType of the provisioning range (inclusive).
  */
 #define PROV_APP_TYPE_LAST                   (0x2FU)
 
@@ -145,8 +145,8 @@ typedef enum
    ePRS_KEY_MISMATCH = 0x06,                 /**< Not this device's public key          */
    ePRS_SUBJECT_MISMATCH = 0x07,             /**< Subject differs from the CSR          */
    ePRS_BAD_PROFILE = 0x08,                  /**< Algorithm, CA flag or KeyUsage        */
-   ePRS_NO_PEER_SVC = 0x09,                  /**< Provisioner hosts no BulkXfer service */
-   ePRS_INTERNAL = 0x0A,                     /**< Crypto, storage, memory or BulkXfer
+   ePRS_NO_PEER_SVC = 0x09,                  /**< Provisioner hosts no SETU service */
+   ePRS_INTERNAL = 0x0A,                     /**< Crypto, storage, memory or SETU
                                                   failure                               */
    ePRS_TRANSFER = 0x0B,                     /**< CSR transfer failed                   */
 } ProvStatus_E;

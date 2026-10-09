@@ -4,9 +4,9 @@
  *                contract in _DOC/HexUpload/PROTOCOL.md (section numbers
  *                below refer to it). DataStore.c is included so its private
  *                callbacks and state can be driven directly. It registers with
- *                the real router (BulkRouter.c, included too), as in the
+ *                the real router (SETURouter.c, included too), as in the
  *                firmware, and the tests drive the Server callbacks the router
- *                hands to the stubbed BulkXfer Server API.
+ *                hands to the stubbed SETU Server API.
  *
  *                Storing an upload as a file (BEGIN / COMMIT, §7) runs on the
  *                real File System Manager (included too) over the in-memory
@@ -21,43 +21,43 @@
  */
 
 #include "DataStore.c"
-#include "BulkRouter.c"
+#include "SETURouter.c"
 #include "FileSysManager.c"
 #include "FileSysManagerFSM.c"
 #include "unity.h"
 #include "wire_vectors.h"
 
 /******************************************************************************/
-/*  Stubs of the BulkXfer Server and the GATT service                         */
+/*  Stubs of the SETU Server and the GATT service                         */
 /******************************************************************************/
 static struct bt_gatt_attr sst_ctrlAttr;
-static BlkSrvCfg_T sst_cfg;                  /* what the router passed to the Server */
-static int si_initRet;                       /* what gi_BLKS_Init returns         */
-static int si_sendRet;                       /* what gi_BLKS_SendShort returns    */
+static SETUSrvCfg_T sst_cfg;                  /* what the router passed to the Server */
+static int si_initRet;                       /* what gi_SETUS_Init returns         */
+static int si_sendRet;                       /* what gi_SETUS_SendShort returns    */
 
 typedef struct
 {
    uint8_t u8_type;
    uint8_t u8_len;
-   uint8_t u8ar_payload[BLK_MAX_SHORT_PAYLOAD];
+   uint8_t u8ar_payload[SETU_MAX_SHORT_PAYLOAD];
    int64_t i64_timeoutMs;
 } SentShort_T;
 
 static SentShort_T sstar_sent[8];
 static uint32_t su32_sentCount;
 
-const struct bt_gatt_attr *gstpt_BulkSvc_Init(void)
+const struct bt_gatt_attr *gstpt_SETUSvc_Init(void)
 {
    return &sst_ctrlAttr;
 }
 
-int gi_BLKS_Init(const BlkSrvCfg_T *stpt_cfg)
+int gi_SETUS_Init(const SETUSrvCfg_T *stpt_cfg)
 {
    sst_cfg = *stpt_cfg;
    return si_initRet;
 }
 
-int gi_BLKS_SendShort(uint8_t u8_appType, const void *vpt_data, uint8_t u8_len,
+int gi_SETUS_SendShort(uint8_t u8_appType, const void *vpt_data, uint8_t u8_len,
    k_timeout_t t_timeout)
 {
    SentShort_T *stpt_s = &sstar_sent[su32_sentCount % ARRAY_SIZE(sstar_sent)];
@@ -96,7 +96,7 @@ static uint32_t su32_MakeObject(uint32_t u32_addr, const uint8_t *u8pt_data, uin
 }
 
 /** Feed an object through the Server callbacks in u16_chunk-byte pieces. */
-static void sv_Receive(uint32_t u32_objLen, uint16_t u16_chunk, BlkStatus_E e_status)
+static void sv_Receive(uint32_t u32_objLen, uint16_t u16_chunk, SETUStatus_E e_status)
 {
    uint32_t u32_off;
 
@@ -167,7 +167,7 @@ void setUp(void)
    gv_SimLogClear();
    // As main() does: register, then start the Server
    TEST_ASSERT_EQUAL_INT(0, gi_DataStore_Init());
-   TEST_ASSERT_EQUAL_INT(0, gi_BulkRouter_Start());
+   TEST_ASSERT_EQUAL_INT(0, gi_SETURouter_Start());
 }
 
 void tearDown(void) {}
@@ -186,15 +186,15 @@ static void test_InitRegistersServer(void)
 
    // Registering after the Server has started is refused and logged
    TEST_ASSERT_EQUAL_INT(-EALREADY, gi_DataStore_Init());
-   TEST_ASSERT_NOT_NULL(gcpt_SimLogFind("gi_BulkRouter_Register failed"));
+   TEST_ASSERT_NOT_NULL(gcpt_SimLogFind("gi_SETURouter_Register failed"));
 
    // A Server start failure is reported
    su8_routeCnt = 0U;
    sb_isStarted = false;
    si_initRet = -EIO;
    TEST_ASSERT_EQUAL_INT(0, gi_DataStore_Init());
-   TEST_ASSERT_EQUAL_INT(-EIO, gi_BulkRouter_Start());
-   TEST_ASSERT_NOT_NULL(gcpt_SimLogFind("gi_BLKS_Init failed"));
+   TEST_ASSERT_EQUAL_INT(-EIO, gi_SETURouter_Start());
+   TEST_ASSERT_NOT_NULL(gcpt_SimLogFind("gi_SETUS_Init failed"));
 }
 
 /******************************************************************************/
@@ -580,7 +580,7 @@ static void test_BeginBadNames(void)
       TEST_ASSERT_FALSE_MESSAGE(gb_DataStore_UploadOpen(), scptar_bad[i]);
    }
 
-   // Empty or too long: refused at once, on the BulkXfer thread
+   // Empty or too long: refused at once, on the SETU thread
    su32_sentCount = 0U;
    sst_cfg.fpt_onRxShort(DS_APP_TYPE_BEGIN, (const uint8_t *)"", 0U);
    sv_AssertLastFile("file_begin_bad_name");

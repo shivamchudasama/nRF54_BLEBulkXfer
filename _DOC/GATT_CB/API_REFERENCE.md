@@ -18,12 +18,12 @@ Applications include only `GATT_GenericCallbacks.h`.
 **Dependencies:** Zephyr kernel (`k_mutex`), `zephyr/bluetooth/gatt.h`, and
 [`AppLog`](../../_ASW/_APP_LOG) (`AppLog.h`) for error logging. No Kconfig of its own.
 
-**Used by:** the BulkXfer Server — its DATA characteristic uses `gt_GATT_GenericWrite` with
-`gt_BLKS_DataWriteHook` as `fpt_customWriteCb`, and its Caps characteristic uses
-`gt_GATT_GenericRead`. See [BulkSvc.c](../../_ASW/_BLK_SVC/BulkSvc.c)
+**Used by:** the SETU Server — its DATA characteristic uses `gt_GATT_GenericWrite` with
+`gt_SETUS_DataWriteHook` as `fpt_customWriteCb`, and its Caps characteristic uses
+`gt_GATT_GenericRead`. See [SETUSvc.c](../../_ASW/_SETU_SVC/SETUSvc.c)
 for a complete service built on this library.
 
-**Build:** [`_LIB/CMakeLists.txt`](../../_LIB/CMakeLists.txt) adds `GATT_CB` before `BulkXfer`.
+**Build:** [`_LIB/CMakeLists.txt`](../../_LIB/CMakeLists.txt) adds `GATT_CB` before `SETU`.
 Its own `CMakeLists.txt` globs `*.c` into `app` and puts the folder on the include path.
 
 ---

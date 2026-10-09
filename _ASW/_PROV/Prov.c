@@ -1,14 +1,14 @@
 /**
  * @file          Prov.c
- * @brief         Source file containing device provisioning over BulkXfer.
+ * @brief         Source file containing device provisioning over SETU.
  *
  *                The provisioner (the PC GUI, acting as the CA) drives the flow
  *                with short messages and transfers in the appType range
  *                PROV_APP_TYPE_FIRST..LAST, which this module registers with the
- *                BulkXfer router:
+ *                SETU router:
  *                - GET_STATUS -> STATUS;
- *                - CSR_REQ -> this device attaches its BulkXfer Client to the
- *                  provisioner's BulkXfer service and sends the CSR;
+ *                - CSR_REQ -> this device attaches its SETU Client to the
+ *                  provisioner's SETU service and sends the CSR;
  *                - CA_CERT, then DEV_CERT transfers -> each is verified
  *                  (DeviceCert_Verify.c) and answered with RESULT. The CA is held
  *                  in RAM; only once the device certificate verifies against it
@@ -16,7 +16,7 @@
  *                - DEPROVISION (or the DK button, ProvButton.c) -> wipe key, CSR
  *                  and certificates, generate a fresh key and CSR -> RESULT.
  *
- *                BulkXfer callbacks run on the engine thread with the BulkXfer
+ *                SETU callbacks run on the engine thread with the SETU
  *                lock held, so they only check, copy and post an event. Everything
  *                else (Client attach and send, certificate verification, PEM
  *                logging, replies) runs on the low-priority provisioning thread.
@@ -43,8 +43,8 @@
 #include <zephyr/sys/base64.h>
 #include <zephyr/logging/log_ctrl.h>
 #include <psa/crypto.h>
-#include "BulkXfer.h"
-#include "BulkRouter.h"
+#include "SETU.h"
+#include "SETURouter.h"
 #include "CSR_Generator.h"
 #include "DeviceCert.h"
 #include "DeviceCert_Verify.h"
@@ -58,7 +58,7 @@
 /******************************************************************************/
 /**
  * @def           PROV_EVENT_QUEUE_LEN
- * @brief         Depth of the event queue between the BulkXfer callbacks and the
+ * @brief         Depth of the event queue between the SETU callbacks and the
  *                provisioning thread.
  */
 #define PROV_EVENT_QUEUE_LEN                 (8U)
@@ -74,8 +74,8 @@
 
 /**
  * @def           PROV_PRIORITY
- * @brief         Priority of the provisioning thread. Below the BulkXfer engine
- *                thread (BLK_THREAD_PRIORITY), like the data store dump thread.
+ * @brief         Priority of the provisioning thread. Below the SETU engine
+ *                thread (SETU_THREAD_PRIORITY), like the data store dump thread.
  */
 #define PROV_PRIORITY                        (10)
 
@@ -137,7 +137,7 @@ typedef struct
 {
    uint8_t u8_type;                          /**< ProvEventType_E                     */
    uint8_t u8_appType;                       /**< appType the event refers to         */
-   uint8_t u8_status;                        /**< ProvStatus_E or BlkStatus_E         */
+   uint8_t u8_status;                        /**< ProvStatus_E or SETUStatus_E         */
    int32_t i32_value;                        /**< Length or error code                */
 } ProvEvent_T;
 
@@ -156,10 +156,10 @@ static void sv_Post(uint8_t u8_type, uint8_t u8_appType, uint8_t u8_status, int3
 static int si_ProvRxStart(uint8_t u8_appType, uint32_t u32_totalLen);
 static int si_ProvRxData(uint8_t u8_appType, uint32_t u32_offset,
    const uint8_t *u8pt_data, uint16_t u16_len);
-static void sv_ProvRxDone(uint8_t u8_appType, BlkStatus_E e_status, uint32_t u32_totalLen);
+static void sv_ProvRxDone(uint8_t u8_appType, SETUStatus_E e_status, uint32_t u32_totalLen);
 static void sv_ProvRxShort(uint8_t u8_appType, const uint8_t *u8pt_data, uint8_t u8_len);
 static void sv_ProvCliReady(struct bt_conn *stpt_conn, int i_status);
-static void sv_ProvTxDone(uint8_t u8_appType, BlkStatus_E e_status);
+static void sv_ProvTxDone(uint8_t u8_appType, SETUStatus_E e_status);
 static void sv_SendResult(uint8_t u8_refAppType, ProvStatus_E e_status);
 static void sv_SendStatus(void);
 static void sv_SendCsr(void);
@@ -188,7 +188,7 @@ static void sv_ProvThread(void *vpt_p1, void *vpt_p2, void *vpt_p3);
 /**
  * @var           st_state
  * @brief         ProvState_E. Written by the provisioning thread, read by the
- *                BulkXfer callbacks.
+ *                SETU callbacks.
  */
 static atomic_t st_state = ATOMIC_INIT(ePS_NO_KEY);
 
@@ -222,7 +222,7 @@ static uint8_t su8ar_pubKeyHash[PROV_SHA256_LEN];
 
 /**
  * @var           sst_provMsgq
- * @brief         Events from the BulkXfer callbacks to the provisioning thread.
+ * @brief         Events from the SETU callbacks to the provisioning thread.
  */
 K_MSGQ_DEFINE(sst_provMsgq, sizeof(ProvEvent_T), PROV_EVENT_QUEUE_LEN, 4);
 
@@ -241,7 +241,7 @@ K_THREAD_DEFINE(sst_provThread, PROV_STACK_SIZE, sv_ProvThread, NULL, NULL, NULL
 /**
  * @extern        gstpt_BLE_GetHostConn
  * @brief         Host link (the provisioner's), owned by ConnectionHandling.c:
- *                a new reference, or NULL. The BulkXfer Client attaches to it
+ *                a new reference, or NULL. The SETU Client attaches to it
  *                when the provisioner asks for the CSR.
  */
 extern struct bt_conn *gstpt_BLE_GetHostConn(void);
@@ -285,7 +285,7 @@ static void sv_Post(uint8_t u8_type, uint8_t u8_appType, uint8_t u8_status, int3
 
 /**
  * @private       si_ProvRxStart
- * @brief         BlkRxStart_F: accept a CA_CERT or DEV_CERT transfer when the
+ * @brief         SETURxStart_F: accept a CA_CERT or DEV_CERT transfer when the
  *                state allows it, it is 1..DEVICE_CERT_MAX_DER_LEN bytes, and no
  *                other certificate is being handled. A refusal is also reported
  *                with RESULT.
@@ -340,7 +340,7 @@ static int si_ProvRxStart(uint8_t u8_appType, uint32_t u32_totalLen)
 
 /**
  * @private       si_ProvRxData
- * @brief         BlkRxData_F: copy an in-order chunk into the staging buffer.
+ * @brief         SETURxData_F: copy an in-order chunk into the staging buffer.
  * @param[in]     u8_appType Application type (checked at START).
  * @param[in]     u32_offset Object offset of the chunk.
  * @param[in]     u8pt_data Chunk data, valid only during the call.
@@ -368,14 +368,14 @@ static int si_ProvRxData(uint8_t u8_appType, uint32_t u32_offset,
 
 /**
  * @private       sv_ProvRxDone
- * @brief         BlkRxDone_F: hand a complete, CRC-verified certificate to the
+ * @brief         SETURxDone_F: hand a complete, CRC-verified certificate to the
  *                provisioning thread; release the staging buffer otherwise.
  * @param[in]     u8_appType Application type.
  * @param[in]     e_status Result of the transfer.
  * @param[in]     u32_totalLen Object size.
  * @return        None.
  */
-static void sv_ProvRxDone(uint8_t u8_appType, BlkStatus_E e_status, uint32_t u32_totalLen)
+static void sv_ProvRxDone(uint8_t u8_appType, SETUStatus_E e_status, uint32_t u32_totalLen)
 {
    // Check if the certificate arrived complete
    if (e_status == eBS_OK)
@@ -392,7 +392,7 @@ static void sv_ProvRxDone(uint8_t u8_appType, BlkStatus_E e_status, uint32_t u32
 
 /**
  * @private       sv_ProvRxShort
- * @brief         BlkRxShort_F: GET_STATUS, CSR_REQ and DEPROVISION; other types
+ * @brief         SETURxShort_F: GET_STATUS, CSR_REQ and DEPROVISION; other types
  *                are ignored.
  * @param[in]     u8_appType Application type.
  * @param[in]     u8pt_data Payload (unused: the messages are empty).
@@ -424,8 +424,8 @@ static void sv_ProvRxShort(uint8_t u8_appType, const uint8_t *u8pt_data, uint8_t
 
 /**
  * @private       sv_ProvCliReady
- * @brief         BlkCliReady_F: result of attaching the Client to the
- *                provisioner's BulkXfer service.
+ * @brief         SETUCliReady_F: result of attaching the Client to the
+ *                provisioner's SETU service.
  * @param[in]     stpt_conn Connection (unused).
  * @param[in]     i_status 0 when ready, negative errno otherwise.
  * @return        None.
@@ -439,12 +439,12 @@ static void sv_ProvCliReady(struct bt_conn *stpt_conn, int i_status)
 
 /**
  * @private       sv_ProvTxDone
- * @brief         BlkTxDone_F: result of the CSR transfer.
+ * @brief         SETUTxDone_F: result of the CSR transfer.
  * @param[in]     u8_appType Application type (PROV_APP_TYPE_CSR).
  * @param[in]     e_status Result reported by the provisioner, or a local error.
  * @return        None.
  */
-static void sv_ProvTxDone(uint8_t u8_appType, BlkStatus_E e_status)
+static void sv_ProvTxDone(uint8_t u8_appType, SETUStatus_E e_status)
 {
    sv_Post(ePE_TX_DONE, u8_appType, (uint8_t)e_status, 0);
 }
@@ -464,7 +464,7 @@ static void sv_SendResult(uint8_t u8_refAppType, ProvStatus_E e_status)
    u8ar_payload[0] = u8_refAppType;
    u8ar_payload[1] = (uint8_t)e_status;
 
-   i_ret = gi_BLKS_SendShort(PROV_APP_TYPE_RESULT, u8ar_payload, sizeof(u8ar_payload),
+   i_ret = gi_SETUS_SendShort(PROV_APP_TYPE_RESULT, u8ar_payload, sizeof(u8ar_payload),
       K_MSEC(PROV_SHORT_TIMEOUT_MS));
 
    // Check if the result could not be sent (no link, not subscribed, no credit)
@@ -497,7 +497,7 @@ static void sv_SendStatus(void)
    sys_put_le16(u16_csrLen, &u8ar_payload[2]);
    memcpy(&u8ar_payload[4], su8ar_pubKeyHash, sizeof(su8ar_pubKeyHash));
 
-   i_ret = gi_BLKS_SendShort(PROV_APP_TYPE_STATUS, u8ar_payload, sizeof(u8ar_payload),
+   i_ret = gi_SETUS_SendShort(PROV_APP_TYPE_STATUS, u8ar_payload, sizeof(u8ar_payload),
       K_MSEC(PROV_SHORT_TIMEOUT_MS));
 
    // Check if the status could not be sent
@@ -510,14 +510,14 @@ static void sv_SendStatus(void)
 /**
  * @private       sv_SendCsr
  * @brief         Start the CSR transfer on the attached Client. gst_CSRData stays
- *                unchanged until the transfer ends, as BulkXfer requires.
+ *                unchanged until the transfer ends, as SETU requires.
  * @return        None.
  */
 static void sv_SendCsr(void)
 {
    int i_ret;
 
-   i_ret = gi_BLKC_SendBuffer(PROV_APP_TYPE_CSR, gst_CSRData.u8ar_CSR, gst_CSRData.u16_CSRLen);
+   i_ret = gi_SETUC_SendBuffer(PROV_APP_TYPE_CSR, gst_CSRData.u8ar_CSR, gst_CSRData.u16_CSRLen);
 
    // Check if the transfer could not start
    if (i_ret != 0)
@@ -537,7 +537,7 @@ static void sv_SendCsr(void)
  * @private       sv_HandleCsrReq
  * @brief         Serve CSR_REQ: send the CSR at once if the Client is attached
  *                to the host link, otherwise attach it to the provisioner's
- *                BulkXfer service first (the transfer then starts on
+ *                SETU service first (the transfer then starts on
  *                ePE_CLI_READY).
  * @return        None.
  */
@@ -561,7 +561,7 @@ static void sv_HandleCsrReq(void)
       // The Client attaches to the provisioner's (host link's) service, moved
       // off another link if needed
       stpt_host = gstpt_BLE_GetHostConn();
-      i_ret = gi_BulkRouter_ClientAttach(stpt_host, PROV_APP_TYPE_CSR_REQ);
+      i_ret = gi_SETURouter_ClientAttach(stpt_host, PROV_APP_TYPE_CSR_REQ);
 
       // Check if a host reference was taken
       if (stpt_host != NULL)
@@ -578,7 +578,7 @@ static void sv_HandleCsrReq(void)
       else if (i_ret == 0)
       {
          sb_csrTxPending = true;
-         APP_LOG_INF("attaching to the provisioner's BulkXfer service");
+         APP_LOG_INF("attaching to the provisioner's SETU service");
       }
       else
       {
@@ -972,7 +972,7 @@ static void sv_HandleEvent(const ProvEvent_T *stpt_event)
          }
          else
          {
-            APP_LOG_WRN("no BulkXfer service on the provisioner (%d)", stpt_event->i32_value);
+            APP_LOG_WRN("no SETU service on the provisioner (%d)", stpt_event->i32_value);
             sb_csrTxPending = false;
             sv_SendResult(PROV_APP_TYPE_CSR_REQ, ePRS_NO_PEER_SVC);
          }
@@ -1058,17 +1058,17 @@ static void sv_ProvThread(void *vpt_p1, void *vpt_p2, void *vpt_p3)
  * @public        gi_Prov_Init
  * @brief         Restore the provisioning state from storage (stored certificates
  *                re-verified, or the device key and CSR generated or loaded), register
- *                the provisioning appType range with the BulkXfer router and
- *                with its Client callbacks (the router shares the BulkXfer
- *                Client). Call once from main(), before gi_BulkRouter_Start()
+ *                the provisioning appType range with the SETU router and
+ *                with its Client callbacks (the router shares the SETU
+ *                Client). Call once from main(), before gi_SETURouter_Start()
  *                and before advertising.
  * @return        0 on success (also when no key could be made: the device then
  *                stays in ePS_NO_KEY and refuses provisioning until a wipe),
- *                otherwise the error from gi_BulkRouter_Register().
+ *                otherwise the error from gi_SETURouter_Register().
  */
 int gi_Prov_Init(void)
 {
-   BulkRoute_T st_route = { 0 };
+   SETURoute_T st_route = { 0 };
    int i_ret;
 
    sv_RestoreAtBoot();
@@ -1082,12 +1082,12 @@ int gi_Prov_Init(void)
    st_route.fpt_onTxDone = sv_ProvTxDone;
    st_route.fpt_onCliReady = sv_ProvCliReady;
 
-   i_ret = gi_BulkRouter_Register(&st_route);
+   i_ret = gi_SETURouter_Register(&st_route);
 
    // Check if the provisioning range was registered
    if (i_ret != 0)
    {
-      APP_LOG_ERR("gi_BulkRouter_Register failed (%d)", i_ret);
+      APP_LOG_ERR("gi_SETURouter_Register failed (%d)", i_ret);
    }
 
    return i_ret;

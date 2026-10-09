@@ -4,7 +4,7 @@
  *                provisioned devices (CBAP phase 2, AN1396 §4.2), orchestrated by
  *                a host (the PC GUI) over the Pairing GATT service. The two
  *                devices connect to each other, exchange and verify their device
- *                certificates over BulkXfer, exchange their LE Secure Connections
+ *                certificates over SETU, exchange their LE Secure Connections
  *                OOB data signed with their device keys, verify the signatures,
  *                and pair with the OOB method (LE Secure Connections, level 4,
  *                bonded). Once bonded, the two reconnect by themselves (after a
@@ -34,13 +34,13 @@
 /******************************************************************************/
 /**
  * @def           PAIR_APP_TYPE_FIRST
- * @brief         First BulkXfer appType of the pairing range.
+ * @brief         First SETU appType of the pairing range.
  */
 #define PAIR_APP_TYPE_FIRST                  (0x30U)
 
 /**
  * @def           PAIR_APP_TYPE_LAST
- * @brief         Last BulkXfer appType of the pairing range (inclusive).
+ * @brief         Last SETU appType of the pairing range (inclusive).
  */
 #define PAIR_APP_TYPE_LAST                   (0x3FU)
 
@@ -114,7 +114,7 @@ typedef enum
 {
    ePST_IDLE = 0,                            /**< Nothing running, no bond             */
    ePST_ARMED = 1,                           /**< Advertising to / scanning for peer   */
-   ePST_CONNECTED = 2,                       /**< Peer link up, BulkXfer attaching     */
+   ePST_CONNECTED = 2,                       /**< Peer link up, SETU attaching     */
    ePST_CERT_EXCHANGE = 3,                   /**< Certificates being exchanged         */
    ePST_CERT_VERIFIED = 4,                   /**< Peer certificate verified            */
    ePST_OOB_EXCHANGE = 5,                    /**< Signed OOB data being exchanged      */
@@ -132,14 +132,14 @@ typedef enum
    ePER_NONE = 0,                            /**< No error                             */
    ePER_NOT_PROVISIONED = 1,                 /**< This device is not provisioned       */
    ePER_BAD_ARG = 2,                         /**< Peer address is this device's own    */
-   ePER_BUSY = 3,                            /**< A BulkXfer transfer is running       */
+   ePER_BUSY = 3,                            /**< A SETU transfer is running       */
    ePER_TIMEOUT = 4,                         /**< Detail: state when it expired        */
    ePER_CONNECT = 5,                         /**< Detail: HCI error or errno           */
-   ePER_NO_PEER_SVC = 6,                     /**< Peer has no BulkXfer service         */
+   ePER_NO_PEER_SVC = 6,                     /**< Peer has no SETU service         */
    ePER_PEER_CERT = 7,                       /**< Detail: DeviceCertStatus_E           */
    ePER_OOB_SIG = 8,                         /**< Peer OOB signature does not verify   */
    ePER_SMP = 9,                             /**< Detail: bt_security_err or level     */
-   ePER_TRANSFER = 10,                       /**< Detail: BlkStatus_E                  */
+   ePER_TRANSFER = 10,                       /**< Detail: SETUStatus_E                  */
    ePER_SECURED = 11,                        /**< Detail: ATT error of the SECURED write */
    ePER_LINK_LOST = 12,                      /**< Detail: HCI disconnect reason        */
    ePER_CANCELLED = 13,                      /**< CANCEL from the host                 */

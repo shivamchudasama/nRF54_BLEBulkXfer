@@ -3,9 +3,9 @@
  * @brief         Host unit tests for certificate-based pairing (_ASW/_PAIR/Pair.c):
  *                the host's CONTROL commands and STATUS, both roles from START
  *                to PAIRED, every failure with its error and detail, the
- *                guards on BulkXfer objects, SMP and SECURED, timeouts, link
+ *                guards on SETU objects, SMP and SECURED, timeouts, link
  *                loss, CANCEL, UNPAIR and the provisioning wipe. Pair.c is
- *                included; the BT stack, BulkXfer, the router, certificate
+ *                included; the BT stack, SETU, the router, certificate
  *                verification, OOB signing (tested on real crypto by
  *                test_pair_oob.c), provisioning, the DK LEDs and the service
  *                are stubbed and record their calls. Frames and statuses are
@@ -278,30 +278,30 @@ int bt_gatt_write(struct bt_conn *conn, struct bt_gatt_write_params *params)
 }
 
 /******************************************************************************/
-/*  Stubs: BulkXfer, router, certificates, OOB signing, provisioning, LED     */
+/*  Stubs: SETU, router, certificates, OOB signing, provisioning, LED     */
 /******************************************************************************/
-static BulkRoute_T sst_route;
+static SETURoute_T sst_route;
 static int si_registerRet;
 static uint32_t su32_filterSet, su32_filterClear;
 static uint8_t su8_filterFirst, su8_filterLast;
 static bool sb_filterOn;
 
-int gi_BulkRouter_Register(const BulkRoute_T *stpt_route) { sst_route = *stpt_route; return si_registerRet; }
-void gv_BulkRouter_SetFilter(uint8_t u8_first, uint8_t u8_last)
+int gi_SETURouter_Register(const SETURoute_T *stpt_route) { sst_route = *stpt_route; return si_registerRet; }
+void gv_SETURouter_SetFilter(uint8_t u8_first, uint8_t u8_last)
 {
    su32_filterSet++;
    su8_filterFirst = u8_first;
    su8_filterLast = u8_last;
    sb_filterOn = true;
 }
-void gv_BulkRouter_ClearFilter(void) { su32_filterClear++; sb_filterOn = false; }
+void gv_SETURouter_ClearFilter(void) { su32_filterClear++; sb_filterOn = false; }
 
 static int si_attachRet;
 static uint32_t su32_attach;
 static struct bt_conn *sstpt_attachConn;
 static uint8_t su8_attachOwner;
 
-int gi_BulkRouter_ClientAttach(struct bt_conn *stpt_conn, uint8_t u8_ownerAppType)
+int gi_SETURouter_ClientAttach(struct bt_conn *stpt_conn, uint8_t u8_ownerAppType)
 {
    su32_attach++;
    sstpt_attachConn = stpt_conn;
@@ -316,17 +316,17 @@ static uint32_t su32_detach;
 static bool sb_rxBusy, sb_txBusy;
 static uint32_t su32_abortRx, su32_abortTx;
 
-int gi_BLKS_Rebind(struct bt_conn *stpt_conn)
+int gi_SETUS_Rebind(struct bt_conn *stpt_conn)
 {
    su32_rebind++;
    if (si_rebindRet == 0) { sstpt_srvConn = stpt_conn; }
    return si_rebindRet;
 }
-int gi_BLKC_Detach(void) { su32_detach++; return 0; }
-bool gb_BLKS_IsRxBusy(void) { return sb_rxBusy; }
-bool gb_BLKC_IsTxBusy(void) { return sb_txBusy; }
-void gv_BLKS_AbortRx(void) { su32_abortRx++; }
-void gv_BLKC_AbortTx(void) { su32_abortTx++; }
+int gi_SETUC_Detach(void) { su32_detach++; return 0; }
+bool gb_SETUS_IsRxBusy(void) { return sb_rxBusy; }
+bool gb_SETUC_IsTxBusy(void) { return sb_txBusy; }
+void gv_SETUS_AbortRx(void) { su32_abortRx++; }
+void gv_SETUC_AbortTx(void) { su32_abortTx++; }
 
 static int si_sendRet;
 static uint32_t su32_send;
@@ -334,7 +334,7 @@ static uint8_t su8ar_sendTypes[8];
 static const void *svptar_sendData[8];
 static uint32_t su32ar_sendLen[8];
 
-int gi_BLKC_SendBuffer(uint8_t u8_appType, const void *vpt_data, uint32_t u32_len)
+int gi_SETUC_SendBuffer(uint8_t u8_appType, const void *vpt_data, uint32_t u32_len)
 {
    if (si_sendRet == 0)
    {
@@ -511,7 +511,7 @@ static void sv_LinkUp(PairRole_E e_role)
 /** Send a peer object through the route, in 20-byte chunks (MTU 23). */
 static uint8_t su8ar_obj[DEVICE_CERT_MAX_DER_LEN + 1U];
 
-static int si_RxObject(uint8_t u8_type, uint32_t u32_len, BlkStatus_E e_status)
+static int si_RxObject(uint8_t u8_type, uint32_t u32_len, SETUStatus_E e_status)
 {
    uint32_t u32_off;
    int i_ret;
@@ -975,7 +975,7 @@ static void test_StartRefusals(void)
    gv_Pair_OnBtReady();
    sv_RunPair();
 
-   // BulkXfer busy with the host
+   // SETU busy with the host
    sb_rxBusy = true;
    sv_StartRun(ePRL_CENTRAL);
    sv_AssertFailed(ePER_BUSY, 0U);
@@ -1018,7 +1018,7 @@ static void test_ClaimTakesOnlyThePeerOfARun(void)
    TEST_ASSERT_FALSE_MESSAGE(gb_Pair_IsAdvertising(), "connectable advertising ends with the link");
 }
 
-static void test_LinkUpMovesBulkXferToThePeer(void)
+static void test_LinkUpMovesSETUToThePeer(void)
 {
    sv_StartRun(ePRL_CENTRAL);
    sv_LinkUp(ePRL_CENTRAL);
@@ -1059,10 +1059,10 @@ static void test_LinkUpFailures(void)
    sv_AssertFailed(ePER_BUSY, (uint8_t)-EBUSY);
    TEST_ASSERT_EQUAL_PTR_MESSAGE(&sst_peer, sstpt_disconnected, "the peer link is dropped");
    sv_LinkDown(0x16U);
-   TEST_ASSERT_FALSE_MESSAGE(sb_filterOn, "the host gets BulkXfer back");
+   TEST_ASSERT_FALSE_MESSAGE(sb_filterOn, "the host gets SETU back");
    si_rebindRet = 0;
 
-   // No BulkXfer service on the peer, refused at once or by discovery
+   // No SETU service on the peer, refused at once or by discovery
    si_attachRet = -ENOTCONN;
    sv_StartRun(ePRL_PERIPHERAL);
    sv_LinkUp(ePRL_PERIPHERAL);
@@ -1223,7 +1223,7 @@ static void test_CentralPairs(void)
    TEST_ASSERT_EQUAL_UINT8(ePER_NONE, su8ar_statusNow[1]);
    TEST_ASSERT_EQUAL_HEX8_ARRAY(su8ar_statusNow, su8ar_notified, PAIR_STATUS_LEN);
    TEST_ASSERT_FALSE(gb_Pair_IsRunning());
-   // The link stays up, encrypted; BulkXfer goes back to the host
+   // The link stays up, encrypted; SETU goes back to the host
    TEST_ASSERT_EQUAL_UINT32(0U, su32_disconnect);
    TEST_ASSERT_FALSE(sb_filterOn);
    TEST_ASSERT_EQUAL_PTR(&sst_host, sstpt_srvConn);
@@ -1824,7 +1824,7 @@ static void test_CentralReconnectsAndBlinks(void)
    TEST_ASSERT_EQUAL_HEX8_ARRAY(&sst_addrB, &sst_createPeer, 7U);
    TEST_ASSERT_EQUAL_UINT16(PAIR_CONN_INTERVAL, sst_createParam.interval_min);
 
-   // The central encrypts with the stored keys; BulkXfer stays with the host
+   // The central encrypts with the stored keys; SETU stays with the host
    TEST_ASSERT_EQUAL_UINT32_MESSAGE(1U, su32_setSec, "encryption at level 4");
    TEST_ASSERT_EQUAL_UINT32(0U, su32_filterSet);
    TEST_ASSERT_EQUAL_UINT32(0U, su32_rebind);
@@ -1852,7 +1852,7 @@ static void test_CentralReconnectsAndBlinks(void)
    sv_LinkDown(0x08U);
    TEST_ASSERT_EQUAL_UINT8(ePST_PAIRED, su8_State());
    TEST_ASSERT_EQUAL_UINT32(0U, su32_ledValue);
-   TEST_ASSERT_EQUAL_UINT32_MESSAGE(0U, su32_filterClear, "BulkXfer never moved");
+   TEST_ASSERT_EQUAL_UINT32_MESSAGE(0U, su32_filterClear, "SETU never moved");
    TEST_ASSERT_EQUAL_UINT32(0U, su32_detach);
    su32_ledSets = 0U;
    sv_AdvanceMs(PAIR_RECONNECT_DELAY_MS - 1);
@@ -2012,7 +2012,7 @@ static void test_UnpairStopsTheReconnection(void)
    TEST_ASSERT_EQUAL_UINT32(1U, su32_settingsDelete);
    TEST_ASSERT_FALSE(gb_Pair_ClaimConn(&sst_peer, 0U));
 
-   // While the bonded link blinks: the link goes, BulkXfer of the host is untouched
+   // While the bonded link blinks: the link goes, SETU of the host is untouched
    sv_RestoreBond(ePRL_PERIPHERAL);
    sv_BondLinkUp(ePRL_PERIPHERAL);
    sv_BondSecurity(BT_SECURITY_L4, BT_SECURITY_ERR_SUCCESS);
@@ -2128,7 +2128,7 @@ int main(void)
    RUN_TEST(test_StartAsCentralScansAndConnects);
    RUN_TEST(test_StartRefusals);
    RUN_TEST(test_ClaimTakesOnlyThePeerOfARun);
-   RUN_TEST(test_LinkUpMovesBulkXferToThePeer);
+   RUN_TEST(test_LinkUpMovesSETUToThePeer);
    RUN_TEST(test_LinkUpFailures);
    RUN_TEST(test_LateLinkAfterTheRunIsDropped);
    RUN_TEST(test_PeerObjectsAreChecked);

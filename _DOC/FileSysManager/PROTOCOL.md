@@ -3,12 +3,12 @@
 This is the contract between the firmware's file commands ([`_ASW/_FS_CMD`](../../_ASW/_FS_CMD),
 on top of the [File System Manager](README.md)) and a host that drives the device's file
 system: the GUI's Files page ([`_TOOLS/BleHostGUI`](../../_TOOLS/BleHostGUI/README.md)) and
-`bulkxfer_client.py fs`. It is the FileSystemPoC's UART test harness, moved onto BLE: the same
+`setu_client.py fs`. It is the FileSystemPoC's UART test harness, moved onto BLE: the same
 commands, now with a result for each.
 
-Everything travels as BulkXfer **short messages** on the host link: the host writes them to the
-device's DATA characteristic and the device notifies on CTRL. The BulkXfer service, the frame
-format and link setup are in [../BulkXfer/PROTOCOL.md](../BulkXfer/PROTOCOL.md) and
+Everything travels as SETU **short messages** on the host link: the host writes them to the
+device's DATA characteristic and the device notifies on CTRL. The SETU service, the frame
+format and link setup are in [../SETU/PROTOCOL.md](../SETU/PROTOCOL.md) and
 [../HexUpload/PROTOCOL.md §1–2](../HexUpload/PROTOCOL.md#1-discovery). A short frame is
 `[u8 payload length][u8 appType][payload]`, payload at most 242 bytes.
 
@@ -22,7 +22,7 @@ format and link setup are in [../BulkXfer/PROTOCOL.md](../BulkXfer/PROTOCOL.md) 
 
 `seq` is chosen by the host and echoed in the REPLY and ENTRYs of that command; `op` is echoed
 in the REPLY. `0x43`–`0x4F` are reserved. A transfer (START) with an appType of the range is
-refused. While the BulkXfer Server is bound to a peer device for pairing, the router admits
+refused. While the SETU Server is bound to a peer device for pairing, the router admits
 only `0x30`–`0x3F`, so a peer cannot reach the file commands.
 
 ENTRY `type`: `0` file, `1` directory (size `0`). Paths are UTF-8, absolute

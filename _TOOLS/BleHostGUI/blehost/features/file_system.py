@@ -11,7 +11,7 @@ import os
 import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
 
-from ..protocols import bulkxfer
+from ..protocols import setu
 from ..protocols import filesystem as fsp
 from ..ui import theme as th
 from ..ui.widgets import Disclosure, Pill, StatTile, card, set_icon, set_var
@@ -162,7 +162,7 @@ class FileSystemFeature(Feature):
     # ---- state shown ---------------------------------------------------------
     @property
     def _available(self) -> bool:
-        svc = self.ctx.services.get(bulkxfer.BulkXferService.NAME)
+        svc = self.ctx.services.get(setu.SETUService.NAME)
         return bool(self.ctx.link.connected and svc is not None and svc.available)
 
     def _update(self):
@@ -174,7 +174,7 @@ class FileSystemFeature(Feature):
         if not self.ctx.link.connected:
             self.state_pill.set("Not connected", "idle")
         elif not self._available:
-            self.state_pill.set("No BulkXfer service", "warn")
+            self.state_pill.set("No SETU service", "warn")
         elif self.busy:
             self.state_pill.set("Busy", "info")
         else:
@@ -235,10 +235,10 @@ class FileSystemFeature(Feature):
 
     # ---- commands ------------------------------------------------------------
     def _session(self) -> fsp.FileSystemSession:
-        """A session on a fresh BulkXfer client (another page may have taken
+        """A session on a fresh SETU client (another page may have taken
         the shared one); the sequence number carries on. BLE loop only."""
-        blk = self.ctx.services[bulkxfer.BulkXferService.NAME].new_client()
-        s = fsp.FileSystemSession(blk, log=lambda t: self.ctx.log(f"files: {t}"))
+        setu_cli = self.ctx.services[setu.SETUService.NAME].new_client()
+        s = fsp.FileSystemSession(setu_cli, log=lambda t: self.ctx.log(f"files: {t}"))
         s.seq = self._seq
         return s
 

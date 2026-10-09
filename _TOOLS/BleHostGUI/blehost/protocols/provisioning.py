@@ -1,15 +1,15 @@
 """Device provisioning protocol, PC side (_DOC/Provisioning/PROTOCOL.md).
 
-The PC is the CA. Over the device's BulkXfer service it asks for STATUS and for
-the CSR; the device sends the CSR back as a BulkXfer transfer to the PC's own
-BulkXfer service (core/gatt_server.py), because only the side hosting the
+The PC is the CA. Over the device's SETU service it asks for STATUS and for
+the CSR; the device sends the CSR back as a SETU transfer to the PC's own
+SETU service (core/gatt_server.py), because only the side hosting the
 service can receive a transfer. The PC then sends the CA certificate and the
 device certificate, each answered with RESULT; the device stores both and
 deletes its CSR. Provisioning is one-time: a provisioned device refuses
 another run until DEPROVISION wipes it (fresh key and CSR).
 
-ProvisioningSession is transport independent: it needs a BulkXferClient (PC ->
-device) and a BulkXferReceiver (device -> PC), so the tests run it against a
+ProvisioningSession is transport independent: it needs a SETUClient (PC ->
+device) and a SETUReceiver (device -> PC), so the tests run it against a
 simulated device.
 """
 
@@ -21,7 +21,7 @@ from typing import Callable, Optional
 from cryptography import x509
 
 from ..pki.authority import public_key_sha256
-from . import bulkxfer
+from . import setu
 
 # appTypes (0x20..0x2F, registered by the device's Prov.c)
 GET_STATUS, STATUS, CSR_REQ, CSR, CA_CERT, DEV_CERT, RESULT = 0x20, 0x21, 0x22, 0x23, 0x24, 0x25, 0x26
@@ -99,7 +99,7 @@ def _result_text(p: bytes) -> str:
 
 
 for _t, _n in APP_TYPE_NAMES.items():
-    bulkxfer.register_app_type(_t, _n, {STATUS: _status_text, RESULT: _result_text}.get(_t))
+    setu.register_app_type(_t, _n, {STATUS: _status_text, RESULT: _result_text}.get(_t))
 
 
 class ProvisioningError(Exception):
@@ -131,8 +131,8 @@ class Outcome:
 class ProvisioningSession:
     """One provisioning run over an open link.
 
-    client: BulkXferClient on the device's service (its CTRL notifications must
-    already reach client.on_notify). receiver: BulkXferReceiver of the PC's
+    client: SETUClient on the device's service (its CTRL notifications must
+    already reach client.on_notify). receiver: SETUReceiver of the PC's
     service. step(text) reports progress (any thread-safe callable).
     """
 
@@ -173,7 +173,7 @@ class ProvisioningSession:
         return parse_status(p)
 
     async def fetch_csr(self, timeout: float = CSR_TIMEOUT) -> bytes:
-        """Ask for the CSR; the device sends it to the PC's BulkXfer service."""
+        """Ask for the CSR; the device sends it to the PC's SETU service."""
         self._drain()
         self.receiver.drain()
         await self.client.send_short(CSR_REQ, b"")
@@ -193,7 +193,7 @@ class ProvisioningSession:
             return r.data
         if refused in done and refused.exception() is None:
             st = refused.result()
-            hint = (" (the PC's BulkXfer service is not visible to the device)"
+            hint = (" (the PC's SETU service is not visible to the device)"
                     if st == 0x09 else "")
             raise ProvisioningError(f"device refused the CSR request: {status_name(st)}{hint}", st)
         raise ProvisioningError("no CSR from the device")

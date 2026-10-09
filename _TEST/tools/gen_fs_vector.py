@@ -37,7 +37,7 @@ FS_TYPES = {"CMD": 0x40, "REPLY": 0x41, "ENTRY": 0x42}
 OPS = {"MKDIR": 1, "CD": 2, "OPENR": 3, "OPENW": 4, "WRITE": 5, "READ": 6, "LS": 7,
        "DELFILE": 8, "DELDIR": 9, "CLOSE": 10, "ABORT": 11}
 ENTRY_TYPES = {"FILE": 0, "DIR": 1}
-SHORT_MAX = 242                                       # BulkXfer short payload
+SHORT_MAX = 242                                       # SETU short payload
 LIMITS = {"arg_max": SHORT_MAX - 2, "read_max": SHORT_MAX - 3, "entry_path_max": SHORT_MAX - 6}
 
 

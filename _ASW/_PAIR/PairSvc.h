@@ -29,7 +29,7 @@
 /******************************************************************************/
 /**
  * @def           PART_UUID_DOMAIN_PAIR
- * @brief         UUID domain of the pairing service (same as BulkXfer's).
+ * @brief         UUID domain of the pairing service (same as SETU's).
  */
 #define PART_UUID_DOMAIN_PAIR                (0xB1)
 

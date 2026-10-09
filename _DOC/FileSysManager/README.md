@@ -6,7 +6,7 @@ runs every file system operation on **one thread of its own**. Users never call 
 and get the result back through a callback, or wait for it.
 
 - **One owner, one order:** commands run strictly one after another, so two users never
-  interleave inside FatFs. The thread runs below the BulkXfer engine, so flash erases never
+  interleave inside FatFs. The thread runs below the SETU engine, so flash erases never
   delay the link.
 - **A state machine, not a free API:** a Zephyr SMF machine decides which command is
   allowed when (no read or write without an open file, no delete or listing while a file is
@@ -92,7 +92,7 @@ copyright marking replaced by the MIT licence of `_LIB`. Changes:
 
 | In the sample | Here |
 |---|---|
-| UART test harness (`UartTestHarness.c`) on the log UART | Not ported: the same commands go over BLE (`_ASW/_FS_CMD`, [PROTOCOL.md](PROTOCOL.md)) to the GUI's Files page and `bulkxfer_client.py fs` |
+| UART test harness (`UartTestHarness.c`) on the log UART | Not ported: the same commands go over BLE (`_ASW/_FS_CMD`, [PROTOCOL.md](PROTOCOL.md)) to the GUI's Files page and `setu_client.py fs` |
 | Results only logged | Every command reports one result (`FsmgrResult_T`), listing entries included; portable status codes for peers |
 | Thread auto-started, `gstpt_FSMGR_GetMsgQ()` for raw queue access | `gi_FSMGR_Start()` from `main()`; `gi_FSMGR_Submit()` / `gi_FSMGR_Call()` |
 | Commands while unmounted ran into FatFs | `-ENODEV` |
@@ -104,7 +104,7 @@ copyright marking replaced by the MIT licence of `_LIB`. Changes:
 | CLOSE flushed and synced files open for reading too | Only files open for writing |
 | — | `eFSC_RENAME` (`"old\0new"`), the `FSMGR_MSG_KEEP_DIR` flag (create a directory without making it current), `gb_FSMGR_IsFileOpen()` |
 | `TransferMsgTypes.h` in `_LIB/Common`; debug counter `gu8_consumedBuff`; unused `u32_totalExpectedBytes`, `MAX_FILENAME_LEN`, `MAX_PATH_LEN` | `FileSysManager_Types.h`; removed |
-| `FS_MAX_CHUNK_SIZE` 242, documented as 240 | 242, the BulkXfer short message payload |
+| `FS_MAX_CHUNK_SIZE` 242, documented as 240 | 242, the SETU short message payload |
 | Partition Manager `pm.yml` | Not used: Partition Manager is off in this NCS 3.4.1 build; the overlays' `fixed-partitions` and `zephyr,flash-disk` nodes do the same |
 | Overlays disabled `&ficr` | Kept enabled: `HWINFO` reads the device ID from FICR for the CSR's CN |
 | Kconfig options in the sample's `_DI/Kconfig` | `_DI/Kconfig`, menu "File system manager", plus stack, priority and queue depth; the library also builds without them (`FileSysManager_Config.h`) |
@@ -112,7 +112,7 @@ copyright marking replaced by the MIT licence of `_LIB`. Changes:
 ## Integration
 
 1. Add the library to the build: [`_LIB/CMakeLists.txt`](../../_LIB/CMakeLists.txt) adds
-   `FileSysManager` after `BulkXfer`.
+   `FileSysManager` after `SETU`.
 2. Enable the file system in `prj.conf` (section "File system": disk access on a flash disk,
    FatFs with mkfs and long names, the `FLASH_DISK` mount point) and pick the flash interface
    (`FLASH_IF`, see above). A board other than the nRF54L15 DK needs its own
@@ -126,7 +126,7 @@ In this project:
 | User | Uses |
 |---|---|
 | [`_ASW/_DATA_STORE`](../../_ASW/_DATA_STORE) | `gi_FSMGR_Call()` from its dump thread: stores a hex upload as `/FLASH_DISK:/FW/<name>` ([HexUpload PROTOCOL §7](../HexUpload/PROTOCOL.md#7-storing-the-upload-as-a-file)) |
-| [`_ASW/_FS_CMD`](../../_ASW/_FS_CMD) | `gi_FSMGR_Submit()` from the BulkXfer engine, results sent back from the manager's thread ([PROTOCOL.md](PROTOCOL.md)) |
+| [`_ASW/_FS_CMD`](../../_ASW/_FS_CMD) | `gi_FSMGR_Submit()` from the SETU engine, results sent back from the manager's thread ([PROTOCOL.md](PROTOCOL.md)) |
 
 The two share the one open file: each refuses (`BUSY`) while the other holds it.
 

@@ -44,7 +44,7 @@ i_ret = (i_ret == 0) ? si_Fs(eFSC_OPEN_FILE_WRITE, "/FLASH_DISK:/LOG/a.txt", 22U
 i_ret = (i_ret == 0) ? si_Fs(eFSC_WRITE_DATA, "hello", 5U, 0U) : i_ret;
 i_ret = (i_ret == 0) ? si_Fs(eFSC_CLOSE_FILE, NULL, 0U, 0U) : i_ret;
 
-/* From a thread that must not wait (e.g. a BulkXfer callback): results by callback */
+/* From a thread that must not wait (e.g. a SETU callback): results by callback */
 static void sv_OnResult(const FsmgrResult_T *r, void *vpt_user)
 {
    if (!r->b_final) { /* a listing entry: r->u8pt_data is its path */ return; }
@@ -70,7 +70,7 @@ FileSysMessage_T st_ls = { .e_command = eFSC_DEBUG_LIST_DRIVE };
 | Tunable ([FileSysManager_Config.h](../../_LIB/FileSysManager/FileSysManager_Config.h)) | Kconfig (`_DI/Kconfig`) | Default |
 |---|---|---|
 | `FSMGR_STACK_SIZE` | `CONFIG_FSMGR_STACK_SIZE` | 4096 |
-| `FSMGR_PRIORITY` | `CONFIG_FSMGR_PRIORITY` | 10 (below the BulkXfer engine's 5) |
+| `FSMGR_PRIORITY` | `CONFIG_FSMGR_PRIORITY` | 10 (below the SETU engine's 5) |
 | `FSMGR_QUEUE_DEPTH` | `CONFIG_FSMGR_QUEUE_DEPTH` | 8 messages |
 | `FSMGR_WRITE_BUFFER_SIZE` | `CONFIG_FSMGR_WRITE_BUFFER_SIZE` with `CONFIG_FSMGR_BUFFERED_WRITE` | 512 if buffered, else 0 (direct) |
 | `FSMGR_MAX_PATH_LEN` | — | 256, terminator included |

@@ -13,8 +13,8 @@ PROJECT_BASE = "16a1-4812-af35-f3f29a92f6ca"         # _ASW/_BLE_GENERIX/BaseUUI
 
 @dataclass
 class Settings:
-    base_uuid: str = PROJECT_BASE       # 96-bit base of the BulkXfer service UUIDs
-    name_filter: str = "BLE Bulk Transfer"
+    base_uuid: str = PROJECT_BASE       # 96-bit base of the SETU service UUIDs
+    name_filter: str = "ProjectHanuman"
     scan_timeout: float = 5.0
 
 
@@ -26,7 +26,7 @@ class AppContext:
         self.tap = TrafficTap(self.bus)
         self.decoders = DecoderRegistry()
         self.link = BleLink(self.bus, self.tap)
-        self.services = {}              # name -> link-level service (e.g. "bulkxfer")
+        self.services = {}              # name -> link-level service (e.g. "setu")
 
     def log(self, text: str, level: str = "info"):
         """Append to the application log. Any thread."""

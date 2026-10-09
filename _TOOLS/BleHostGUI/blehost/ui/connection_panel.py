@@ -9,8 +9,8 @@ import tkinter as tk
 from tkinter import messagebox, ttk
 
 from ..core.ble_link import LinkState
-from ..protocols import bulkxfer
-from ..protocols.bulkxfer import bx
+from ..protocols import setu
+from ..protocols.setu import setu_client
 from . import theme as th
 from .widgets import Disclosure, Pill, card, set_icon, set_var
 
@@ -107,7 +107,7 @@ class ConnectionPanel(ttk.Frame):
         body.pack(fill="both", expand=True, pady=(theme.sp("s"), 0))
         self.tree = ttk.Treeview(body, columns=cols, show="headings", height=6, selectmode="browse")
         for c, text, w in (("name", "Name", 140), ("address", "Address", 130),
-                           ("rssi", "RSSI", 50), ("svc", "BulkXfer", 70)):
+                           ("rssi", "RSSI", 50), ("svc", "SETU", 70)):
             self.tree.heading(c, text=text, anchor="w")
             self.tree.column(c, width=theme.px(w), minwidth=theme.px(36), anchor="w", stretch=(c == "name"))
         sb = ttk.Scrollbar(body, orient="vertical", command=self.tree.yview)
@@ -123,7 +123,7 @@ class ConnectionPanel(ttk.Frame):
         self.update_state()
 
     def _recolour(self, p):
-        self.tree.tag_configure("bulkxfer", foreground=p["ok"][0])
+        self.tree.tag_configure("setu", foreground=p["ok"][0])
 
     # ---- state -------------------------------------------------------------
     def _selected(self):
@@ -171,7 +171,7 @@ class ConnectionPanel(ttk.Frame):
         self.ctx.log(f"scan: {len(results)} device(s)")
 
     def _show_results(self):
-        svc = bx.char_uuid(0, self.base_var.get().strip())
+        svc = setu_client.char_uuid(0, self.base_var.get().strip())
         flt = self.filter_var.get().strip().lower()
         prev = self._selected()
         self.tree.delete(*self.tree.get_children())
@@ -183,7 +183,7 @@ class ConnectionPanel(ttk.Frame):
             rows.append((not has, -r.rssi, r))
         for _, _, r in sorted(rows, key=lambda t: t[:2]):
             has = svc in r.service_uuids
-            self.tree.insert("", "end", iid=r.address, tags=("bulkxfer",) if has else (),
+            self.tree.insert("", "end", iid=r.address, tags=("setu",) if has else (),
                              values=(r.name or "(no name)", r.address, r.rssi, "yes" if has else ""))
         if prev and self.tree.exists(prev):
             self.tree.selection_set(prev)
@@ -211,7 +211,7 @@ class ConnectionPanel(ttk.Frame):
         self.ctx.run(self.ctx.link.disconnect(), on_error=self._error("Disconnect"))
 
     def _read_caps(self):
-        svc = self.ctx.services[bulkxfer.BulkXferService.NAME]
+        svc = self.ctx.services[setu.SETUService.NAME]
         self.ctx.run(svc.read_caps(), on_done=self._caps_done, on_error=self._error("Read Caps"))
 
     def _caps_done(self, caps):

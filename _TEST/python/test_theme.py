@@ -424,13 +424,13 @@ def test_hex_segments_section_counts_the_segments(root, tmp_path):
 def test_main_window_builds_and_switches(root, monkeypatch):
     from blehost.features.hex_upload import HexUploadFeature
     from blehost.features.provisioning import ProvisioningFeature
-    from blehost.protocols.bulkxfer import BulkXferService
+    from blehost.protocols.setu import SETUService
     from blehost.ui import main_window as mw
 
     monkeypatch.setattr(th, "system_mode", lambda: th.LIGHT)
     monkeypatch.setattr(fp.CertificateAuthority, "exists", staticmethod(lambda folder: False))
     ctx = AppContext()
-    ctx.services[BulkXferService.NAME] = BulkXferService(ctx)
+    ctx.services[SETUService.NAME] = SETUService(ctx)
     ctx.services["pc_server"] = types.SimpleNamespace(available=False, subscribers=0, error="test",
                                                       receiver=None)
     win = mw.MainWindow(root, ctx, [HexUploadFeature, ProvisioningFeature])
@@ -509,7 +509,7 @@ def test_main_window_without_pillow_or_icon_font(root, monkeypatch):
     rail and the theme button show text, and every page still builds."""
     from blehost.features.hex_upload import HexUploadFeature
     from blehost.features.provisioning import ProvisioningFeature
-    from blehost.protocols.bulkxfer import BulkXferService
+    from blehost.protocols.setu import SETUService
     from blehost.ui import icons
     from blehost.ui import main_window as mw
 
@@ -517,7 +517,7 @@ def test_main_window_without_pillow_or_icon_font(root, monkeypatch):
     monkeypatch.setattr(th, "system_mode", lambda: th.DARK)
     monkeypatch.setattr(fp.CertificateAuthority, "exists", staticmethod(lambda folder: False))
     ctx = AppContext()
-    ctx.services[BulkXferService.NAME] = BulkXferService(ctx)
+    ctx.services[SETUService.NAME] = SETUService(ctx)
     ctx.services["pc_server"] = types.SimpleNamespace(available=False, subscribers=0, error="test",
                                                       receiver=None)
     win = mw.MainWindow(root, ctx, [HexUploadFeature, ProvisioningFeature])

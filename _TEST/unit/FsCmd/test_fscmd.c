@@ -6,7 +6,7 @@
  *                refusals (bad op or argument, busy, upload in progress, queue
  *                full) and the limits. FsCmd.c is included with the real router
  *                and the real File System Manager on the in-memory volume of
- *                shim/fs_sim.c; the BulkXfer Server and the data store are stubbed.
+ *                shim/fs_sim.c; the SETU Server and the data store are stubbed.
  *
  *                Built twice: with CONFIG_FS_CMD (the firmware's setting) and
  *                without, where it must register nothing.
@@ -17,17 +17,17 @@
  */
 
 #include "FsCmd.c"
-#include "BulkRouter.c"
+#include "SETURouter.c"
 #include "FileSysManager.c"
 #include "FileSysManagerFSM.c"
 #include "unity.h"
 #include "wire_vectors.h"
 
 /******************************************************************************/
-/*  Stubs: BulkXfer Server, GATT service, data store                          */
+/*  Stubs: SETU Server, GATT service, data store                          */
 /******************************************************************************/
 static struct bt_gatt_attr sst_ctrlAttr;
-static BlkSrvCfg_T sst_cfg;
+static SETUSrvCfg_T sst_cfg;
 static int si_sendRet;
 static bool sb_uploadOpen;
 
@@ -35,30 +35,30 @@ typedef struct
 {
    uint8_t u8_type;
    uint8_t u8_len;
-   uint8_t u8ar_payload[BLK_MAX_SHORT_PAYLOAD];
+   uint8_t u8ar_payload[SETU_MAX_SHORT_PAYLOAD];
 } SentShort_T;
 
 static SentShort_T sstar_sent[16];
 static uint32_t su32_sentCount;
 
-const struct bt_gatt_attr *gstpt_BulkSvc_Init(void)
+const struct bt_gatt_attr *gstpt_SETUSvc_Init(void)
 {
    return &sst_ctrlAttr;
 }
 
-int gi_BLKS_Init(const BlkSrvCfg_T *stpt_cfg)
+int gi_SETUS_Init(const SETUSrvCfg_T *stpt_cfg)
 {
    sst_cfg = *stpt_cfg;
    return 0;
 }
 
-int gi_BLKS_SendShort(uint8_t u8_appType, const void *vpt_data, uint8_t u8_len,
+int gi_SETUS_SendShort(uint8_t u8_appType, const void *vpt_data, uint8_t u8_len,
    k_timeout_t t_timeout)
 {
    SentShort_T *s = &sstar_sent[su32_sentCount % ARRAY_SIZE(sstar_sent)];
 
    TEST_ASSERT_TRUE_MESSAGE(t_timeout.ms >= 0, "a reply must not wait for ever");
-   TEST_ASSERT_TRUE(u8_len <= BLK_MAX_SHORT_PAYLOAD);
+   TEST_ASSERT_TRUE(u8_len <= SETU_MAX_SHORT_PAYLOAD);
    s->u8_type = u8_appType;
    s->u8_len = u8_len;
    (void)memcpy(s->u8ar_payload, vpt_data, u8_len);
@@ -115,7 +115,7 @@ static void sv_CmdVec(const char *cpt_name)
 /** A CMD built here: [seq][op][arg]. */
 static void sv_CmdRaw(uint8_t u8_seq, uint8_t u8_op, const void *vpt_arg, uint8_t u8_argLen)
 {
-   uint8_t u8ar_p[BLK_MAX_SHORT_PAYLOAD];
+   uint8_t u8ar_p[SETU_MAX_SHORT_PAYLOAD];
 
    u8ar_p[0] = u8_seq;
    u8ar_p[1] = u8_op;
@@ -187,7 +187,7 @@ void setUp(void)
    gv_SimLogClear();
    sv_Mount(true);
    TEST_ASSERT_EQUAL_INT(0, gi_FsCmd_Init());
-   TEST_ASSERT_EQUAL_INT(0, gi_BulkRouter_Start());
+   TEST_ASSERT_EQUAL_INT(0, gi_SETURouter_Start());
 }
 
 void tearDown(void) {}
@@ -205,9 +205,9 @@ static void test_DefinesMatchVectors(void)
    TEST_ASSERT_EQUAL_UINT32(VEC_FS_ARG_MAX, FSCMD_ARG_MAX);
    TEST_ASSERT_EQUAL_UINT32(VEC_FS_READ_MAX, FSCMD_READ_MAX);
    TEST_ASSERT_EQUAL_UINT32(VEC_FS_ENTRY_PATH_MAX, FSCMD_ENTRY_PATH_MAX);
-   TEST_ASSERT_EQUAL_UINT32(BLK_MAX_SHORT_PAYLOAD, FSCMD_ARG_MAX + FSCMD_CMD_HDR_LEN);
-   TEST_ASSERT_EQUAL_UINT32(BLK_MAX_SHORT_PAYLOAD, FSCMD_READ_MAX + FSCMD_REPLY_HDR_LEN);
-   TEST_ASSERT_EQUAL_UINT32(BLK_MAX_SHORT_PAYLOAD, FSCMD_ENTRY_PATH_MAX + FSCMD_ENTRY_HDR_LEN);
+   TEST_ASSERT_EQUAL_UINT32(SETU_MAX_SHORT_PAYLOAD, FSCMD_ARG_MAX + FSCMD_CMD_HDR_LEN);
+   TEST_ASSERT_EQUAL_UINT32(SETU_MAX_SHORT_PAYLOAD, FSCMD_READ_MAX + FSCMD_REPLY_HDR_LEN);
+   TEST_ASSERT_EQUAL_UINT32(SETU_MAX_SHORT_PAYLOAD, FSCMD_ENTRY_PATH_MAX + FSCMD_ENTRY_HDR_LEN);
    TEST_ASSERT_EQUAL_UINT8(VEC_FS_OP_MKDIR, eFSOP_MKDIR);
    TEST_ASSERT_EQUAL_UINT8(VEC_FS_OP_CD, eFSOP_CD);
    TEST_ASSERT_EQUAL_UINT8(VEC_FS_OP_OPENR, eFSOP_OPENR);
@@ -480,7 +480,7 @@ static void test_LongEntryPathIsCut(void)
    sv_CmdRaw(1U, eFSOP_LS, NULL, 0U);
    TEST_ASSERT_EQUAL_UINT32(2U, su32_sentCount);
    TEST_ASSERT_EQUAL_HEX8(FSCMD_APP_TYPE_ENTRY, sstpt_Sent(0U)->u8_type);
-   TEST_ASSERT_EQUAL_UINT8(BLK_MAX_SHORT_PAYLOAD, sstpt_Sent(0U)->u8_len);
+   TEST_ASSERT_EQUAL_UINT8(SETU_MAX_SHORT_PAYLOAD, sstpt_Sent(0U)->u8_len);
    TEST_ASSERT_EQUAL_MEMORY(car_path, &sstpt_Sent(0U)->u8ar_payload[6], FSCMD_ENTRY_PATH_MAX);
    TEST_ASSERT_NOT_NULL(gcpt_SimLogFind("cut to 236"));
    sv_AssertReply(1U, eFSOP_LS, eFSS_OK);

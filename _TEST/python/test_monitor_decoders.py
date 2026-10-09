@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: MIT
 """Traffic-monitor decoders, replayed against a real capture: every fully
-logged frame in _LOG/BulkXfer_GUI_Client.txt must decode to the summary that
+logged frame in _LOG/SETU_GUI_Client.txt must decode to the summary that
 was shown for it."""
 
 import re
@@ -8,13 +8,13 @@ import re
 import pytest
 
 from blehost.core.decoders import DecoderRegistry
-from blehost.protocols import bulkxfer as proto
+from blehost.protocols import setu as proto
 
 LINE = re.compile(r"^\S+\s+(TX|RX)\s+(DATA|CTRL|CAPS)\s+(\w+)\s+\d+\s+([0-9a-f ]+?)\s+\|\s+(.*)$")
 
 
 def captured_frames(repo):
-    with open(f"{repo}/_LOG/BulkXfer_GUI_Client.txt", encoding="utf-8") as f:
+    with open(f"{repo}/_LOG/SETU_GUI_Client.txt", encoding="utf-8") as f:
         for line in f:
             m = LINE.match(line.rstrip("\n"))
             if m and m.group(3) != "CCCD" and "…" not in line:

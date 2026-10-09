@@ -19,7 +19,7 @@
 #include "Prov.h"
 #include "ProvButton.h"
 #include "Pair.h"
-#include "BulkRouter.h"
+#include "SETURouter.h"
 
 /******************************************************************************/
 /*                                                                            */
@@ -46,8 +46,8 @@
 /******************************************************************************/
 /**
  * @public        main
- * @brief         Starts the File System Manager, initializes the BulkXfer users (hex
- *                upload, file commands, provisioning, pairing), the BulkXfer Server and
+ * @brief         Starts the File System Manager, initializes the SETU users (hex
+ *                upload, file commands, provisioning, pairing), the SETU Server and
  *                Client, the BLE stack and starts advertising.
  * @return        0 upon successful execution.
  */
@@ -57,7 +57,7 @@ int main(void)
    // submitted before it is mounted wait in its queue)
    (void)gi_FSMGR_Start();
 
-   // Register the BulkXfer appType ranges: hex upload, file commands, then
+   // Register the SETU appType ranges: hex upload, file commands, then
    // provisioning. The provisioning init also restores the stored certificates,
    // or generates (first boot) or loads the device key and CSR.
    (void)gi_DataStore_Init();
@@ -71,9 +71,9 @@ int main(void)
    // callbacks and the LED
    (void)gi_Pair_Init();
 
-   // Start the BulkXfer Server and Client before advertising, so they are ready
+   // Start the SETU Server and Client before advertising, so they are ready
    // for the first connection. They need no Bluetooth stack yet.
-   (void)gi_BulkRouter_Start();
+   (void)gi_SETURouter_Start();
 
    // Init and start BLE advertising
    gv_BLEInitStartAdv();

@@ -7,7 +7,7 @@
  *
  *                  1. the peripheral advertises directed to the central, the
  *                     central scans for the peer and connects (open link);
- *                  2. both move their BulkXfer Server and Client to the peer
+ *                  2. both move their SETU Server and Client to the peer
  *                     link, the router admits only the pairing range there, and
  *                     each sends its device certificate (0x30);
  *                  3. each verifies the peer's certificate against the CA it was
@@ -31,7 +31,7 @@
  *                link that does not reach level 4 is dropped and retried.
  *
  *                Every step is reported to the host in STATUS. Callbacks (BT
- *                stack, BulkXfer engine, GATT writes) only check, copy and post
+ *                stack, SETU engine, GATT writes) only check, copy and post
  *                an event; the pairing thread does the work, as in Prov.c.
  *                Wire contract: _DOC/Pairing/PROTOCOL.md.
  *
@@ -39,7 +39,7 @@
  *                Sample Code Device Cert Verification): host-chosen roles,
  *                directed advertising, signed r || c, central-initiated
  *                security. Its transport (GATT reads of certificate blocks and
- *                of an OOB characteristic) is replaced by BulkXfer pushes,
+ *                of an OOB characteristic) is replaced by SETU pushes,
  *                which removes its race on OOB data read before it was written.
  * @date          06/10/2026
  * @author        Shivam Chudasama [SC]
@@ -65,8 +65,8 @@
 #include "PairOob.h"
 #include "PairSvc.h"
 #include "Prov.h"
-#include "BulkXfer.h"
-#include "BulkRouter.h"
+#include "SETU.h"
+#include "SETURouter.h"
 #include "CSR_Generator.h"
 #include "DeviceCert.h"
 #include "DeviceCert_Verify.h"
@@ -101,7 +101,7 @@
 
 /**
  * @def           PAIR_PRIORITY
- * @brief         Priority of the pairing thread, below the BulkXfer engine.
+ * @brief         Priority of the pairing thread, below the SETU engine.
  */
 #define PAIR_PRIORITY                        (10)
 
@@ -248,8 +248,8 @@ typedef enum
 typedef struct
 {
    uint8_t u8_type;                          /**< PairEventType_E                     */
-   uint8_t u8_appType;                       /**< appType of a BulkXfer event         */
-   uint8_t u8_status;                        /**< BlkStatus_E, or bonded              */
+   uint8_t u8_appType;                       /**< appType of a SETU event         */
+   uint8_t u8_status;                        /**< SETUStatus_E, or bonded              */
    uint8_t u8_role;                          /**< START: PairRole_E                   */
    int32_t i32_value;                        /**< Error, reason, level, config or id  */
    bt_addr_le_t st_addr;                     /**< START: peer address                 */
@@ -320,8 +320,8 @@ static void sv_ScanCb(const bt_addr_le_t *stpt_addr, int8_t i8_rssi, uint8_t u8_
 static int si_PairRxStart(uint8_t u8_appType, uint32_t u32_totalLen);
 static int si_PairRxData(uint8_t u8_appType, uint32_t u32_offset,
    const uint8_t *u8pt_data, uint16_t u16_len);
-static void sv_PairRxDone(uint8_t u8_appType, BlkStatus_E e_status, uint32_t u32_totalLen);
-static void sv_PairTxDone(uint8_t u8_appType, BlkStatus_E e_status);
+static void sv_PairRxDone(uint8_t u8_appType, SETUStatus_E e_status, uint32_t u32_totalLen);
+static void sv_PairTxDone(uint8_t u8_appType, SETUStatus_E e_status);
 static void sv_PairCliReady(struct bt_conn *stpt_conn, int i_status);
 static enum bt_security_err se_PairingAccept(struct bt_conn *stpt_conn,
    const struct bt_conn_pairing_feat *const stpt_feat);
@@ -502,7 +502,7 @@ static bool sb_bondLink = false;
 
 /**
  * @var           sb_rolesMoved
- * @brief         BulkXfer is on the peer link (a run's link came up) and not
+ * @brief         SETU is on the peer link (a run's link came up) and not
  *                returned to the host yet. Pairing thread.
  */
 static bool sb_rolesMoved = false;
@@ -567,7 +567,7 @@ static uint8_t su8ar_rxOob[PAIR_OOB_FRAME_LEN];
 /**
  * @var           su8ar_txOob
  * @brief         This device's OOB frame; unchanged until its transfer ends, as
- *                BulkXfer requires.
+ *                SETU requires.
  */
 static uint8_t su8ar_txOob[PAIR_OOB_FRAME_LEN];
 
@@ -973,7 +973,7 @@ static void sv_StopRadio(void)
 
 /**
  * @private       sv_ReturnRoles
- * @brief         Give BulkXfer back to the host link: no appType filter, the
+ * @brief         Give SETU back to the host link: no appType filter, the
  *                Server bound to the host link (or released), the Client
  *                released. Called when no peer transfer runs any more.
  * @return        None.
@@ -984,9 +984,9 @@ static void sv_ReturnRoles(void)
    int i_ret;
 
    sb_rolesMoved = false;
-   gv_BulkRouter_ClearFilter();
+   gv_SETURouter_ClearFilter();
 
-   i_ret = gi_BLKS_Rebind(stpt_host);
+   i_ret = gi_SETUS_Rebind(stpt_host);
 
    // Check if the Server could not move (a peer transfer still ends)
    if (i_ret != 0)
@@ -995,7 +995,7 @@ static void sv_ReturnRoles(void)
    }
 
    // Check if the Client is on the peer link
-   (void)gi_BLKC_Detach();
+   (void)gi_SETUC_Detach();
 
    // Check if a host reference was taken
    if (stpt_host != NULL)
@@ -1030,10 +1030,10 @@ static void sv_EndRun(void)
 
 /**
  * @private       sv_DropPeerLink
- * @brief         Disconnect the peer link if it is up. Its BulkXfer bindings
- *                (if BulkXfer is on it) are released by the disconnect;
+ * @brief         Disconnect the peer link if it is up. Its SETU bindings
+ *                (if SETU is on it) are released by the disconnect;
  *                sv_HandleDisconnected() then returns the roles to the host.
- *                BulkXfer on the host link (a bonded link) is left alone.
+ *                SETU on the host link (a bonded link) is left alone.
  * @return        None.
  */
 static void sv_DropPeerLink(void)
@@ -1043,11 +1043,11 @@ static void sv_DropPeerLink(void)
    // Check if the peer link is up
    if (stpt_peer != NULL)
    {
-      // Check if BulkXfer serves the peer link (its transfers end now)
+      // Check if SETU serves the peer link (its transfers end now)
       if (sb_rolesMoved)
       {
-         gv_BLKS_AbortRx();
-         gv_BLKC_AbortTx();
+         gv_SETUS_AbortRx();
+         gv_SETUC_AbortTx();
       }
       (void)bt_conn_disconnect(stpt_peer, BT_HCI_ERR_REMOTE_USER_TERM_CONN);
    }
@@ -1099,7 +1099,7 @@ static void sv_Fail(PairError_E e_error, int32_t i32_detail)
 /**
  * @private       sv_Succeed
  * @brief         End the run paired: the peer link stays up, encrypted and
- *                bonded; BulkXfer goes back to the host; the bond is saved for
+ *                bonded; SETU goes back to the host; the bond is saved for
  *                the reconnections.
  * @return        None.
  */
@@ -1167,7 +1167,7 @@ static void sv_TrySendOob(void)
    }
 
    sb_oobTxStarted = true;
-   i_ret = gi_BLKC_SendBuffer(PAIR_APP_TYPE_OOB, su8ar_txOob, sizeof(su8ar_txOob));
+   i_ret = gi_SETUC_SendBuffer(PAIR_APP_TYPE_OOB, su8ar_txOob, sizeof(su8ar_txOob));
 
    // Check if the transfer could not start
    if (i_ret != 0)
@@ -1391,7 +1391,7 @@ static void sv_HandleStart(const PairEvent_T *stpt_event)
 
    // A previous pairing goes first: no more reconnecting to it, and its link
    // is released here, so its disconnect is not taken for this run's
-   // (BulkXfer is already the host's).
+   // (SETU is already the host's).
    sv_StopReconnect();
    sv_ForgetBond();
    sv_ReleaseOldLink();
@@ -1423,8 +1423,8 @@ static void sv_HandleStart(const PairEvent_T *stpt_event)
       return;
    }
 
-   // Check if BulkXfer is free to move to the peer
-   if (gb_BLKS_IsRxBusy() || gb_BLKC_IsTxBusy())
+   // Check if SETU is free to move to the peer
+   if (gb_SETUS_IsRxBusy() || gb_SETUC_IsTxBusy())
    {
       sv_Fail(ePER_BUSY, 0);
       return;
@@ -1517,7 +1517,7 @@ static void sv_HandleScanMatch(void)
 
 /**
  * @private       sv_HandleConnected
- * @brief         The peer link is up (or the attempt failed): move BulkXfer to
+ * @brief         The peer link is up (or the attempt failed): move SETU to
  *                it and attach the Client to the peer's service.
  * @param[in]     i32_err 0, or the HCI error of a failed attempt.
  * @return        None.
@@ -1567,8 +1567,8 @@ static void sv_HandleConnected(int32_t i32_err)
 
    // From now on only the pairing range is reachable, on whatever link
    sb_rolesMoved = true;
-   gv_BulkRouter_SetFilter(PAIR_APP_TYPE_FIRST, PAIR_APP_TYPE_LAST);
-   i_ret = gi_BLKS_Rebind(stpt_peer);
+   gv_SETURouter_SetFilter(PAIR_APP_TYPE_FIRST, PAIR_APP_TYPE_LAST);
+   i_ret = gi_SETUS_Rebind(stpt_peer);
 
    // Check if the Server moved to the peer
    if (i_ret != 0)
@@ -1577,7 +1577,7 @@ static void sv_HandleConnected(int32_t i32_err)
       return;
    }
 
-   i_ret = gi_BulkRouter_ClientAttach(stpt_peer, PAIR_APP_TYPE_FIRST);
+   i_ret = gi_SETURouter_ClientAttach(stpt_peer, PAIR_APP_TYPE_FIRST);
 
    // Check if the attach started (-EALREADY: ready at once)
    if (i_ret == -EALREADY)
@@ -1593,7 +1593,7 @@ static void sv_HandleConnected(int32_t i32_err)
 /**
  * @private       sv_HandleDisconnected
  * @brief         The peer link is down (gv_Pair_OnDisconnected() has already
- *                cleared st_peerConn): drop its reference, give BulkXfer back
+ *                cleared st_peerConn): drop its reference, give SETU back
  *                to the host if it was moved. The run that had it fails; a
  *                pairing stays paired (bonded), its LED goes off and the
  *                reconnection starts.
@@ -1611,7 +1611,7 @@ static void sv_HandleDisconnected(struct bt_conn *stpt_conn, int32_t i32_reason)
 
    APP_LOG_INF("peer link down (reason 0x%02x)", (unsigned int)i32_reason);
 
-   // Check if BulkXfer is still on the peer link
+   // Check if SETU is still on the peer link
    if (sb_rolesMoved)
    {
       sv_ReturnRoles();
@@ -1763,7 +1763,7 @@ static void sv_HandleCliReady(int32_t i32_status)
       return;
    }
 
-   // Check if the peer hosts a BulkXfer service
+   // Check if the peer hosts a SETU service
    if (i32_status != 0)
    {
       sv_Fail(ePER_NO_PEER_SVC, i32_status);
@@ -1771,7 +1771,7 @@ static void sv_HandleCliReady(int32_t i32_status)
    }
 
    sv_SetState(ePST_CERT_EXCHANGE);
-   i_ret = gi_BLKC_SendBuffer(PAIR_APP_TYPE_PEER_CERT, gst_deviceCertData.u8ar_DeviceCert,
+   i_ret = gi_SETUC_SendBuffer(PAIR_APP_TYPE_PEER_CERT, gst_deviceCertData.u8ar_DeviceCert,
       gst_deviceCertData.u16_deviceCertLen);
 
    // Check if the transfer started
@@ -1785,7 +1785,7 @@ static void sv_HandleCliReady(int32_t i32_status)
  * @private       sv_HandleTxDone
  * @brief         One of this device's transfers ended.
  * @param[in]     u8_appType PAIR_APP_TYPE_PEER_CERT or PAIR_APP_TYPE_OOB.
- * @param[in]     u8_status BlkStatus_E.
+ * @param[in]     u8_status SETUStatus_E.
  * @return        None.
  */
 static void sv_HandleTxDone(uint8_t u8_appType, uint8_t u8_status)
@@ -1870,7 +1870,7 @@ static void sv_HandleCertReceived(void)
  * @private       sv_HandleRxDone
  * @brief         A peer transfer ended.
  * @param[in]     u8_appType PAIR_APP_TYPE_PEER_CERT or PAIR_APP_TYPE_OOB.
- * @param[in]     u8_status BlkStatus_E.
+ * @param[in]     u8_status SETUStatus_E.
  * @return        None.
  */
 static void sv_HandleRxDone(uint8_t u8_appType, uint8_t u8_status)
@@ -2270,7 +2270,7 @@ static void sv_ScanCb(const bt_addr_le_t *stpt_addr, int8_t i8_rssi, uint8_t u8_
 
 /**
  * @private       si_PairRxStart
- * @brief         BlkRxStart_F: accept the peer certificate (1..1024 bytes) and
+ * @brief         SETURxStart_F: accept the peer certificate (1..1024 bytes) and
  *                the OOB frame (PAIR_OOB_FRAME_LEN bytes), each once per run,
  *                while a run has the peer link.
  * @param[in]     u8_appType appType announced by the peer.
@@ -2327,7 +2327,7 @@ static int si_PairRxStart(uint8_t u8_appType, uint32_t u32_totalLen)
 
 /**
  * @private       si_PairRxData
- * @brief         BlkRxData_F: copy an in-order chunk.
+ * @brief         SETURxData_F: copy an in-order chunk.
  * @param[in]     u8_appType appType of the transfer.
  * @param[in]     u32_offset Offset of the chunk.
  * @param[in]     u8pt_data Chunk.
@@ -2355,13 +2355,13 @@ static int si_PairRxData(uint8_t u8_appType, uint32_t u32_offset,
 
 /**
  * @private       sv_PairRxDone
- * @brief         BlkRxDone_F: record the object and post the result.
+ * @brief         SETURxDone_F: record the object and post the result.
  * @param[in]     u8_appType appType of the transfer.
  * @param[in]     e_status Result.
  * @param[in]     u32_totalLen Unused.
  * @return        None.
  */
-static void sv_PairRxDone(uint8_t u8_appType, BlkStatus_E e_status, uint32_t u32_totalLen)
+static void sv_PairRxDone(uint8_t u8_appType, SETUStatus_E e_status, uint32_t u32_totalLen)
 {
    PairEvent_T st_event;
 
@@ -2389,12 +2389,12 @@ static void sv_PairRxDone(uint8_t u8_appType, BlkStatus_E e_status, uint32_t u32
 
 /**
  * @private       sv_PairTxDone
- * @brief         BlkTxDone_F (routed by appType): post the result.
+ * @brief         SETUTxDone_F (routed by appType): post the result.
  * @param[in]     u8_appType appType of the transfer.
  * @param[in]     e_status Result.
  * @return        None.
  */
-static void sv_PairTxDone(uint8_t u8_appType, BlkStatus_E e_status)
+static void sv_PairTxDone(uint8_t u8_appType, SETUStatus_E e_status)
 {
    PairEvent_T st_event;
 
@@ -2407,7 +2407,7 @@ static void sv_PairTxDone(uint8_t u8_appType, BlkStatus_E e_status)
 
 /**
  * @private       sv_PairCliReady
- * @brief         BlkCliReady_F: the attach this module asked for ended.
+ * @brief         SETUCliReady_F: the attach this module asked for ended.
  * @param[in]     stpt_conn Unused.
  * @param[in]     i_status 0 or negative errno.
  * @return        None.
@@ -2573,16 +2573,16 @@ static void sv_SecuredWritten(struct bt_conn *stpt_conn, uint8_t u8_err,
 /**
  * @public        gi_Pair_Init
  * @brief         Register the pairing appType range (with its Client callbacks)
- *                with the BulkXfer router and the SMP callbacks with the stack,
+ *                with the SETU router and the SMP callbacks with the stack,
  *                and set up the DK LEDs.
- *                Call once from main(), before gi_BulkRouter_Start() and
+ *                Call once from main(), before gi_SETURouter_Start() and
  *                before advertising.
- * @return        0 on success, otherwise the error of gi_BulkRouter_Register(),
+ * @return        0 on success, otherwise the error of gi_SETURouter_Register(),
  *                bt_conn_auth_cb_register() or bt_conn_auth_info_cb_register().
  */
 int gi_Pair_Init(void)
 {
-   BulkRoute_T st_route = { 0 };
+   SETURoute_T st_route = { 0 };
    int i_ret;
 
    st_route.u8_firstAppType = PAIR_APP_TYPE_FIRST;
@@ -2593,12 +2593,12 @@ int gi_Pair_Init(void)
    st_route.fpt_onTxDone = sv_PairTxDone;
    st_route.fpt_onCliReady = sv_PairCliReady;
 
-   i_ret = gi_BulkRouter_Register(&st_route);
+   i_ret = gi_SETURouter_Register(&st_route);
 
    // Check if the pairing range was registered
    if (i_ret != 0)
    {
-      APP_LOG_ERR("gi_BulkRouter_Register failed (%d)", i_ret);
+      APP_LOG_ERR("gi_SETURouter_Register failed (%d)", i_ret);
       return i_ret;
    }
 

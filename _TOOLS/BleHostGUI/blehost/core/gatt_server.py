@@ -1,13 +1,13 @@
-"""The PC's own BulkXfer GATT service, so the device can send to the PC.
+"""The PC's own SETU GATT service, so the device can send to the PC.
 
-A BulkXfer transfer goes from the GATT client to the side that hosts DATA and
-CTRL (_DOC/BulkXfer/PROTOCOL.md). bleak is a GATT client only, so for the
+A SETU transfer goes from the GATT client to the side that hosts DATA and
+CTRL (_DOC/SETU/PROTOCOL.md). bleak is a GATT client only, so for the
 device -> PC direction (the CSR during provisioning) the PC hosts the service
-itself, and the device attaches its BulkXfer Client role to it over the same
+itself, and the device attaches its SETU Client role to it over the same
 connection. The service uses the same UUIDs as the device's (base from the
 settings): DATA (Write Without Response), CTRL (Notify) and CAPS (Read).
 
-PcGattServer is the BulkXferReceiver (bulkxfer_receiver.py) plus a backend
+PcGattServer is the SETUReceiver (setu_receiver.py) plus a backend
 that hosts the attributes. WinRtBackend, the only code in the tool that uses
 the WinRT GATT *server* API, needs Windows 10/11 and an adapter that supports
 the peripheral role; it uses the winrt packages bleak already installs.
@@ -23,10 +23,10 @@ import asyncio
 import sys
 import uuid
 
-import bulkxfer_client as bx
-from bulkxfer_receiver import BulkXferReceiver
+import setu_client
+from setu_receiver import SETUReceiver
 
-CAPS = bytes([2, bx.MAX_FRAME, bx.WINDOW, 0])    # as the device's gv_BLKS_GetCaps()
+CAPS = bytes([2, setu_client.MAX_FRAME, setu_client.WINDOW, 0])    # as the device's gv_SETUS_GetCaps()
 
 
 class GattServerUnavailable(RuntimeError):
@@ -34,7 +34,7 @@ class GattServerUnavailable(RuntimeError):
 
 
 class WinRtBackend:
-    """Hosts the BulkXfer service with WinRT's GattServiceProvider.
+    """Hosts the SETU service with WinRT's GattServiceProvider.
 
     on_write(data: bytes) and on_subscribed(count: int) are called on `loop`.
     """
@@ -52,7 +52,7 @@ class WinRtBackend:
         self._pump = None
 
     def _uuid(self, char_id: int):
-        return uuid.UUID(bx.char_uuid(char_id, self.base))
+        return uuid.UUID(setu_client.char_uuid(char_id, self.base))
 
     async def start(self):
         if sys.platform != "win32":
@@ -173,7 +173,7 @@ class WinRtBackend:
 
 
 class PcGattServer:
-    """The PC's BulkXfer service and its receiver.
+    """The PC's SETU service and its receiver.
 
     tap: TrafficTap (or None) to show the device's writes and the PC's
     notifications in the traffic monitor. backend_factory(server) -> backend
@@ -190,7 +190,7 @@ class PcGattServer:
         self.available = False
         self.error = None
         self.subscribers = 0
-        self.receiver = BulkXferReceiver(self._notify, log=lambda t: self.log(t))
+        self.receiver = SETUReceiver(self._notify, log=lambda t: self.log(t))
         self.receiver.subscribed = False
         self._backend_factory = backend_factory
 
@@ -222,7 +222,7 @@ class PcGattServer:
     # ---- backend callbacks (on the loop) -----------------------------------------
     def _on_write(self, data: bytes):
         if self.tap is not None:
-            self.tap.rx("WNR", bx.char_uuid(1, self.base), data, "PC service")
+            self.tap.rx("WNR", setu_client.char_uuid(1, self.base), data, "PC service")
         self.receiver.on_write(data)
 
     def _on_subscribed(self, count: int):
@@ -231,6 +231,6 @@ class PcGattServer:
 
     def _notify(self, frame: bytes):
         if self.tap is not None:
-            self.tap.tx("NOTIFY", bx.char_uuid(2, self.base), frame, "PC service")
+            self.tap.tx("NOTIFY", setu_client.char_uuid(2, self.base), frame, "PC service")
         if self.backend is not None:
             self.backend.notify(frame)

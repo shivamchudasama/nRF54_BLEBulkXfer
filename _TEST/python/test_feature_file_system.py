@@ -11,9 +11,9 @@ import struct
 import pytest
 
 from blehost.features import file_system as ffs
-from blehost.protocols import bulkxfer as bxproto
+from blehost.protocols import setu as setu_proto
 from blehost.protocols import filesystem as fsp
-from conftest import FakeBlk
+from conftest import FakeSETU
 
 
 # ---- stand-ins for Tk ------------------------------------------------------------------
@@ -102,14 +102,14 @@ class Ctx:
         svc = type("Svc", (), {"available": True})()
         svc.new_client = self._new_client
         self.svc = svc
-        self.services = {bxproto.BulkXferService.NAME: svc}
+        self.services = {setu_proto.SETUService.NAME: svc}
         self.logs = []
         self.hold = False
 
     def _new_client(self):
-        blk = FakeBlk(self.device)
-        self.clients.append(blk)
-        return blk
+        setu_cli = FakeSETU(self.device)
+        self.clients.append(setu_cli)
+        return setu_cli
 
     def log(self, text, level="info"):
         self.logs.append((level, text))
@@ -333,7 +333,7 @@ def test_buttons_follow_the_link_and_the_work(page):
     page.ctx.svc.available = False
     page._update()
     assert not any(getattr(page, b).enabled for b in ffs.BUTTONS)
-    assert page.state_pill.value == "No BulkXfer service"
+    assert page.state_pill.value == "No SETU service"
     page.ctx.svc.available = True
     page.ctx.link.connected = False
     page._update()

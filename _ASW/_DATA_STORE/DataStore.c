@@ -2,7 +2,7 @@
  * @file          DataStore.c
  * @brief         Source file containing the receive-side data store.
  *
- *                Each hex segment arrives as one BulkXfer transfer of type
+ *                Each hex segment arrives as one SETU transfer of type
  *                DS_APP_TYPE_SEGMENT whose object is [u32 LE start address][data].
  *                The data is collected in su8ar_segBuf. Once the transfer ends with
  *                eBS_OK (CRC-32 verified), the dump thread logs it, stores it in the
@@ -36,8 +36,8 @@
 #include <zephyr/sys/byteorder.h>
 #include <zephyr/sys/crc.h>
 #include <zephyr/logging/log_ctrl.h>
-#include "BulkXfer.h"
-#include "BulkRouter.h"
+#include "SETU.h"
+#include "SETURouter.h"
 #include "FileSysManager.h"
 #include "AppLog.h"
 
@@ -80,8 +80,8 @@
 
 /**
  * @def           DS_DUMP_PRIORITY
- * @brief         Priority of the dump thread. Below the BulkXfer engine thread
- *                (BLK_THREAD_PRIORITY) so that dumping never delays the link.
+ * @brief         Priority of the dump thread. Below the SETU engine thread
+ *                (SETU_THREAD_PRIORITY) so that dumping never delays the link.
  */
 #define DS_DUMP_PRIORITY                     (10)
 
@@ -143,7 +143,7 @@ typedef struct
 static int si_OnRxStart(uint8_t u8_appType, uint32_t u32_totalLen);
 static int si_OnRxData(uint8_t u8_appType, uint32_t u32_offset,
    const uint8_t *u8pt_data, uint16_t u16_len);
-static void sv_OnRxDone(uint8_t u8_appType, BlkStatus_E e_status, uint32_t u32_totalLen);
+static void sv_OnRxDone(uint8_t u8_appType, SETUStatus_E e_status, uint32_t u32_totalLen);
 static void sv_OnRxShort(uint8_t u8_appType, const uint8_t *u8pt_data, uint8_t u8_len);
 static void sv_SendReport(uint8_t u8_appType, uint8_t u8_status, uint32_t u32_addr,
    uint32_t u32_len);
@@ -265,7 +265,7 @@ K_THREAD_DEFINE(sst_dumpThread, DS_DUMP_STACK_SIZE, sv_DumpThread, NULL, NULL, N
 /******************************************************************************/
 /**
  * @private       si_OnRxStart
- * @brief         BlkRxStart_F: accept a hex segment that fits the buffer while the
+ * @brief         SETURxStart_F: accept a hex segment that fits the buffer while the
  *                buffer is free.
  * @param[in]     u8_appType Application type announced by the client.
  * @param[in]     u32_totalLen Object size (address header + data).
@@ -305,7 +305,7 @@ static int si_OnRxStart(uint8_t u8_appType, uint32_t u32_totalLen)
 
 /**
  * @private       si_OnRxData
- * @brief         BlkRxData_F: store an in-order chunk. Object bytes 0..3 are the address
+ * @brief         SETURxData_F: store an in-order chunk. Object bytes 0..3 are the address
  *                header, the rest goes into su8ar_segBuf. The first chunk usually carries
  *                both, so it is split.
  * @param[in]     u8_appType Application type (unused, checked at START).
@@ -354,14 +354,14 @@ static int si_OnRxData(uint8_t u8_appType, uint32_t u32_offset,
 
 /**
  * @private       sv_OnRxDone
- * @brief         BlkRxDone_F: hand a verified segment to the dump thread, or discard a
+ * @brief         SETURxDone_F: hand a verified segment to the dump thread, or discard a
  *                failed one. Reports the result to the client either way.
  * @param[in]     u8_appType Application type.
  * @param[in]     e_status Result of the incoming transfer.
  * @param[in]     u32_totalLen Object size (address header + data).
  * @return        None.
  */
-static void sv_OnRxDone(uint8_t u8_appType, BlkStatus_E e_status, uint32_t u32_totalLen)
+static void sv_OnRxDone(uint8_t u8_appType, SETUStatus_E e_status, uint32_t u32_totalLen)
 {
    DsEvent_T st_event = { 0 };
    uint32_t u32_addr = 0U;
@@ -402,7 +402,7 @@ static void sv_OnRxDone(uint8_t u8_appType, BlkStatus_E e_status, uint32_t u32_t
 
 /**
  * @private       sv_OnRxShort
- * @brief         BlkRxShort_F: queue BEGIN (with its file name) and COMMIT for the dump
+ * @brief         SETURxShort_F: queue BEGIN (with its file name) and COMMIT for the dump
  *                thread. A BEGIN without a name or with a longer one than DS_NAME_MAX is
  *                answered at once; other types of the range are ignored.
  * @param[in]     u8_appType Application type.
@@ -449,7 +449,7 @@ static void sv_OnRxShort(uint8_t u8_appType, const uint8_t *u8pt_data, uint8_t u
  * @private       sv_SendReport
  * @brief         Send a [u8 status][u32 LE address][u32 LE length] short message on CTRL.
  * @param[in]     u8_appType DS_APP_TYPE_RESULT or DS_APP_TYPE_STORED.
- * @param[in]     u8_status BlkStatus_E value (0 = OK).
+ * @param[in]     u8_status SETUStatus_E value (0 = OK).
  * @param[in]     u32_addr Segment start address.
  * @param[in]     u32_len Segment data length.
  * @return        None.
@@ -464,7 +464,7 @@ static void sv_SendReport(uint8_t u8_appType, uint8_t u8_status, uint32_t u32_ad
    sys_put_le32(u32_addr, &u8ar_report[1]);
    sys_put_le32(u32_len, &u8ar_report[5]);
 
-   i_ret = gi_BLKS_SendShort(u8_appType, u8ar_report, sizeof(u8ar_report),
+   i_ret = gi_SETUS_SendShort(u8_appType, u8ar_report, sizeof(u8ar_report),
       K_MSEC(DS_SHORT_TIMEOUT_MS));
 
    // Check if the report could not be sent (no link, not subscribed, no credit)
@@ -493,7 +493,7 @@ static void sv_SendFile(uint8_t u8_op, int i_status, uint32_t u32_size, uint32_t
    sys_put_le32(u32_size, &u8ar_reply[2]);
    sys_put_le32(u32_crc, &u8ar_reply[6]);
 
-   i_ret = gi_BLKS_SendShort(DS_APP_TYPE_FILE, u8ar_reply, sizeof(u8ar_reply),
+   i_ret = gi_SETUS_SendShort(DS_APP_TYPE_FILE, u8ar_reply, sizeof(u8ar_reply),
       K_MSEC(DS_SHORT_TIMEOUT_MS));
 
    // Check if the reply could not be sent (no link, not subscribed, no credit)
@@ -897,13 +897,13 @@ static void sv_DumpThread(void *vpt_p1, void *vpt_p2, void *vpt_p3)
 /**
  * @public        gi_DataStore_Init
  * @brief         Register the data store's appType range (DS_APP_TYPE_SEGMENT to
- *                DS_APP_TYPE_LAST) and its callbacks with the BulkXfer router. Call
- *                once, before gi_BulkRouter_Start().
- * @return        0 on success, otherwise the error from gi_BulkRouter_Register().
+ *                DS_APP_TYPE_LAST) and its callbacks with the SETU router. Call
+ *                once, before gi_SETURouter_Start().
+ * @return        0 on success, otherwise the error from gi_SETURouter_Register().
  */
 int gi_DataStore_Init(void)
 {
-   BulkRoute_T st_route = { 0 };
+   SETURoute_T st_route = { 0 };
    int i_ret = 0;
 
    st_route.u8_firstAppType = DS_APP_TYPE_SEGMENT;
@@ -913,12 +913,12 @@ int gi_DataStore_Init(void)
    st_route.fpt_onRxDone = sv_OnRxDone;
    st_route.fpt_onRxShort = sv_OnRxShort;
 
-   i_ret = gi_BulkRouter_Register(&st_route);
+   i_ret = gi_SETURouter_Register(&st_route);
 
    // Check if the route was registered
    if (i_ret != 0)
    {
-      APP_LOG_ERR("gi_BulkRouter_Register failed (%d)", i_ret);
+      APP_LOG_ERR("gi_SETURouter_Register failed (%d)", i_ret);
    }
    else
    {

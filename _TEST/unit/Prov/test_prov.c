@@ -2,11 +2,11 @@
  * @file          test_prov.c
  * @brief         Host unit tests for device provisioning (_ASW/_PROV/Prov.c)
  *                against _DOC/Provisioning/PROTOCOL.md. Prov.c is included; the
- *                tests drive the router callbacks it registers, as the BulkXfer
+ *                tests drive the router callbacks it registers, as the SETU
  *                engine would, then run the provisioning thread until its queue
  *                is empty. Everything it calls is stubbed: the key/CSR module,
  *                the certificate storage and verification (scripted results,
- *                calls recorded in order), PSA, the router, and the BulkXfer
+ *                calls recorded in order), PSA, the router, and the SETU
  *                Client and Server.
  *
  * @date          01/10/2026
@@ -190,7 +190,7 @@ psa_status_t psa_hash_compute(psa_algorithm_t alg, const uint8_t *input, size_t 
 }
 
 /******************************************************************************/
-/*  Stubs: router (with its shared Client), BulkXfer, host link, pairing      */
+/*  Stubs: router (with its shared Client), SETU, host link, pairing      */
 /******************************************************************************/
 static struct bt_conn sst_conn;
 static bool sb_hostUp;
@@ -204,10 +204,10 @@ void gv_BLE_RefreshAdv(void) { su32_refreshCalls++; }
 bool gb_Pair_IsRunning(void) { return sb_pairRunning; }
 void gv_Pair_ForgetBonds(void) { su32_forgetCalls++; }
 
-static BulkRoute_T sst_route;
+static SETURoute_T sst_route;
 static int si_registerRet;
 
-int gi_BulkRouter_Register(const BulkRoute_T *stpt_route)
+int gi_SETURouter_Register(const SETURoute_T *stpt_route)
 {
    sst_route = *stpt_route;
    return si_registerRet;
@@ -225,7 +225,7 @@ static const void *svpt_sendData;
 static uint32_t su32_sendLen;
 
 /* As the router: -EALREADY when the Client is ready on that link already */
-int gi_BulkRouter_ClientAttach(struct bt_conn *stpt_conn, uint8_t u8_ownerAppType)
+int gi_SETURouter_ClientAttach(struct bt_conn *stpt_conn, uint8_t u8_ownerAppType)
 {
    su32_attachCalls++;
    sstpt_attachConn = stpt_conn;
@@ -235,7 +235,7 @@ int gi_BulkRouter_ClientAttach(struct bt_conn *stpt_conn, uint8_t u8_ownerAppTyp
    return si_attachRet;
 }
 
-int gi_BLKC_SendBuffer(uint8_t u8_appType, const void *vpt_data, uint32_t u32_len)
+int gi_SETUC_SendBuffer(uint8_t u8_appType, const void *vpt_data, uint32_t u32_len)
 {
    su32_sendCalls++;
    su8_sendType = u8_appType;
@@ -248,13 +248,13 @@ typedef struct
 {
    uint8_t u8_type;
    uint8_t u8_len;
-   uint8_t u8ar_payload[BLK_MAX_SHORT_PAYLOAD];
+   uint8_t u8ar_payload[SETU_MAX_SHORT_PAYLOAD];
 } SentShort_T;
 
 static SentShort_T sstar_sent[16];
 static uint32_t su32_sentCount;
 
-int gi_BLKS_SendShort(uint8_t u8_appType, const void *vpt_data, uint8_t u8_len,
+int gi_SETUS_SendShort(uint8_t u8_appType, const void *vpt_data, uint8_t u8_len,
    k_timeout_t t_timeout)
 {
    SentShort_T *stpt_s = &sstar_sent[su32_sentCount % ARRAY_SIZE(sstar_sent)];
@@ -319,7 +319,7 @@ static void sv_AssertLastIs(const char *cpt_name)
 /** Send a certificate through the router callbacks in 240-byte chunks. */
 static uint8_t su8ar_cert[DEVICE_CERT_MAX_DER_LEN + 1U];
 
-static int si_Receive(uint8_t u8_type, uint32_t u32_len, BlkStatus_E e_status)
+static int si_Receive(uint8_t u8_type, uint32_t u32_len, SETUStatus_E e_status)
 {
    uint32_t u32_off;
    int i_ret;
@@ -432,7 +432,7 @@ static void test_InitRegistersTheProvisioningRange(void)
    TEST_ASSERT_NOT_NULL(sst_route.fpt_onRxData);
    TEST_ASSERT_NOT_NULL(sst_route.fpt_onRxDone);
    TEST_ASSERT_NOT_NULL(sst_route.fpt_onRxShort);
-   // The router shares the BulkXfer Client: its results come back by range
+   // The router shares the SETU Client: its results come back by range
    TEST_ASSERT_NOT_NULL(sst_route.fpt_onCliReady);
    TEST_ASSERT_NOT_NULL(sst_route.fpt_onTxDone);
    TEST_ASSERT_EQUAL_INT(ePS_KEY_READY, ge_Prov_GetState());
@@ -526,7 +526,7 @@ static void test_InitErrorsAreReturned(void)
 {
    si_registerRet = -EEXIST;
    TEST_ASSERT_EQUAL_INT(-EEXIST, gi_Prov_Init());
-   TEST_ASSERT_NOT_NULL(gcpt_SimLogFind("gi_BulkRouter_Register failed"));
+   TEST_ASSERT_NOT_NULL(gcpt_SimLogFind("gi_SETURouter_Register failed"));
 }
 
 /******************************************************************************/
@@ -632,7 +632,7 @@ static void test_CsrWithoutHostLink(void)
 
 static void test_CsrNoPeerService(void)
 {
-   // Discovery found no BulkXfer service on the provisioner
+   // Discovery found no SETU service on the provisioner
    sst_route.fpt_onRxShort(VEC_PROV_APP_CSR_REQ, NULL, 0U);
    sv_RunProv();
    sst_route.fpt_onCliReady(&sst_conn, -ENOENT);

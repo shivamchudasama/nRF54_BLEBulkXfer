@@ -4,7 +4,7 @@
 
 The hex-upload segment bytes are read from the repo's test .hex file with a
 minimal Intel HEX reader of its own, deliberately independent of
-bulkxfer_client.parse_ihex(), so the C end-to-end test does not inherit a bug
+setu_client.parse_ihex(), so the C end-to-end test does not inherit a bug
 from the code the Python tests check.
 
     python gen_vectors.py <wire.json> <repo root> <out.h>

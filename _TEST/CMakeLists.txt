@@ -10,7 +10,7 @@
 # Every test writes JUnit XML to build_test/report/junit/<test>.xml.
 
 cmake_minimum_required(VERSION 3.20)
-project(nRF54_BLEBulkXfer_HostTests C)
+project(ProjectHanuman_HostTests C)
 enable_testing()
 
 option(SANITIZE "Build with AddressSanitizer and UBSan (gcc/clang, Linux/macOS)" OFF)
@@ -108,28 +108,28 @@ function(add_unit_test NAME)
          ${REPORT_DIR}/junit/${NAME}.xml ${NAME} $<TARGET_FILE:${NAME}> ${T_ARGS})
 endfunction()
 
-set(BLK_DIR ${REPO_ROOT}/_LIB/BulkXfer)
+set(SETU_DIR ${REPO_ROOT}/_LIB/SETU)
 set(GATT_CB_DIR ${REPO_ROOT}/_LIB/GATT_CB)
 set(ASW_DIR ${REPO_ROOT}/_ASW)
-set(BLK_INCLUDES ${BLK_DIR} ${ASW_DIR}/_BLE_GENERIX ${CMAKE_CURRENT_SOURCE_DIR}/unit/BulkXfer)
+set(SETU_INCLUDES ${SETU_DIR} ${ASW_DIR}/_BLE_GENERIX ${CMAKE_CURRENT_SOURCE_DIR}/unit/SETU)
 
-# ---- _LIB/BulkXfer -----------------------------------------------------------
-add_unit_test(bulkxfer_frame
-   SOURCES unit/BulkXfer/test_frame.c ${BLK_DIR}/BulkXfer_Frame.c
-   INCLUDES ${BLK_INCLUDES})
+# ---- _LIB/SETU -----------------------------------------------------------
+add_unit_test(setu_frame
+   SOURCES unit/SETU/test_frame.c ${SETU_DIR}/SETU_Frame.c
+   INCLUDES ${SETU_INCLUDES})
 
 # The engine test #includes Core/Server/Client .c; built once per role set
 foreach(ROLE both server client)
    set(ROLE_DEFS "")
    if(ROLE STREQUAL "server")
-      set(ROLE_DEFS BLK_ENABLE_CLIENT=0)
+      set(ROLE_DEFS SETU_ENABLE_CLIENT=0)
    elseif(ROLE STREQUAL "client")
-      set(ROLE_DEFS BLK_ENABLE_SERVER=0)
+      set(ROLE_DEFS SETU_ENABLE_SERVER=0)
    endif()
-   add_unit_test(bulkxfer_engine_${ROLE}
-      SOURCES unit/BulkXfer/test_engine.c ${BLK_DIR}/BulkXfer_Frame.c
-      INCLUDES ${BLK_INCLUDES}
-      DEFINES CONFIG_BT_GATT_CLIENT BLK_RX_POOL_DEPTH=6 ${ROLE_DEFS})
+   add_unit_test(setu_engine_${ROLE}
+      SOURCES unit/SETU/test_engine.c ${SETU_DIR}/SETU_Frame.c
+      INCLUDES ${SETU_INCLUDES}
+      DEFINES CONFIG_BT_GATT_CLIENT SETU_RX_POOL_DEPTH=6 ${ROLE_DEFS})
 endforeach()
 
 # ---- _LIB/GATT_CB ------------------------------------------------------------
@@ -151,10 +151,10 @@ add_unit_test(fsmgr_direct
    DEFINES FSMGR_WRITE_BUFFER_SIZE=0)
 
 # ---- _ASW/_DATA_STORE --------------------------------------------------------
-# test_datastore.c #includes DataStore.c with the BulkXfer Server stubbed out;
+# test_datastore.c #includes DataStore.c with the SETU Server stubbed out;
 # built with the summary line (default) and with the full hex dump.
 # BEGIN / COMMIT run on the real File System Manager (#included) over fs_sim.c.
-set(DS_INCLUDES ${ASW_DIR}/_DATA_STORE ${ASW_DIR}/_BLK_SVC ${FSMGR_DIR} ${BLK_INCLUDES})
+set(DS_INCLUDES ${ASW_DIR}/_DATA_STORE ${ASW_DIR}/_SETU_SVC ${FSMGR_DIR} ${SETU_INCLUDES})
 add_unit_test(datastore
    SOURCES unit/DataStore/test_datastore.c ${SHIM_DIR}/fs_sim.c
    INCLUDES ${DS_INCLUDES})
@@ -163,17 +163,17 @@ add_unit_test(datastore_hexdump
    INCLUDES ${DS_INCLUDES}
    DEFINES CONFIG_DS_HEX_DUMP=1)
 
-# Hex upload end to end: real BulkXfer Server + DataStore + File System
+# Hex upload end to end: real SETU Server + DataStore + File System
 # Manager, simulated link and peer client, fed with the first segment of
 # AA00000100.hex
 add_unit_test(hex_upload_e2e
-   SOURCES unit/DataStore/test_upload_e2e.c ${BLK_DIR}/BulkXfer_Frame.c ${SHIM_DIR}/fs_sim.c
+   SOURCES unit/DataStore/test_upload_e2e.c ${SETU_DIR}/SETU_Frame.c ${SHIM_DIR}/fs_sim.c
    INCLUDES ${DS_INCLUDES}
-   DEFINES CONFIG_BT_GATT_CLIENT BLK_ENABLE_CLIENT=0)
+   DEFINES CONFIG_BT_GATT_CLIENT SETU_ENABLE_CLIENT=0)
 
 # ---- _ASW/_FS_CMD ------------------------------------------------------------
 # File commands over BLE: router + File System Manager (#included) on fs_sim.c,
-# BulkXfer Server and data store stubbed; with CONFIG_FS_CMD and without
+# SETU Server and data store stubbed; with CONFIG_FS_CMD and without
 set(FSCMD_INCLUDES ${ASW_DIR}/_FS_CMD ${DS_INCLUDES})
 add_unit_test(fscmd
    SOURCES unit/FsCmd/test_fscmd.c ${SHIM_DIR}/fs_sim.c
@@ -183,27 +183,27 @@ add_unit_test(fscmd_disabled
    SOURCES unit/FsCmd/test_fscmd.c ${SHIM_DIR}/fs_sim.c
    INCLUDES ${FSCMD_INCLUDES})
 
-# ---- _ASW/_BLK_SVC -----------------------------------------------------------
-# The appType router, with the GATT service and both BulkXfer roles stubbed
-add_unit_test(bulk_router
-   SOURCES unit/BlkSvc/test_router.c
-   INCLUDES ${ASW_DIR}/_BLK_SVC ${BLK_INCLUDES}
+# ---- _ASW/_SETU_SVC -----------------------------------------------------------
+# The appType router, with the GATT service and both SETU roles stubbed
+add_unit_test(setu_router
+   SOURCES unit/SETUSvc/test_router.c
+   INCLUDES ${ASW_DIR}/_SETU_SVC ${SETU_INCLUDES}
    DEFINES CONFIG_BT_GATT_CLIENT)
 
 # ---- _ASW/_PROV --------------------------------------------------------------
 # Provisioning flow; key/CSR, certificate verification, PSA, router and the
-# BulkXfer roles are stubbed (each has its own test)
-set(PROV_INCLUDES ${ASW_DIR}/_PROV ${ASW_DIR}/_PAIR ${ASW_DIR}/_BLK_SVC ${ASW_DIR}/_CSR ${ASW_DIR}/_DEVICE_CERT
-   ${PSA_STUB_DIR} ${BLK_INCLUDES})
+# SETU roles are stubbed (each has its own test)
+set(PROV_INCLUDES ${ASW_DIR}/_PROV ${ASW_DIR}/_PAIR ${ASW_DIR}/_SETU_SVC ${ASW_DIR}/_CSR ${ASW_DIR}/_DEVICE_CERT
+   ${PSA_STUB_DIR} ${SETU_INCLUDES})
 add_unit_test(prov
    SOURCES unit/Prov/test_prov.c
    INCLUDES ${PROV_INCLUDES}
    DEFINES CONFIG_BT_GATT_CLIENT)
 
-# Provisioning end to end: real BulkXfer (both roles) + router + Prov.c over the
+# Provisioning end to end: real SETU (both roles) + router + Prov.c over the
 # simulated link, with the peer as the provisioner
 add_unit_test(prov_e2e
-   SOURCES unit/Prov/test_prov_e2e.c ${BLK_DIR}/BulkXfer_Frame.c
+   SOURCES unit/Prov/test_prov_e2e.c ${SETU_DIR}/SETU_Frame.c
    INCLUDES ${PROV_INCLUDES}
    DEFINES CONFIG_BT_GATT_CLIENT)
 
@@ -213,19 +213,19 @@ add_unit_test(prov_button
    INCLUDES ${PROV_INCLUDES})
 
 # ---- _ASW/_PAIR --------------------------------------------------------------
-# Pairing flow (Pair.c): BT stack, BulkXfer, router, certificate verification,
+# Pairing flow (Pair.c): BT stack, SETU, router, certificate verification,
 # OOB signing, provisioning, LEDs and the service stubbed (calls recorded)
-set(PAIR_INCLUDES ${ASW_DIR}/_PAIR ${ASW_DIR}/_PROV ${ASW_DIR}/_BLK_SVC ${ASW_DIR}/_CSR
-   ${ASW_DIR}/_DEVICE_CERT ${PSA_STUB_DIR} ${BLK_INCLUDES})
+set(PAIR_INCLUDES ${ASW_DIR}/_PAIR ${ASW_DIR}/_PROV ${ASW_DIR}/_SETU_SVC ${ASW_DIR}/_CSR
+   ${ASW_DIR}/_DEVICE_CERT ${PSA_STUB_DIR} ${SETU_INCLUDES})
 add_unit_test(pair
    SOURCES unit/Pair/test_pair.c
    INCLUDES ${PAIR_INCLUDES}
    DEFINES CONFIG_BT_GATT_CLIENT)
 
-# Pairing end to end: real BulkXfer (both roles) + router + Pair.c over the
+# Pairing end to end: real SETU (both roles) + router + Pair.c over the
 # simulated link, with the peer as the other device and a second link as host
 add_unit_test(pair_e2e
-   SOURCES unit/Pair/test_pair_e2e.c ${BLK_DIR}/BulkXfer_Frame.c
+   SOURCES unit/Pair/test_pair_e2e.c ${SETU_DIR}/SETU_Frame.c
    INCLUDES ${PAIR_INCLUDES}
    DEFINES CONFIG_BT_GATT_CLIENT)
 
@@ -288,14 +288,14 @@ add_unit_test(helpers
 
 # ---- Header hygiene: each header of a tested unit compiles on its own -------
 set(CHECKED_HEADERS
-   ${BLK_DIR}/BulkXfer.h ${BLK_DIR}/BulkXfer_Client.h ${BLK_DIR}/BulkXfer_Config.h
-   ${BLK_DIR}/BulkXfer_Frame.h ${BLK_DIR}/BulkXfer_Server.h ${BLK_DIR}/BulkXfer_Types.h
-   ${BLK_DIR}/BulkXfer_Uuid.h
+   ${SETU_DIR}/SETU.h ${SETU_DIR}/SETU_Client.h ${SETU_DIR}/SETU_Config.h
+   ${SETU_DIR}/SETU_Frame.h ${SETU_DIR}/SETU_Server.h ${SETU_DIR}/SETU_Types.h
+   ${SETU_DIR}/SETU_Uuid.h
    ${FSMGR_DIR}/FileSysManager.h ${FSMGR_DIR}/FileSysManagerFSM.h
    ${FSMGR_DIR}/FileSysManager_Types.h ${FSMGR_DIR}/FileSysManager_Config.h
    ${ASW_DIR}/_FS_CMD/FsCmd.h
    ${GATT_CB_DIR}/GATT_CB_Types.h ${GATT_CB_DIR}/GATT_GenericCallbacks.h
-   ${ASW_DIR}/_BLK_SVC/BulkSvc.h ${ASW_DIR}/_BLK_SVC/BulkRouter.h ${ASW_DIR}/_DATA_STORE/DataStore.h
+   ${ASW_DIR}/_SETU_SVC/SETUSvc.h ${ASW_DIR}/_SETU_SVC/SETURouter.h ${ASW_DIR}/_DATA_STORE/DataStore.h
    ${ASW_DIR}/_PROV/Prov.h ${ASW_DIR}/_PROV/ProvButton.h
    ${ASW_DIR}/_PAIR/Pair.h ${ASW_DIR}/_PAIR/PairOob.h ${ASW_DIR}/_PAIR/PairSvc.h
    ${ASW_DIR}/_DEVICE_CERT/DeviceCert.h ${ASW_DIR}/_DEVICE_CERT/DeviceCert_Verify.h
@@ -304,7 +304,7 @@ set(CHECKED_HEADERS
    ${ASW_DIR}/_CSR/CSR_Generator_Config.h ${ASW_DIR}/_CSR/DER.h
    ${ASW_DIR}/_GENERIX/Helpers.h)
 set(HDR_INCLUDES "")
-foreach(DIR ${SHIM_DIR} ${BLK_INCLUDES} ${GATT_CB_DIR} ${FSCMD_INCLUDES} ${PROV_INCLUDES} ${ASW_DIR}/_GENERIX)
+foreach(DIR ${SHIM_DIR} ${SETU_INCLUDES} ${GATT_CB_DIR} ${FSCMD_INCLUDES} ${PROV_INCLUDES} ${ASW_DIR}/_GENERIX)
    list(APPEND HDR_INCLUDES -I${DIR})
 endforeach()
 add_test(NAME header_hygiene

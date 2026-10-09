@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: MIT
-"""The command line of bulkxfer_client.py (main(), find_device, provision,
+"""The command line of setu_client.py (main(), find_device, provision,
 deprovision, pair, pairstatus, unpair), with a fake `bleak` module: BleakClient is the scripted
-BulkXfer server of conftest.py, so caps / ping / send / hex run their real
+SETU server of conftest.py, so caps / ping / send / hex run their real
 protocol code. For provision and deprovision, the PC service and the
 provisioning session are stand-ins (the protocol itself is
 test_provisioning.py; the device side is hil-tests). For pair, bleak's client
@@ -17,7 +17,7 @@ import zlib
 import pytest
 from cryptography import x509
 
-import bulkxfer_client as bx
+import setu_client
 from blehost.core import gatt_server as gs
 from blehost.protocols import provisioning as prov
 from conftest import FakeServer
@@ -29,8 +29,8 @@ class CliServer(FakeServer):
     """FakeServer that also echoes PING, as the device does."""
 
     def _on_frame(self, f):
-        if f[1] == bx.APP_TYPE_PING:
-            self._notify(bx.frame(bx.APP_TYPE_PING, f[2:]))
+        if f[1] == setu_client.APP_TYPE_PING:
+            self._notify(setu_client.frame(setu_client.APP_TYPE_PING, f[2:]))
             return
         super()._on_frame(f)
 
@@ -64,8 +64,8 @@ class FakeBleakClient:
     async def start_notify(self, uuid, callback):
         self.notify_uuid = uuid
         self.server.client = types.SimpleNamespace(
-            on_notify=callback, data_uuid=bx.char_uuid(1, bx.PROJECT_BASE),
-            caps_uuid=bx.char_uuid(3, bx.PROJECT_BASE))
+            on_notify=callback, data_uuid=setu_client.char_uuid(1, setu_client.PROJECT_BASE),
+            caps_uuid=setu_client.char_uuid(3, setu_client.PROJECT_BASE))
 
 
 @pytest.fixture
@@ -85,17 +85,17 @@ def bleak(monkeypatch):
 
 
 def cli(monkeypatch, *argv):
-    monkeypatch.setattr(sys, "argv", ["bulkxfer_client.py", *argv])
-    asyncio.run(bx.main())
+    monkeypatch.setattr(sys, "argv", ["setu_client.py", *argv])
+    asyncio.run(setu_client.main())
 
 
 # ---- find_device ---------------------------------------------------------------------
 def test_find_device(bleak, capsys):
-    assert asyncio.run(bx.find_device("11:22", "anything")) == "11:22"
-    assert asyncio.run(bx.find_device(None, "dev")) == "AA:BB"
+    assert asyncio.run(setu_client.find_device("11:22", "anything")) == "11:22"
+    assert asyncio.run(setu_client.find_device(None, "dev")) == "AA:BB"
     assert "scanning for 'dev'" in capsys.readouterr().out
     with pytest.raises(SystemExit, match="device 'gone' not found"):
-        asyncio.run(bx.find_device(None, "gone"))
+        asyncio.run(setu_client.find_device(None, "gone"))
 
 
 # ---- transfer commands -----------------------------------------------------------------
@@ -105,7 +105,7 @@ def test_caps(bleak, monkeypatch, capsys):
     assert "connected, ATT MTU 247 -> 244 B frames, 240 B per DATA frame" in out
     assert "protocol v2, max frame 244 B, window 16" in out
     c = FakeBleakClient.made[0]
-    assert c.target == "AA:BB" and c.notify_uuid == bx.char_uuid(2, bx.PROJECT_BASE)
+    assert c.target == "AA:BB" and c.notify_uuid == setu_client.char_uuid(2, setu_client.PROJECT_BASE)
 
 
 def test_ping(bleak, monkeypatch, capsys):
@@ -118,7 +118,7 @@ def test_send_reports_the_server_result(bleak, monkeypatch, capsys):
 
     def init(self, *a, **kw):
         real_init(self, *a, **kw)
-        self.after_end = [(bx.APP_TYPE_RESULT, struct.pack("<BII", 0, 1000, 512))]
+        self.after_end = [(setu_client.APP_TYPE_RESULT, struct.pack("<BII", 0, 1000, 512))]
     monkeypatch.setattr(CliServer, "__init__", init)
     with pytest.raises(SystemExit) as e:
         cli(monkeypatch, "send", "1000", "--name", "dev")
@@ -158,7 +158,7 @@ def test_hex_upload(bleak, monkeypatch, capsys, tmp_path):
 
     def init(self, *a, **kw):
         real_init(self, *a, **kw)
-        self.after_end = [(bx.APP_TYPE_STORED, struct.pack("<BII", 0, 0, 32))]
+        self.after_end = [(setu_client.APP_TYPE_STORED, struct.pack("<BII", 0, 0, 32))]
     monkeypatch.setattr(CliServer, "__init__", init)
     cli(monkeypatch, "hex", _hex_file(tmp_path), "--name", "dev")
     out = capsys.readouterr().out
@@ -166,8 +166,8 @@ def test_hex_upload(bleak, monkeypatch, capsys, tmp_path):
     assert "0x00000000 32 B: OK" in out and "0x00001000 16 B: OK" in out
     assert "hex upload done" in out
     objs = FakeBleakClient.made[0].server.objects
-    assert objs[0] == (bx.APP_TYPE_SEGMENT, struct.pack("<I", 0) + bytes(range(32)))
-    assert objs[1] == (bx.APP_TYPE_SEGMENT, struct.pack("<I", 0x1000) + bytes(range(100, 116)))
+    assert objs[0] == (setu_client.APP_TYPE_SEGMENT, struct.pack("<I", 0) + bytes(range(32)))
+    assert objs[1] == (setu_client.APP_TYPE_SEGMENT, struct.pack("<I", 0x1000) + bytes(range(100, 116)))
 
 
 def test_hex_upload_stops_at_a_failed_segment(bleak, monkeypatch, tmp_path):
@@ -185,7 +185,7 @@ def test_hex_upload_stops_at_a_failed_segment(bleak, monkeypatch, tmp_path):
 def test_hex_upload_without_stored_times_out(bleak, monkeypatch, tmp_path):
     async def no_stored(self, addr, data, progress=None):
         raise TimeoutError(f"0x{addr:08x}: no STORED from the server")
-    monkeypatch.setattr(bx.BulkXferClient, "upload_segment", no_stored)
+    monkeypatch.setattr(setu_client.SETUClient, "upload_segment", no_stored)
     with pytest.raises(SystemExit, match="no STORED"):
         cli(monkeypatch, "hex", _hex_file(tmp_path), "--name", "dev")
 
@@ -269,7 +269,7 @@ def test_provision_creates_a_ca_then_reuses_it(prov_fakes, monkeypatch, capsys, 
     assert FakeSession.made[0].calls == [("provision", "CN=BLE Host Provisioning CA", 90)]
     assert FakeSession.made[0].receiver == "pc-receiver"
     pc = FakePc.made[0]
-    assert pc.started and pc.stopped and pc.base == bx.PROJECT_BASE
+    assert pc.started and pc.stopped and pc.base == setu_client.PROJECT_BASE
     with open(out, "rb") as fh:
         assert x509.load_pem_x509_certificate(fh.read()).subject.rfc4514_string() == \
             "CN=BLE Host Provisioning CA"
@@ -297,7 +297,7 @@ def test_provision_with_a_broken_ca_folder(prov_fakes, monkeypatch, tmp_path):
 
 def test_provision_needs_the_pc_service(prov_fakes, monkeypatch, tmp_path):
     FakePc.fail = "hosting a GATT service needs Windows (WinRT)"
-    with pytest.raises(SystemExit, match="PC BulkXfer service not available: hosting"):
+    with pytest.raises(SystemExit, match="PC SETU service not available: hosting"):
         cli(monkeypatch, "provision", "--name", "dev", "--ca", str(tmp_path / "ca"))
     assert FakeBleakClient.made == [], "no connection without the PC service"
 
@@ -316,7 +316,7 @@ def test_provision_negative(prov_fakes, monkeypatch, capsys, tmp_path, failures)
     async def rejections(session, ca, days):
         seen.append((session, days))
         return failures, FakeSession.outcome(ca)
-    monkeypatch.setattr(bx, "provision_with_rejections", rejections)
+    monkeypatch.setattr(setu_client, "provision_with_rejections", rejections)
     argv = ["provision", "--negative", "--name", "dev", "--ca", str(tmp_path / "ca")]
     if failures:
         with pytest.raises(SystemExit, match="device verification: 2 case"):
@@ -440,23 +440,23 @@ class FsCliServer(CliServer):
 
     def _on_frame(self, f):
         t, p = f[1], f[2:]
-        if t == bx.APP_TYPE_BEGIN:
-            self._notify(bx.frame(*FsCliServer.device.begin(p)))
-        elif t == bx.APP_TYPE_COMMIT:
-            self._notify(bx.frame(*FsCliServer.device.commit()))
+        if t == setu_client.APP_TYPE_BEGIN:
+            self._notify(setu_client.frame(*FsCliServer.device.begin(p)))
+        elif t == setu_client.APP_TYPE_COMMIT:
+            self._notify(setu_client.frame(*FsCliServer.device.commit()))
         elif t == 0x40:
             for rt, rp in FsCliServer.device.handle(p):
-                self._notify(bx.frame(rt, rp))
+                self._notify(setu_client.frame(rt, rp))
         else:
             super()._on_frame(f)
 
     def _end(self):
         n = len(self.objects)
         super()._end()
-        if len(self.objects) > n and self.objects[-1][0] == bx.APP_TYPE_SEGMENT:
+        if len(self.objects) > n and self.objects[-1][0] == setu_client.APP_TYPE_SEGMENT:
             obj = self.objects[-1][1]
             FsCliServer.device.segment(obj)
-            self._notify(bx.frame(bx.APP_TYPE_STORED, struct.pack("<BII", 0, *struct.unpack("<I", obj[:4]),
+            self._notify(setu_client.frame(setu_client.APP_TYPE_STORED, struct.pack("<BII", 0, *struct.unpack("<I", obj[:4]),
                                                                   len(obj) - 4)))
 
 
@@ -475,7 +475,7 @@ def fsbleak(bleak, monkeypatch, fsdev):
 def test_hex_store(fsbleak, monkeypatch, capsys, tmp_path):
     cli(monkeypatch, "hex", _hex_file(tmp_path), "--store", "APP1.BIN", "--name", "dev")
     out = capsys.readouterr().out
-    image = bx.file_image([(0, bytes(range(32))), (0x1000, bytes(range(100, 116)))])
+    image = setu_client.file_image([(0, bytes(range(32))), (0x1000, bytes(range(100, 116)))])
     assert "storing as /FLASH_DISK:/FW/APP1.BIN" in out
     assert f"file /FLASH_DISK:/FW/APP1.BIN: {len(image)} B, crc 0x{zlib.crc32(image):08x} (matches)" in out
     assert fsbleak.files["/FLASH_DISK:/FW/APP1.BIN"] == image
@@ -502,7 +502,7 @@ def test_hex_stops_when_stored_reports_an_error(bleak, monkeypatch, tmp_path):
 
     def init(self, *a, **kw):
         real_init(self, *a, **kw)
-        self.after_end = [(bx.APP_TYPE_STORED, struct.pack("<BII", 8, 0, 32))]
+        self.after_end = [(setu_client.APP_TYPE_STORED, struct.pack("<BII", 8, 0, 32))]
     monkeypatch.setattr(CliServer, "__init__", init)
     with pytest.raises(SystemExit) as e:
         cli(monkeypatch, "hex", _hex_file(tmp_path), "--name", "dev")

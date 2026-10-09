@@ -1,8 +1,8 @@
 # Device Pairing — Protocol
 
-This is the contract for **certificate-based OOB pairing** of two provisioned devices (phase 2 of [`_DOC/CBAP`](../CBAP/), AN1396 §4.2). The firmware side is module [`_PAIR`](../../_ASW/_PAIR/Pair.c). A **host** orchestrates: the **Pairing** page of the PC GUI in [_TOOLS/BleHostGUI](../../_TOOLS/BleHostGUI/README.md), or the `pair` command of [bulkxfer_client.py](../../_TOOLS/BleHostGUI/bulkxfer_client.py). Both use [blehost/protocols/pairing.py](../../_TOOLS/BleHostGUI/blehost/protocols/pairing.py). Design, security and limitations are in [README.md](README.md).
+This is the contract for **certificate-based OOB pairing** of two provisioned devices (phase 2 of [`_DOC/CBAP`](../CBAP/), AN1396 §4.2). The firmware side is module [`_PAIR`](../../_ASW/_PAIR/Pair.c). A **host** orchestrates: the **Pairing** page of the PC GUI in [_TOOLS/BleHostGUI](../../_TOOLS/BleHostGUI/README.md), or the `pair` command of [setu_client.py](../../_TOOLS/BleHostGUI/setu_client.py). Both use [blehost/protocols/pairing.py](../../_TOOLS/BleHostGUI/blehost/protocols/pairing.py). Design, security and limitations are in [README.md](README.md).
 
-The host tells each device its role and its peer. The two devices connect to each other and exchange their device certificates over BulkXfer ([../BulkXfer/PROTOCOL.md](../BulkXfer/PROTOCOL.md)). Each verifies the other's certificate against the CA it was provisioned with ([../Provisioning/PROTOCOL.md](../Provisioning/PROTOCOL.md)). They then exchange their LE Secure Connections OOB data, each signed with the sender's device key, verify the signatures, and pair with the OOB method. The result is an authenticated, encrypted and bonded link at security level 4. From then on the two devices reconnect by themselves whenever the link is down, and encrypt it with the stored keys (§4.1).
+The host tells each device its role and its peer. The two devices connect to each other and exchange their device certificates over SETU ([../SETU/PROTOCOL.md](../SETU/PROTOCOL.md)). Each verifies the other's certificate against the CA it was provisioned with ([../Provisioning/PROTOCOL.md](../Provisioning/PROTOCOL.md)). They then exchange their LE Secure Connections OOB data, each signed with the sender's device key, verify the signatures, and pair with the OOB method. The result is an authenticated, encrypted and bonded link at security level 4. From then on the two devices reconnect by themselves whenever the link is down, and encrypt it with the stored keys (§4.1).
 
 ## 1. Roles and links
 
@@ -12,7 +12,7 @@ The host tells each device its role and its peer. The two devices connect to eac
 | Device chosen as **central** | Host link and peer link | Peripheral to the host; central to the peer: scans for it, connects, starts pairing, writes SECURED; once bonded, reconnects and encrypts |
 | Device chosen as **peripheral** | Host link and peer link | Peripheral to both; advertises **directed** to the central during a run, undirected while its bonded central is away |
 
-Both devices are GATT client and server on the peer link: each sends with its BulkXfer Client to the other's BulkXfer Server.
+Both devices are GATT client and server on the peer link: each sends with its SETU Client to the other's SETU Server.
 
 A device holds at most one host link and one peer link. A second host connection is refused, and undirected advertising stops while a host is connected, except on a bonded peripheral whose central is not connected (§4.1).
 
@@ -28,7 +28,7 @@ UUIDs are `B1C1xxxx` followed by the project base `-16A1-4812-AF35-F3F29A92F6CA`
 | STATUS CCCD | `0x2902` | — | Read, Write | Write `01 00` to get notifications |
 | SECURED | `B1C10003-…` | Write | Write, **LE Secure Connections encryption** | `01`, written by the central over the paired peer link (§5 step 9) |
 
-**Advertising.** A provisioned device advertises the Pairing service UUID: flags, plus the incomplete list of 128-bit UUIDs. The device name is in the scan response. A device that is not provisioned advertises the BulkXfer service instead ([../HexUpload/PROTOCOL.md §1](../HexUpload/PROTOCOL.md#1-discovery)). Both services are always in the GATT table.
+**Advertising.** A provisioned device advertises the Pairing service UUID: flags, plus the incomplete list of 128-bit UUIDs. The device name is in the scan response. A device that is not provisioned advertises the SETU service instead ([../HexUpload/PROTOCOL.md §1](../HexUpload/PROTOCOL.md#1-discovery)). Both services are always in the GATT table.
 
 **Addresses.** An address is 7 bytes on the wire: `[u8 type][6 B address, least significant byte first]`, the layout of Zephyr's `bt_addr_le_t`. `type` is `0` public or `1` random. An nRF54L15 uses a random static address, so `C4:5E:2A:11:9F:03` (random) is `01 03 9f 11 2a 5e c4`. STATUS gives each device's own address, so the host never has to guess the type.
 
@@ -71,14 +71,14 @@ The write itself is refused with an ATT error when the command is malformed or c
 | `0` | NONE | — | — |
 | `1` | NOT_PROVISIONED | — | This device is not provisioned, or has no CA |
 | `2` | BAD_ARG | — | The peer address is this device's own |
-| `3` | BUSY | errno | A BulkXfer transfer with the host was running at START, or the Server could not move to the peer link |
+| `3` | BUSY | errno | A SETU transfer with the host was running at START, or the Server could not move to the peer link |
 | `4` | TIMEOUT | state at expiry | The peer link was not up within 30 s (`CONFIG_PAIR_CONNECT_TIMEOUT_MS`), or the run did not end within 60 s (`CONFIG_PAIR_TIMEOUT_MS`) |
 | `5` | CONNECT | HCI error or errno | The connection to the peer failed |
-| `6` | NO_PEER_SVC | errno | The peer has no BulkXfer service (Client attach failed) |
+| `6` | NO_PEER_SVC | errno | The peer has no SETU service (Client attach failed) |
 | `7` | PEER_CERT | certificate status | The peer certificate failed verification. Codes as provisioning RESULT: `3` PARSE, `4` NOT_CA (no CA on this device), `5` BAD_SIG (another CA, or tampered), `8` BAD_PROFILE (not P-256 / ecdsa-with-SHA256, CA:TRUE, or KeyUsage without digitalSignature and keyAgreement), `10` INTERNAL |
 | `8` | OOB_SIG | PSA status | The peer's OOB signature does not verify with the key of its certificate |
 | `9` | SMP | reason | Pairing failed. `bt_security_err` from the stack, an errno from a stack call, the security level reached if below 4, `0xFF` if not bonded, or `0x80`+config if the stack did not ask for both devices' OOB data |
-| `10` | TRANSFER | BulkXfer status | A certificate or OOB transfer failed (CRC, timeout, abort) |
+| `10` | TRANSFER | SETU status | A certificate or OOB transfer failed (CRC, timeout, abort) |
 | `11` | SECURED | ATT error or errno | Central: the peer refused, or SECURED could not be found or written |
 | `12` | LINK_LOST | HCI reason | The peer link dropped during the run |
 | `13` | CANCELLED | — | CANCEL from the host |
@@ -92,7 +92,7 @@ A host MUST treat an unknown `error` as a failure.
 |---|---|---|
 | `0` | IDLE | Nothing running, no bond |
 | `1` | ARMED | Peripheral: advertising directed to the peer. Central: scanning for it |
-| `2` | CONNECTED | Peer link up; BulkXfer moved to it; attaching to the peer's service |
+| `2` | CONNECTED | Peer link up; SETU moved to it; attaching to the peer's service |
 | `3` | CERT_EXCHANGE | Device certificates being exchanged |
 | `4` | CERT_VERIFIED | The peer certificate verified |
 | `5` | OOB_EXCHANGE | Signed OOB data being exchanged |
@@ -100,7 +100,7 @@ A host MUST treat an unknown `error` as a failure.
 | `7` | PAIRED | Bonded at level 4, and the link was proven (SECURED written). The peer link stays up; when it is down, the devices reconnect (§4.1) |
 | `8` | FAILED | The run ended; see `error`, `detail`. The peer link is dropped |
 
-ARMED to PAIRING is a **run**. START is refused during a run and accepted in IDLE, PAIRED and FAILED. In PAIRED, the old peer link is dropped first and the new run pairs afresh. The reference host (GUI and `bulkxfer_client.py pair`) does not send START to two devices that are PAIRED with each other (each one's peer address is the other's own address): UNPAIR one of them first.
+ARMED to PAIRING is a **run**. START is refused during a run and accepted in IDLE, PAIRED and FAILED. In PAIRED, the old peer link is dropped first and the new run pairs afresh. The reference host (GUI and `setu_client.py pair`) does not send START to two devices that are PAIRED with each other (each one's peer address is the other's own address): UNPAIR one of them first.
 
 A bond survives a reset: a provisioned device with a bond starts in PAIRED, with the bonded peer as peer address and its saved role. A device that is not provisioned deletes its bonds at boot. A provisioning wipe (DEPROVISION or the button) deletes every bond and its record, returns to IDLE, and is refused during a run.
 
@@ -112,7 +112,7 @@ A device that has paired saves a **bond record**, `[u8 role][7 B peer address]`,
 - **Central:** scans passively for the peer's address, connects (interval 15 ms, supervision timeout 4 s) and requests security level 4. The stack encrypts with the stored keys; there is no new pairing (pairing outside a run is refused anyway, §5 step 8).
 - Once the link is encrypted at **level 4** with the bonded keys, both devices **blink their LED** (`DK_LED1`, LED0 on the nRF54L15 DK; 500 ms on, 500 ms off) for as long as the link stays up, and turn it off when it drops.
 - A link that does not reach level 4 within 10 s, whose encryption fails (for example, the peer has lost its keys), or that comes up below level 4, is dropped. The central scans again 1 s after the link drops or an attempt fails, for as long as it stays PAIRED.
-- BulkXfer stays with the host on a reconnected link: nothing is exchanged over it here. STATUS stays PAIRED throughout, and is not notified for a reconnection.
+- SETU stays with the host on a reconnected link: nothing is exchanged over it here. STATUS stays PAIRED throughout, and is not notified for a reconnection.
 - START, UNPAIR and a wipe stop reconnecting and delete the record. A bond without a record (from older firmware) restores PAIRED with role `0` and is not reconnected; a record without its bond is deleted at boot.
 
 The LED after the first pairing stays as it was: steady on the peripheral (§5 step 9), off on the central. It turns off when that link drops, and blinks once the pair has reconnected.
@@ -123,14 +123,14 @@ The host connects to both devices, subscribes to STATUS and reads it (provState 
 
 1. **START** to the peripheral, `[01][02][central's address]`, then to the central, `[01][01][peripheral's address]`. Each device deletes any old bond with the peer.
 2. **Peripheral:** low-duty directed connectable advertising to the central. **Central:** passive scan from its identity address (the target of the directed advertising; a scanner on a private address would not receive it). On a connectable advertisement from the peer it stops scanning and connects (interval 15 ms, supervision timeout 4 s). → ARMED.
-3. **Link up.** On both: the BulkXfer router admits only appTypes `0x30`–`0x3F` (§6). The BulkXfer Server moves from the host link to the peer link, and the Client attaches to the peer's BulkXfer service. → CONNECTED.
+3. **Link up.** On both: the SETU router admits only appTypes `0x30`–`0x3F` (§6). The SETU Server moves from the host link to the peer link, and the Client attaches to the peer's SETU service. → CONNECTED.
 4. **Certificates.** Each sends its device certificate, appType `0x30`. → CERT_EXCHANGE.
 5. **Verification.** Each verifies the peer's certificate against its CA: chain, profile and KeyUsage digitalSignature + keyAgreement. This also gives the peer's public key. → CERT_VERIFIED.
 6. **OOB data.** Each makes fresh LE Secure Connections OOB data (`r`, `c`) and signs it (§7). It sets its SMP OOB flag, then sends `[r][c][signature]` with appType `0x31`, after its own certificate has been acknowledged. → OOB_EXCHANGE.
 7. **OOB verification.** Each verifies the peer's signature with the peer's certificate key, over the peer's address as sender and its own as receiver. → PAIRING.
 8. **Pairing.** The central requests security level 4. SMP uses the OOB method (both OOB flags set), and asks each device for both OOB data sets. Each answers once the peer's data has verified, and refuses any other link. The result must be level 4 and bonded.
 9. **Proof.** The central writes `01` to the peer's SECURED, which the stack allows only on a level-4 encrypted link. The peripheral lights its LED (`DK_LED1`, LED0 on the board), steady → PAIRED. The central → PAIRED when the write is acknowledged.
-10. Each device moves BulkXfer back to its host link, clears the OOB flag and saves the bond record (§4.1). The host may disconnect: the peer link stays up.
+10. Each device moves SETU back to its host link, clears the OOB flag and saves the bond record (§4.1). The host may disconnect: the peer link stays up.
 
 ```
 Host            Device P (peripheral)                     Device C (central)
@@ -152,14 +152,14 @@ STATUS is notified to the host at every state change, so the host follows both d
 
 ## 6. Objects between the devices
 
-Transfers go from each device's BulkXfer Client to the other's Server, over the peer link. There are no short messages between devices.
+Transfers go from each device's SETU Client to the other's Server, over the peer link. There are no short messages between devices.
 
 | appType | Object | Length |
 |---|---|---|
 | `0x30` PEER_CERT | The sender's DER device certificate | 1–1024 |
 | `0x31` OOB | `[16 B r][16 B c][64 B signature]` | exactly 96 |
 
-The receiver refuses a transfer at START (BulkXfer ABORT by receiver, REJECTED) when:
+The receiver refuses a transfer at START (SETU ABORT by receiver, REJECTED) when:
 
 - no run holds the peer link (state below CONNECTED or above OOB_EXCHANGE);
 - the appType is not `0x30` or `0x31`, or its length is out of range;
@@ -194,7 +194,7 @@ A run logs its steps on the device's UART (`<inf> APP_LOG: …`): `pairing as ce
 | Central: next reconnection attempt | 1 s after a drop or failure | Device, `PAIR_RECONNECT_DELAY_MS` in `Pair.c` |
 | LED blink | 500 ms on, 500 ms off | Device, `PAIR_LED_BLINK_MS` in `Pair.c` |
 | Host waiting for both PAIRED or a FAILED | 75 s (reference) | Host: above the device limit, so the device reports the timeout itself |
-| Each transfer | BulkXfer's own timeouts | [../BulkXfer/PROTOCOL.md](../BulkXfer/PROTOCOL.md) |
+| Each transfer | SETU's own timeouts | [../SETU/PROTOCOL.md](../SETU/PROTOCOL.md) |
 
 ## 10. Examples
 

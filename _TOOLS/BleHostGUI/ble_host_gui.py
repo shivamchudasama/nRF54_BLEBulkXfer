@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""BLE Host: PC-side GUI for the nRF54 BLE Bulk Transfer firmware.
+"""BLE Host: PC-side GUI for the Project Hanuman firmware.
 
     pip install -r requirements.txt
     python ble_host_gui.py
@@ -15,7 +15,7 @@ from blehost.features.file_system import FileSystemFeature
 from blehost.features.hex_upload import HexUploadFeature
 from blehost.features.pairing import PairingFeature
 from blehost.features.provisioning import ProvisioningFeature
-from blehost.protocols.bulkxfer import BulkXferService
+from blehost.protocols.setu import SETUService
 from blehost.ui.main_window import MainWindow
 
 # Feature pages, in rail order. Add new features here.
@@ -34,8 +34,8 @@ def _dpi_aware():
 def main():
     _dpi_aware()
     ctx = AppContext()
-    ctx.services[BulkXferService.NAME] = BulkXferService(ctx)
-    # The PC's own BulkXfer service: the device sends to the PC through it (CSR)
+    ctx.services[SETUService.NAME] = SETUService(ctx)
+    # The PC's own SETU service: the device sends to the PC through it (CSR)
     pc = PcGattServer(ctx.settings.base_uuid, log=lambda t: ctx.log(t, "warn"), tap=ctx.tap)
     ctx.services[PcGattServer.NAME] = pc
     ctx.link.add_disconnect_hook(lambda _link, _reason: pc.link_lost())
@@ -45,8 +45,8 @@ def main():
     MainWindow(root, ctx, FEATURES).show()
     ctx.bus.attach(root)
     ctx.runner.start()
-    ctx.run(pc.start(), on_done=lambda _: ctx.log("PC BulkXfer service published"),
-            on_error=lambda e: ctx.log(f"PC BulkXfer service not available: {e}", "warn"))
+    ctx.run(pc.start(), on_done=lambda _: ctx.log("PC SETU service published"),
+            on_error=lambda e: ctx.log(f"PC SETU service not available: {e}", "warn"))
     root.mainloop()
 
 

@@ -2,7 +2,7 @@
 """The Hex Upload page's "Store as" (_TOOLS/BleHostGUI/blehost/features/hex_upload.py):
 the name check, and an upload stored as a file - BEGIN, the segments, COMMIT and
 the size / CRC check - on the BLE loop's coroutine, against conftest's scripted
-BulkXfer server with a FakeFsDevice behind it."""
+SETU server with a FakeFsDevice behind it."""
 
 import asyncio
 import struct
@@ -11,9 +11,9 @@ import zlib
 
 import pytest
 
-import bulkxfer_client as bx
+import setu_client
 from blehost.features import hex_upload as hu
-from blehost.protocols import bulkxfer as bxproto
+from blehost.protocols import setu as setu_proto
 from conftest import FakeServer
 
 
@@ -26,10 +26,10 @@ class StoringServer(FakeServer):
 
     def _on_frame(self, f):
         t, p = f[1], f[2:]
-        if t == bx.APP_TYPE_BEGIN:
-            self._notify(bx.frame(*self.device.begin(p)))
-        elif t == bx.APP_TYPE_COMMIT:
-            self._notify(bx.frame(*self.device.commit()))
+        if t == setu_client.APP_TYPE_BEGIN:
+            self._notify(setu_client.frame(*self.device.begin(p)))
+        elif t == setu_client.APP_TYPE_COMMIT:
+            self._notify(setu_client.frame(*self.device.commit()))
         else:
             super()._on_frame(f)
 
@@ -39,7 +39,7 @@ class StoringServer(FakeServer):
         if len(self.objects) > n:
             obj = self.objects[-1][1]
             self.device.segment(obj)
-            self._notify(bx.frame(bx.APP_TYPE_STORED,
+            self._notify(setu_client.frame(setu_client.APP_TYPE_STORED,
                                   struct.pack("<BII", 0, struct.unpack("<I", obj[:4])[0], len(obj) - 4)))
 
 
@@ -50,10 +50,10 @@ class Ctx:
         self.link = types.SimpleNamespace(connected=True, mtu_size=247)
 
         def new_client():
-            c = bx.BulkXferClient(server, log=lambda *_: None)
+            c = setu_client.SETUClient(server, log=lambda *_: None)
             server.client = c
             return c
-        self.services = {bxproto.BulkXferService.NAME: types.SimpleNamespace(new_client=new_client)}
+        self.services = {setu_proto.SETUService.NAME: types.SimpleNamespace(new_client=new_client)}
 
     def log(self, text, level="info"):
         self.logs.append((level, text))
@@ -83,7 +83,7 @@ def test_store_name(page):
 
 def test_upload_stored_as_file(page, fsdev):
     assert asyncio.run(page._upload(list(SEGMENTS), "APP1.BIN")) == 2
-    image = bx.file_image(SEGMENTS)
+    image = setu_client.file_image(SEGMENTS)
     assert fsdev.files["/FLASH_DISK:/FW/APP1.BIN"] == image
     assert ("info", f"hex: stored as /FLASH_DISK:/FW/APP1.BIN, {len(image)} B, "
                     f"crc 0x{zlib.crc32(image):08X}") in page.ctx.logs
@@ -112,10 +112,10 @@ def test_commit_failure_and_mismatch(page, fsdev):
 def test_monitor_names_begin_commit_file(vectors):
     def shown(name):
         v = next(s for s in vectors["hex_file"]["shorts"] if s["name"] == name)
-        return bxproto.decode_frame(bytes.fromhex(v["hex"]))[1]
+        return setu_proto.decode_frame(bytes.fromhex(v["hex"]))[1]
     assert shown("begin_fw1") == "BEGIN FW1"
     assert shown("commit") == "COMMIT "
     rec = vectors["hex_file"]["record"]
     assert shown("file_commit_ok") == f"FILE COMMIT OK size={rec['file_size']} crc=0x{rec['file_crc32']:08x}"
     assert shown("file_begin_busy") == "FILE BEGIN BUSY size=0 crc=0x00000000"
-    assert bxproto.decode_frame(bx.frame(bx.APP_TYPE_FILE, b"\x12"))[1] == "FILE 12"
+    assert setu_proto.decode_frame(setu_client.frame(setu_client.APP_TYPE_FILE, b"\x12"))[1] == "FILE 12"

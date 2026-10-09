@@ -1,19 +1,19 @@
 # Device Provisioning — Protocol
 
-This is the contract between the firmware in `_ASW` (module [`_PROV`](../../_ASW/_PROV/Prov.c)) and a **provisioner**: the PC that acts as the Certificate Authority (CA). The provisioner gets the device's Certificate Signing Request (CSR), issues a device certificate, and sends it to the device with the CA certificate. The device verifies both, stores both and deletes its CSR. Everything runs on BulkXfer, specified in [../BulkXfer/PROTOCOL.md](../BulkXfer/PROTOCOL.md).
+This is the contract between the firmware in `_ASW` (module [`_PROV`](../../_ASW/_PROV/Prov.c)) and a **provisioner**: the PC that acts as the Certificate Authority (CA). The provisioner gets the device's Certificate Signing Request (CSR), issues a device certificate, and sends it to the device with the CA certificate. The device verifies both, stores both and deletes its CSR. Everything runs on SETU, specified in [../SETU/PROTOCOL.md](../SETU/PROTOCOL.md).
 
-There are two provisioners: the **Provisioning** tab of the PC GUI in [_TOOLS/BleHostGUI](../../_TOOLS/BleHostGUI/README.md), and the `provision` command of [bulkxfer_client.py](../../_TOOLS/BleHostGUI/bulkxfer_client.py). Both use [blehost/protocols/provisioning.py](../../_TOOLS/BleHostGUI/blehost/protocols/provisioning.py). Design, trust model and limitations are in [README.md](README.md).
+There are two provisioners: the **Provisioning** tab of the PC GUI in [_TOOLS/BleHostGUI](../../_TOOLS/BleHostGUI/README.md), and the `provision` command of [setu_client.py](../../_TOOLS/BleHostGUI/setu_client.py). Both use [blehost/protocols/provisioning.py](../../_TOOLS/BleHostGUI/blehost/protocols/provisioning.py). Design, trust model and limitations are in [README.md](README.md).
 
 The key, the CSR and, once the device is provisioned, both certificates persist across resets in the device's Internal Trusted Storage (ITS). Provisioning is **one-time**: a provisioned device refuses another run until it is wiped, by the DEPROVISION message (§3) or by holding Button 0 on the DK. A wipe destroys the key, the CSR and both certificates and makes a fresh key and CSR, as on a chip-erased device. The device also logs each certificate on the serial terminal (§8).
 
 ## 1. Roles and services
 
-| Side | BLE role | Hosts | BulkXfer roles |
+| Side | BLE role | Hosts | SETU roles |
 |---|---|---|---|
-| Device | Peripheral | Its BulkXfer service | Server: receives the certificates. Client: sends the CSR |
-| Provisioner | Central | A BulkXfer service of its own, with the same UUIDs | Client: sends requests and certificates. Receiver: gets the CSR |
+| Device | Peripheral | Its SETU service | Server: receives the certificates. Client: sends the CSR |
+| Provisioner | Central | A SETU service of its own, with the same UUIDs | Client: sends requests and certificates. Receiver: gets the CSR |
 
-A BulkXfer transfer always goes from the GATT client to the side that hosts the service. The CSR travels from the device to the provisioner, so **the provisioner hosts a BulkXfer service too**, and the device attaches its BulkXfer Client to it over the same connection. The device finds it only when it is asked for the CSR (§5). It does not need to be advertised.
+A SETU transfer always goes from the GATT client to the side that hosts the service. The CSR travels from the device to the provisioner, so **the provisioner hosts a SETU service too**, and the device attaches its SETU Client to it over the same connection. The device finds it only when it is asked for the CSR (§5). It does not need to be advertised.
 
 ## 2. GATT
 
@@ -28,7 +28,7 @@ The provisioner's service must have:
 | CTRL | `B1C00002-…` | Notify, with CCCD | The provisioner sends ACK / NACK / END / ABORT here. The device subscribes before sending |
 | CAPS | `B1C00003-…` | Read | Optional. The device does not read it |
 
-The provisioner's receiver follows [BulkXfer §7](../BulkXfer/PROTOCOL.md#7-receiver-behaviour). The device sends with chunk `min(ATT_MTU − 3, 244) − 4`, so the provisioner must accept chunks up to 240.
+The provisioner's receiver follows [SETU §7](../SETU/PROTOCOL.md#7-receiver-behaviour). The device sends with chunk `min(ATT_MTU − 3, 244) − 4`, so the provisioner must accept chunks up to 240.
 
 ## 3. Application messages
 
@@ -39,9 +39,9 @@ appTypes `0x20`–`0x2F` are provisioning's (the device's router gives this rang
 | `0x20` GET_STATUS | provisioner → device | short message | none |
 | `0x21` STATUS | device → provisioner | short message | `[u8 state][u8 flags][u16 LE CSR length][32 B SHA-256 of the public key]` |
 | `0x22` CSR_REQ | provisioner → device | short message | none |
-| `0x23` CSR | device → provisioner | BulkXfer transfer, to the provisioner's service | DER CSR (PKCS#10) |
-| `0x24` CA_CERT | provisioner → device | BulkXfer transfer | DER X.509 CA certificate, 1–1024 bytes |
-| `0x25` DEV_CERT | provisioner → device | BulkXfer transfer | DER X.509 device certificate, 1–1024 bytes |
+| `0x23` CSR | device → provisioner | SETU transfer, to the provisioner's service | DER CSR (PKCS#10) |
+| `0x24` CA_CERT | provisioner → device | SETU transfer | DER X.509 CA certificate, 1–1024 bytes |
+| `0x25` DEV_CERT | provisioner → device | SETU transfer | DER X.509 device certificate, 1–1024 bytes |
 | `0x26` RESULT | device → provisioner | short message | `[u8 refAppType][u8 status]` |
 | `0x27` DEPROVISION | provisioner → device | short message | none. Wipe and make a fresh key and CSR; answered with RESULT |
 
@@ -71,8 +71,8 @@ Short messages from the provisioner go to the device's DATA. Short messages from
 | `0x06` | KEY_MISMATCH | Device certificate carries another public key than the device's |
 | `0x07` | SUBJECT_MISMATCH | Device certificate subject differs from the CSR subject (byte for byte) |
 | `0x08` | BAD_PROFILE | Outside the profile (§7): key not P-256, signature not ecdsa-with-SHA256, not X.509 v3, device certificate CA:TRUE or without digitalSignature and keyAgreement |
-| `0x09` | NO_PEER_SVC | The device found no BulkXfer service on the provisioner |
-| `0x0A` | INTERNAL | Crypto, storage, memory or BulkXfer failure on the device. For DEV_CERT: the certificates could not be stored (neither is kept; the state stays CA_OK and the device certificate can be sent again). For DEPROVISION: something could not be erased, or no new key and CSR could be made (state NO_KEY) |
+| `0x09` | NO_PEER_SVC | The device found no SETU service on the provisioner |
+| `0x0A` | INTERNAL | Crypto, storage, memory or SETU failure on the device. For DEV_CERT: the certificates could not be stored (neither is kept; the state stays CA_OK and the device certificate can be sent again). For DEPROVISION: something could not be erased, or no new key and CSR could be made (state NO_KEY) |
 | `0x0B` | TRANSFER | The CSR transfer failed (its END or ABORT was not OK) |
 
 A provisioner MUST treat an unknown status as a failure.
@@ -103,7 +103,7 @@ Nothing is stored before the device certificate verifies against the CA, so a re
 1. Connect. Subscribe to the device's CTRL. Host the provisioner's service (§2) before step 3.
 2. **GET_STATUS** → STATUS. Stop if `state` is NO_KEY. If it is PROVISIONED, stop, or send **DEPROVISION** → RESULT(`0x27`, OK) to start again from a fresh key (certificates issued for the old key no longer match).
 3. **CSR_REQ**. The device:
-   - attaches its BulkXfer Client to the provisioner's service (discovery, CTRL subscription), unless it is already attached;
+   - attaches its SETU Client to the provisioner's service (discovery, CTRL subscription), unless it is already attached;
    - sends the CSR as a transfer with appType `0x23`;
    - sends RESULT(`0x23`, OK) when the provisioner's END is OK, RESULT(`0x23`, TRANSFER) otherwise.
 
@@ -135,7 +135,7 @@ END only says the bytes arrived intact. **RESULT** says whether the certificate 
 
 ## 6. Rejections at START
 
-The device refuses a certificate transfer at START (BulkXfer ABORT, direction *by receiver*, reason REJECTED) and then sends RESULT with the reason, when:
+The device refuses a certificate transfer at START (SETU ABORT, direction *by receiver*, reason REJECTED) and then sends RESULT with the reason, when:
 
 | Cause | RESULT status |
 |---|---|

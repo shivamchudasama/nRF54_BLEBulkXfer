@@ -10,7 +10,7 @@ PairingOrchestrator works on any link object with
     gatt.read_gatt_char(uuid), gatt.write_gatt_char(uuid, data, response=...),
     await start_notify(uuid, callback(sender, data)),
 which is what core/ble_link.BleLink offers (the GUI) and what the command
-line's small bleak adapter offers (bulkxfer_client.py pair).
+line's small bleak adapter offers (setu_client.py pair).
 """
 
 import asyncio
@@ -31,7 +31,7 @@ CONTROL_UUID = pair_uuid(1)
 STATUS_UUID = pair_uuid(2)
 SECURED_UUID = pair_uuid(3)
 
-# Between the devices (BulkXfer appTypes); the host never sends these
+# Between the devices (SETU appTypes); the host never sends these
 APP_PEER_CERT, APP_OOB = 0x30, 0x31
 APP_RANGE = (0x30, 0x3F)
 
@@ -89,7 +89,7 @@ ERROR_TEXT = {
     Error.BUSY: "the device was busy with another transfer",
     Error.TIMEOUT: "timed out",
     Error.CONNECT: "could not connect to the peer",
-    Error.NO_PEER_SVC: "the peer has no BulkXfer service",
+    Error.NO_PEER_SVC: "the peer has no SETU service",
     Error.PEER_CERT: "the peer's certificate was rejected",
     Error.OOB_SIG: "the peer's OOB signature does not verify",
     Error.SMP: "LE Secure Connections pairing failed",

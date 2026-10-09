@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: MIT
 """The file commands over BLE (blehost/protocols/filesystem.py) and storing a hex
-upload as a file (bulkxfer_client.py BEGIN / COMMIT), against the golden frames
+upload as a file (setu_client.py BEGIN / COMMIT), against the golden frames
 of wire.json "file_system" and "hex_file" - the same bytes the C tests check on
 the firmware - and against FakeFsDevice (conftest.py), a scripted device with
 the firmware's rules."""
@@ -11,10 +11,10 @@ import zlib
 
 import pytest
 
-import bulkxfer_client as bx
-from blehost.protocols import bulkxfer as proto
+import setu_client
+from blehost.protocols import setu as proto
 from blehost.protocols import filesystem as fsp
-from conftest import FakeBlk
+from conftest import FakeSETU
 
 
 def run(coro):
@@ -47,11 +47,11 @@ def test_constants_match_firmware(vectors):
 
 def test_hex_file_constants_match_firmware(vectors):
     hf = vectors["hex_file"]
-    assert (bx.APP_TYPE_BEGIN, bx.APP_TYPE_COMMIT, bx.APP_TYPE_FILE) == tuple(
+    assert (setu_client.APP_TYPE_BEGIN, setu_client.APP_TYPE_COMMIT, setu_client.APP_TYPE_FILE) == tuple(
         hf["app_types"][k] for k in ("BEGIN", "COMMIT", "FILE"))
-    assert bx.FILE_DIR == hf["dir"]
-    assert bx.FILE_NAME_MAX == hf["name_max"]
-    assert not bx.valid_file_name(hf["temp_name"]) and not bx.valid_file_name(hf["temp_name"].lower())
+    assert setu_client.FILE_DIR == hf["dir"]
+    assert setu_client.FILE_NAME_MAX == hf["name_max"]
+    assert not setu_client.valid_file_name(hf["temp_name"]) and not setu_client.valid_file_name(hf["temp_name"].lower())
 
 
 # ---- codecs ------------------------------------------------------------------------------
@@ -62,7 +62,7 @@ def test_every_cmd_vector_encodes_byte_identical(vectors):
         t, payload = frame_of(v)
         assert t == fsp.APP_CMD
         assert fsp.encode_cmd(v["seq"], v["op"], bytes.fromhex(v["arg_hex"])) == payload, v["name"]
-        assert bx.frame(t, payload) == bytes.fromhex(v["hex"])
+        assert setu_client.frame(t, payload) == bytes.fromhex(v["hex"])
 
 
 def test_every_reply_vector_decodes(vectors):
@@ -156,15 +156,15 @@ def test_monitor_names_the_file_frames(vectors):
              "entry_dir_fw": "FS_ENTRY seq=10 DIR  /FLASH_DISK:/FW"}
     for name, shown in cases.items():
         assert proto.decode_frame(bytes.fromhex(vec(vectors, "file_system", name)["hex"])) == ("SHORT", shown)
-    assert proto.decode_frame(bx.frame(0x41, b"\x01"))[1] == "FS_REPLY 01"
-    assert proto.decode_frame(bx.frame(0x42, b"\x01"))[1] == "FS_ENTRY 01"
-    assert proto.decode_frame(bx.frame(0x40, b"\x01"))[1] == "FS_CMD 01"
+    assert proto.decode_frame(setu_client.frame(0x41, b"\x01"))[1] == "FS_REPLY 01"
+    assert proto.decode_frame(setu_client.frame(0x42, b"\x01"))[1] == "FS_ENTRY 01"
+    assert proto.decode_frame(setu_client.frame(0x40, b"\x01"))[1] == "FS_CMD 01"
 
 
 # ---- the session on the scripted device ---------------------------------------------------
 @pytest.fixture
 def session(fsdev):
-    return fsp.FileSystemSession(FakeBlk(fsdev), log=lambda *_: None, timeout=0.2)
+    return fsp.FileSystemSession(FakeSETU(fsdev), log=lambda *_: None, timeout=0.2)
 
 
 def test_session_write_then_read_back(session, fsdev):
@@ -219,20 +219,20 @@ def test_session_times_out_without_a_reply(session, fsdev):
 
 
 def test_session_ignores_other_replies_and_stale_ones(session, fsdev):
-    blk = session.blk
-    blk.short_q.put_nowait((fsp.APP_REPLY, bytes([99, 7, 0])))            # stale: dropped first
+    setu_cli = session.setu_cli
+    setu_cli.short_q.put_nowait((fsp.APP_REPLY, bytes([99, 7, 0])))            # stale: dropped first
 
-    real = blk.send_short
+    real = setu_cli.send_short
 
     async def send_short(app_type, payload):
         # an unrelated message, a reply with another seq and broken frames come first
-        blk.short_q.put_nowait((0x11, b"\x00" * 9))
-        blk.short_q.put_nowait((fsp.APP_REPLY, bytes([payload[0] ^ 0xFF, payload[1], 0])))
-        blk.short_q.put_nowait((fsp.APP_REPLY, b"\x00"))
-        blk.short_q.put_nowait((fsp.APP_ENTRY, b"\x00"))
-        blk.short_q.put_nowait((fsp.APP_ENTRY, struct.pack("<BBI", payload[0] ^ 0xFF, 0, 1) + b"/x"))
+        setu_cli.short_q.put_nowait((0x11, b"\x00" * 9))
+        setu_cli.short_q.put_nowait((fsp.APP_REPLY, bytes([payload[0] ^ 0xFF, payload[1], 0])))
+        setu_cli.short_q.put_nowait((fsp.APP_REPLY, b"\x00"))
+        setu_cli.short_q.put_nowait((fsp.APP_ENTRY, b"\x00"))
+        setu_cli.short_q.put_nowait((fsp.APP_ENTRY, struct.pack("<BBI", payload[0] ^ 0xFF, 0, 1) + b"/x"))
         await real(app_type, payload)
-    blk.send_short = send_short
+    setu_cli.send_short = send_short
     assert run(session.ls()) == []
 
 
@@ -335,10 +335,10 @@ def test_shell_ends_at_eof(session):
 # ---- a hex upload stored as a file ---------------------------------------------------------
 def test_file_image_matches_the_device_file(vectors, repo):
     hf = vectors["hex_file"]
-    segs = bx.parse_ihex(f"{repo}/AA00000100.hex")
+    segs = setu_client.parse_ihex(f"{repo}/AA00000100.hex")
     first = [s for s in segs if s[0] == hf["record"]["address"]][:1]
     a, d = first[0]
-    image = bx.file_image([(a, d[:hf["record"]["length"]])])
+    image = setu_client.file_image([(a, d[:hf["record"]["length"]])])
     assert image[:8].hex() == hf["record"]["header_hex"]
     assert (len(image), zlib.crc32(image)) == (hf["record"]["file_size"], hf["record"]["file_crc32"])
 
@@ -348,11 +348,11 @@ def test_file_image_matches_the_device_file(vectors, repo):
     (".", False), ("..", False), ("a/b", False), ("a b", False), ("UPLOAD.TMP", False), ("upload.tmp", False),
 ])
 def test_valid_file_name(name, ok):
-    assert bx.valid_file_name(name) is ok
+    assert setu_client.valid_file_name(name) is ok
 
 
-class ShortClient(bx.BulkXferClient):
-    """A BulkXferClient whose short messages reach a scripted FILE answer."""
+class ShortClient(setu_client.SETUClient):
+    """A SETUClient whose short messages reach a scripted FILE answer."""
 
     def __init__(self, answers):
         self.short_q = asyncio.Queue()
@@ -360,19 +360,19 @@ class ShortClient(bx.BulkXferClient):
         self.answers = answers
 
     async def send_short(self, app_type, payload):
-        self.sent.append(bx.frame(app_type, payload))
+        self.sent.append(setu_client.frame(app_type, payload))
         for t, p in self.answers.get(app_type, []):
             self.short_q.put_nowait((t, p))
 
 
 def test_begin_and_commit_use_the_golden_frames(vectors):
     hf = lambda n: frame_of(vec(vectors, "hex_file", n))      # noqa: E731
-    c = ShortClient({bx.APP_TYPE_BEGIN: [(0x11, bytes(9)), hf("file_begin_ok")],
-                     bx.APP_TYPE_COMMIT: [hf("file_begin_ok"), hf("file_commit_ok")]})
-    c.short_q.put_nowait((bx.APP_TYPE_FILE, bytes(10)))         # stale: dropped
+    c = ShortClient({setu_client.APP_TYPE_BEGIN: [(0x11, bytes(9)), hf("file_begin_ok")],
+                     setu_client.APP_TYPE_COMMIT: [hf("file_begin_ok"), hf("file_commit_ok")]})
+    c.short_q.put_nowait((setu_client.APP_TYPE_FILE, bytes(10)))         # stale: dropped
     rep = run(c.begin_file("FW1"))
     assert c.sent[0] == bytes.fromhex(vec(vectors, "hex_file", "begin_fw1")["hex"])
-    assert rep.ok and (rep.op, rep.size, rep.crc) == (bx.APP_TYPE_BEGIN, 0, 0)
+    assert rep.ok and (rep.op, rep.size, rep.crc) == (setu_client.APP_TYPE_BEGIN, 0, 0)
     rep = run(c.commit_file())
     assert c.sent[1] == bytes.fromhex(vec(vectors, "hex_file", "commit")["hex"])
     v = vec(vectors, "hex_file", "file_commit_ok")
@@ -386,10 +386,10 @@ def test_file_reply_failures(vectors, name, status):
     c = ShortClient({v["op"]: [frame_of(v)]})
     rep = run(c._file_request(v["op"], b""))
     assert not rep.ok and rep.status_name == status
-    assert bx.FileReply(0x12, 99, 0, 0).status_name == "0x63"
+    assert setu_client.FileReply(0x12, 99, 0, 0).status_name == "0x63"
 
 
 def test_file_reply_timeout(monkeypatch):
-    monkeypatch.setattr(bx, "FILE_TIMEOUT", 0.05)
+    monkeypatch.setattr(setu_client, "FILE_TIMEOUT", 0.05)
     with pytest.raises(TimeoutError, match="no FILE reply to 0x13"):
         run(ShortClient({}).commit_file())

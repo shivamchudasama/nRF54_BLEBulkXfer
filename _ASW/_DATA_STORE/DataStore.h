@@ -1,7 +1,7 @@
 /**
  * @file          DataStore.h
  * @brief         Header file containing the receive-side data store: registers the hex
- *                upload appTypes (0x10-0x1F) with the BulkXfer router (BulkRouter.h),
+ *                upload appTypes (0x10-0x1F) with the SETU router (SETURouter.h),
  *                receives into a RAM buffer that holds one hex segment and logs it on the
  *                serial terminal once it has been received and CRC-verified (every
  *                byte with CONFIG_DS_HEX_DUMP, otherwise one summary line). Between
@@ -43,7 +43,7 @@
 
 /**
  * @def           DS_APP_TYPE_SEGMENT
- * @brief         BulkXfer application type of a hex segment transfer (client -> server).
+ * @brief         SETU application type of a hex segment transfer (client -> server).
  */
 #define DS_APP_TYPE_SEGMENT                  (0x10U)
 

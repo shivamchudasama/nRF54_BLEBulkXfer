@@ -7,7 +7,7 @@ import zlib
 
 import pytest
 
-import bulkxfer_client as bx
+import setu_client
 
 
 def rec(addr: int, rtype: int, data: bytes = b"") -> str:
@@ -23,7 +23,7 @@ def write_hex(tmp_path, *records, name="t.hex"):
 
 def test_real_test_file_gives_the_uploaded_segment(repo, vectors):
     hu = vectors["hex_upload"]
-    segs = bx.parse_ihex(f"{repo}/{hu['file']}")
+    segs = setu_client.parse_ihex(f"{repo}/{hu['file']}")
     assert [(a, len(d)) for a, d in segs] == [(s["address"], s["length"]) for s in hu["segments"]]
     # Same object CRC as the START frame of the real upload and the device's SEG line
     golden = next(f for f in vectors["frames"] if f["name"] == hu["start_frame"])
@@ -34,18 +34,18 @@ def test_real_test_file_gives_the_uploaded_segment(repo, vectors):
 
 def test_extended_linear_address(tmp_path):
     p = write_hex(tmp_path, rec(0, 4, b"\x08\x00"), rec(0x1000, 0, b"\x01\x02"))
-    assert bx.parse_ihex(p) == [(0x08001000, b"\x01\x02")]
+    assert setu_client.parse_ihex(p) == [(0x08001000, b"\x01\x02")]
 
 
 def test_gap_splits_segments_and_order_is_by_address(tmp_path):
     p = write_hex(tmp_path, rec(0x20, 0, b"\xbb"), rec(0x00, 0, b"\xaa\xab"), rec(0x02, 0, b"\xac"))
-    assert bx.parse_ihex(p) == [(0x00, b"\xaa\xab\xac"), (0x20, b"\xbb")]
+    assert setu_client.parse_ihex(p) == [(0x00, b"\xaa\xab\xac"), (0x20, b"\xbb")]
 
 
 def test_long_run_split_at_seg_max(tmp_path):
     records = [rec(a, 0, bytes([a & 0xFF] * 16)) for a in range(0, 64, 16)]
     p = write_hex(tmp_path, *records)
-    segs = bx.parse_ihex(p, seg_max=24)
+    segs = setu_client.parse_ihex(p, seg_max=24)
     assert [(a, len(d)) for a, d in segs] == [(0, 24), (24, 24), (48, 16)]
     assert b"".join(d for _, d in segs) == b"".join(bytes([a] * 16) for a in range(0, 64, 16))
 
@@ -57,14 +57,14 @@ def test_default_split_is_the_server_buffer(tmp_path):
     records += [rec(0, 4, b"\x00\x02")]                                 # continues at 0x20000
     records += [rec(a, 0, b"\x5a" * 16) for a in range(0, 70000 - 0x10000, 16)]
     p = write_hex(tmp_path, *records)
-    assert [(a, len(d)) for a, d in bx.parse_ihex(p)] == [(0x10000, 65536), (0x20000, 70000 - 65536)]
+    assert [(a, len(d)) for a, d in setu_client.parse_ihex(p)] == [(0x10000, 65536), (0x20000, 70000 - 65536)]
 
 
 def test_start_address_records_ignored_and_eof_stops(tmp_path):
     p = tmp_path / "t.hex"
     p.write_text("\n".join([rec(0, 0, b"\x01"), rec(0, 3, b"\x00\x00\x10\x00"),
                             rec(0, 5, b"\x00\x00\x10\x00"), rec(0, 1), rec(0x10, 0, b"\xff")]) + "\n")
-    assert bx.parse_ihex(str(p)) == [(0, b"\x01")]
+    assert setu_client.parse_ihex(str(p)) == [(0, b"\x01")]
 
 
 @pytest.mark.parametrize("line, why", [
@@ -78,7 +78,7 @@ def test_malformed_lines_report_file_and_line(tmp_path, line, why):
     p = tmp_path / "bad.hex"
     p.write_text(rec(0, 0, b"\x01") + "\n" + line + "\n")
     with pytest.raises(ValueError) as e:
-        bx.parse_ihex(str(p))
+        setu_client.parse_ihex(str(p))
     assert str(e.value) == f"{p}:2: {why}"
 
 
@@ -86,15 +86,15 @@ def test_extended_segment_address_wraps_within_64k(tmp_path):
     # Intel HEX: type 02 address = SBA*16 + ((offset + i) mod 65536).
     # SBA 0x1000 -> base 0x10000; record at offset 0xFFFE with 4 bytes
     p = write_hex(tmp_path, rec(0, 2, b"\x10\x00"), rec(0xFFFE, 0, b"\x01\x02\x03\x04"))
-    assert sorted(bx.parse_ihex(p)) == [(0x10000, b"\x03\x04"), (0x1FFFE, b"\x01\x02")]
+    assert sorted(setu_client.parse_ihex(p)) == [(0x10000, b"\x03\x04"), (0x1FFFE, b"\x01\x02")]
 
 
 def test_linear_address_does_not_wrap(tmp_path):
     # Type 04 (what nRF toolchains write): LBA + offset + i, no 64 KiB wrap
     p = write_hex(tmp_path, rec(0, 4, b"\x00\x01"), rec(0xFFFE, 0, b"\x01\x02\x03\x04"))
-    assert bx.parse_ihex(p) == [(0x1FFFE, b"\x01\x02\x03\x04")]
+    assert setu_client.parse_ihex(p) == [(0x1FFFE, b"\x01\x02\x03\x04")]
 
 
 def test_extended_segment_address_without_wrap(tmp_path):
     p = write_hex(tmp_path, rec(0, 2, b"\x10\x00"), rec(0x0010, 0, b"\x01"))
-    assert bx.parse_ihex(p) == [(0x10010, b"\x01")]
+    assert setu_client.parse_ihex(p) == [(0x10010, b"\x01")]
